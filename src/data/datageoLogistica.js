@@ -17,7 +17,8 @@ import * as Cesium from 'cesium';
 
 const CATEGORY = 'Logística agro';
 
-function makePointsLayer({ id, name, icon, source, url, styleFor }) {
+// Exportada: datageoEnergia.js reusa a mesma factory para as subestacoes.
+export function makePointsLayer({ id, name, category = CATEGORY, icon, source, url, styleFor }) {
   let _dataSource = null;
   let _enabled = false;
   let _count = 0;
@@ -27,7 +28,7 @@ function makePointsLayer({ id, name, icon, source, url, styleFor }) {
   return {
     id,
     name,
-    category: CATEGORY,
+    category,
     icon,
     source,
     updateInterval: 24 * 3600_000,
