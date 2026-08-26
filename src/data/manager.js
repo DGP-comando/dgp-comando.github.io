@@ -31,6 +31,7 @@ const LIFECYCLE_LABELS = Object.freeze({
 const LAYER_CATEGORY_ORDER = Object.freeze([
   'Limites',
   'Infraestrutura',
+  'Logística agro',
   'Clima',
   'Hidrologia',
   'Ambiente',
