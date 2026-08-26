@@ -6,6 +6,28 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: classe "Logística agro"
+
+- **Conjunto novo de camadas** (classe própria no painel, após
+  Infraestrutura), primeiro aproveitamento do backlog §8 do PLANO_FUSAO:
+  - **Armazéns (CONAB)** — token 5: cadastro CDA/CONAB 2023-11 extraído do
+    seed SQL do projeto valor-de-terras (2.458 pontos + porto de
+    Paranaguá), 537 KB. Tamanho do ponto proporcional à capacidade
+    (≥50 mil t salta na visão regional); label com nome + capacidade
+    aparece a < 45 km.
+  - **Agroindústrias** — token 6: SIGSIF/MAPA (9 frigoríficos vermelho,
+    92 laticínios azul-claro, geocode por centroide municipal) + 28
+    serrarias OSM (marrom), 22 KB.
+  - **CEASAs** — token 7: 5 unidades da CEASA/PR com label sempre visível.
+    Overpass não tem as unidades nomeadas ("ceasa" retornou <3 hits na
+    área do PR) — coords hardcoded no build_logistica.py.
+- `scripts/build_logistica.py` parseia os INSERTs dos seeds
+  (st_makepoint com regex + split ciente de aspas) — o caminho previsto
+  no §8 ("extrair INSERTs → JSON") funcionou como planejado.
+- `datageoLogistica.js`: factory de pontos estáticos clamped
+  (contrato earthquakes: zero CallbackProperty), scaleByDistance,
+  distanceDisplayCondition nos labels.
+
 ## Sessão "gev" (continuação) — 2026-08-26: Tráfego aéreo ao vivo em produção
 
 - **Causa raiz do feed morto**: airplanes.live respondeu 403 "contact us" a
