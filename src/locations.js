@@ -11,110 +11,86 @@ import { viewportBias, placesNearViewRecovery } from './annotations/annotationRe
  *   pitch   — camera tilt in degrees (negative = looking down)
  *   buildingHeight — estimated height of landmark center above ground (meters)
  */
+// Cidades-polo do Paraná (a sala de situação é estadual: nada de Austin/Tóquio).
 export const CITY_POIS = {
-  austin: {
-    name: 'Austin',
-    groundElevation: 150, // meters above WGS84 ellipsoid
-    viewBounds: { southwest: { lat: 30.10, lng: -97.95 }, northeast: { lat: 30.52, lng: -97.55 } },
+  curitiba: {
+    name: 'Curitiba',
+    groundElevation: 935, // meters above WGS84 ellipsoid
+    viewBounds: { southwest: { lat: -25.62, lng: -49.42 }, northeast: { lat: -25.30, lng: -49.15 } },
     pois: [
-      { name: 'Texas State Capitol', lat: 30.2747, lon: -97.7403, alt: 550, pitch: -28, heading: 180, buildingHeight: 35 },
-      { name: 'Frost Bank Tower', lat: 30.2674, lon: -97.7434, alt: 550, pitch: -22, heading: 30, buildingHeight: 80 },
-      { name: 'Pennybacker Bridge', lat: 30.3451, lon: -97.7951, alt: 500, pitch: -25, heading: 90, buildingHeight: 40 },
-      { name: 'The Jenga Tower', lat: 30.2642, lon: -97.7500, alt: 500, pitch: -18, heading: 45, buildingHeight: 60 },
-      { name: 'UT Tower', lat: 30.2862, lon: -97.7394, alt: 500, pitch: -22, heading: 180, buildingHeight: 50 },
+      { name: 'Palácio Iguaçu', lat: -25.4184, lon: -49.2699, alt: 600, pitch: -28, heading: 0, buildingHeight: 25 },
+      { name: 'Jardim Botânico', lat: -25.4425, lon: -49.2408, alt: 500, pitch: -30, heading: 315, buildingHeight: 15 },
+      { name: 'Museu Oscar Niemeyer', lat: -25.4103, lon: -49.2668, alt: 450, pitch: -25, heading: 180, buildingHeight: 20 },
+      { name: 'Ópera de Arame', lat: -25.3849, lon: -49.2757, alt: 450, pitch: -28, heading: 90, buildingHeight: 20 },
+      { name: 'Parque Barigui', lat: -25.4249, lon: -49.3079, alt: 900, pitch: -35, heading: 0, buildingHeight: 10 },
     ],
   },
-  sf: {
-    name: 'San Francisco',
-    groundElevation: 15,
-    viewBounds: { southwest: { lat: 37.70, lng: -122.53 }, northeast: { lat: 37.84, lng: -122.35 } },
+  londrina: {
+    name: 'Londrina',
+    groundElevation: 610,
+    viewBounds: { southwest: { lat: -23.42, lng: -51.28 }, northeast: { lat: -23.22, lng: -51.08 } },
     pois: [
-      { name: 'Golden Gate Bridge', lat: 37.8199, lon: -122.4783, alt: 1400, pitch: -20, heading: 45, buildingHeight: 100 },
-      { name: 'Transamerica Pyramid', lat: 37.7952, lon: -122.4028, alt: 500, pitch: -25, heading: 30, buildingHeight: 85 },
-      { name: 'Salesforce Tower', lat: 37.7897, lon: -122.3972, alt: 680, pitch: -25, heading: 330, buildingHeight: 100 },
-      { name: 'Alcatraz Island', lat: 37.8267, lon: -122.4230, alt: 800, pitch: -30, heading: 0, buildingHeight: 20 },
-      { name: 'Coit Tower', lat: 37.8024, lon: -122.4058, alt: 420, pitch: -30, heading: 45, buildingHeight: 30 },
+      { name: 'Catedral de Londrina', lat: -23.3103, lon: -51.1628, alt: 500, pitch: -25, heading: 0, buildingHeight: 40 },
+      { name: 'Lago Igapó', lat: -23.3245, lon: -51.1697, alt: 800, pitch: -32, heading: 45, buildingHeight: 10 },
+      { name: 'Estádio do Café', lat: -23.3269, lon: -51.2005, alt: 600, pitch: -30, heading: 0, buildingHeight: 20 },
     ],
   },
-  nyc: {
-    name: 'New York',
-    groundElevation: 10,
-    viewBounds: { southwest: { lat: 40.477, lng: -74.259 }, northeast: { lat: 40.918, lng: -73.700 } },
+  maringa: {
+    name: 'Maringá',
+    groundElevation: 555,
+    viewBounds: { southwest: { lat: -23.50, lng: -52.02 }, northeast: { lat: -23.35, lng: -51.85 } },
     pois: [
-      { name: 'Statue of Liberty', lat: 40.6892, lon: -74.0445, alt: 450, pitch: -25, heading: 315, buildingHeight: 45 },
-      {
-        name: 'Empire State Building',
-        lat: 40.7484,
-        lon: -73.9857,
-        alt: 850,
-        pitch: -12,
-        heading: 30,
-        buildingHeight: 130,
-        buildingBounds: { height: 443, width: 130, depth: 75 },
-      },
-      { name: 'One World Trade Center', lat: 40.7127, lon: -74.0134, alt: 850, pitch: -25, heading: 0, buildingHeight: 170 },
-      { name: 'Brooklyn Bridge', lat: 40.7061, lon: -73.9969, alt: 850, pitch: -25, heading: 45, buildingHeight: 40 },
-      { name: 'Chrysler Building', lat: 40.7516, lon: -73.9755, alt: 700, pitch: -20, heading: 225, buildingHeight: 100 },
+      { name: 'Catedral de Maringá', lat: -23.4210, lon: -51.9331, alt: 600, pitch: -22, heading: 180, buildingHeight: 100 },
+      { name: 'Parque do Ingá', lat: -23.4275, lon: -51.9330, alt: 700, pitch: -32, heading: 0, buildingHeight: 15 },
+      { name: 'Paço Municipal', lat: -23.4205, lon: -51.9386, alt: 450, pitch: -25, heading: 90, buildingHeight: 15 },
     ],
   },
-  tokyo: {
-    name: 'Tokyo',
-    groundElevation: 40,
-    viewBounds: { southwest: { lat: 35.52, lng: 139.55 }, northeast: { lat: 35.90, lng: 139.92 } },
+  cascavel: {
+    name: 'Cascavel',
+    groundElevation: 780,
+    viewBounds: { southwest: { lat: -25.05, lng: -53.55 }, northeast: { lat: -24.88, lng: -53.35 } },
     pois: [
-      { name: 'Tokyo Tower', lat: 35.6586, lon: 139.7454, alt: 850, pitch: -25, heading: 0, buildingHeight: 110 },
-      { name: 'Tokyo Skytree', lat: 35.7101, lon: 139.8107, alt: 900, pitch: -25, heading: 30, buildingHeight: 200 },
-      { name: 'Imperial Palace', lat: 35.6852, lon: 139.7528, alt: 900, pitch: -35, heading: 0, buildingHeight: 20 },
-      { name: 'Senso-ji Temple', lat: 35.7148, lon: 139.7967, alt: 400, pitch: -30, heading: 180, buildingHeight: 25 },
-      { name: 'Mode Gakuen Cocoon Tower', lat: 35.6929, lon: 139.6925, alt: 350, pitch: -20, heading: 30, buildingHeight: 70 },
+      { name: 'Catedral de Cascavel', lat: -24.9555, lon: -53.4552, alt: 500, pitch: -25, heading: 0, buildingHeight: 40 },
+      { name: 'Lago Municipal', lat: -24.9639, lon: -53.4408, alt: 800, pitch: -32, heading: 45, buildingHeight: 10 },
     ],
   },
-  london: {
-    name: 'London',
-    groundElevation: 15,
-    viewBounds: { southwest: { lat: 51.28, lng: -0.51 }, northeast: { lat: 51.70, lng: 0.33 } },
+  foz: {
+    name: 'Foz do Iguaçu',
+    groundElevation: 190,
+    viewBounds: { southwest: { lat: -25.75, lng: -54.70 }, northeast: { lat: -25.35, lng: -54.35 } },
     pois: [
-      { name: 'Tower Bridge', lat: 51.5055, lon: -0.0754, alt: 400, pitch: -25, heading: 270, buildingHeight: 65 },
-      { name: 'The Shard', lat: 51.5045, lon: -0.0865, alt: 850, pitch: -20, heading: 0, buildingHeight: 100 },
-      { name: 'Big Ben / Parliament', lat: 51.5007, lon: -0.1246, alt: 600, pitch: -25, heading: 180, buildingHeight: 50 },
-      { name: "St. Paul's Cathedral", lat: 51.5138, lon: -0.0984, alt: 400, pitch: -30, heading: 270, buildingHeight: 55 },
-      { name: 'The Gherkin', lat: 51.5145, lon: -0.0803, alt: 350, pitch: -20, heading: 30, buildingHeight: 60 },
+      { name: 'Cataratas do Iguaçu', lat: -25.6953, lon: -54.4367, alt: 1500, pitch: -28, heading: 315, buildingHeight: 60 },
+      { name: 'Usina de Itaipu', lat: -25.4085, lon: -54.5936, alt: 1800, pitch: -25, heading: 0, buildingHeight: 90 },
+      { name: 'Marco das Três Fronteiras', lat: -25.5946, lon: -54.5883, alt: 700, pitch: -30, heading: 225, buildingHeight: 10 },
+      { name: 'Ponte da Amizade', lat: -25.5089, lon: -54.6114, alt: 700, pitch: -28, heading: 270, buildingHeight: 25 },
     ],
   },
-  paris: {
-    name: 'Paris',
-    groundElevation: 35,
-    viewBounds: { southwest: { lat: 48.815, lng: 2.224 }, northeast: { lat: 48.902, lng: 2.470 } },
+  pontagrossa: {
+    name: 'Ponta Grossa',
+    groundElevation: 950,
+    viewBounds: { southwest: { lat: -25.30, lng: -50.25 }, northeast: { lat: -25.00, lng: -49.95 } },
     pois: [
-      { name: 'Eiffel Tower', lat: 48.8584, lon: 2.2945, alt: 750, pitch: -25, heading: 315, buildingHeight: 150 },
-      { name: 'Arc de Triomphe', lat: 48.8738, lon: 2.2950, alt: 400, pitch: -28, heading: 45, buildingHeight: 25 },
-      { name: 'Notre-Dame', lat: 48.8530, lon: 2.3499, alt: 400, pitch: -25, heading: 225, buildingHeight: 35 },
-      { name: 'Sacré-Cœur', lat: 48.8867, lon: 2.3431, alt: 400, pitch: -30, heading: 180, buildingHeight: 40 },
-      { name: 'Louvre Pyramid', lat: 48.8606, lon: 2.3376, alt: 500, pitch: -35, heading: 0, buildingHeight: 10 },
+      { name: 'Parque Vila Velha', lat: -25.2246, lon: -50.0325, alt: 1600, pitch: -30, heading: 0, buildingHeight: 30 },
+      { name: 'Catedral Sant’Ana', lat: -25.0916, lon: -50.1626, alt: 500, pitch: -25, heading: 0, buildingHeight: 35 },
     ],
   },
-  dubai: {
-    name: 'Dubai',
+  guarapuava: {
+    name: 'Guarapuava',
+    groundElevation: 1050,
+    viewBounds: { southwest: { lat: -25.48, lng: -51.55 }, northeast: { lat: -25.30, lng: -51.38 } },
+    pois: [
+      { name: 'Catedral de Belém', lat: -25.3902, lon: -51.4629, alt: 500, pitch: -25, heading: 0, buildingHeight: 30 },
+      { name: 'Parque do Lago', lat: -25.3979, lon: -51.4740, alt: 700, pitch: -32, heading: 45, buildingHeight: 10 },
+    ],
+  },
+  paranagua: {
+    name: 'Paranaguá',
     groundElevation: 5,
-    viewBounds: { southwest: { lat: 24.95, lng: 54.90 }, northeast: { lat: 25.35, lng: 55.55 } },
+    viewBounds: { southwest: { lat: -25.65, lng: -48.65 }, northeast: { lat: -25.40, lng: -48.20 } },
     pois: [
-      { name: 'Burj Khalifa', lat: 25.1972, lon: 55.2744, alt: 600, pitch: -20, heading: 200, buildingHeight: 270 },
-      { name: 'Burj Al Arab', lat: 25.1412, lon: 55.1853, alt: 500, pitch: -25, heading: 90, buildingHeight: 100 },
-      { name: 'Palm Jumeirah', lat: 25.1124, lon: 55.1390, alt: 1200, pitch: -40, heading: 0, buildingHeight: 20 },
-      { name: 'Dubai Frame', lat: 25.2350, lon: 55.3003, alt: 400, pitch: -25, heading: 270, buildingHeight: 75 },
-      { name: 'Museum of the Future', lat: 25.2197, lon: 55.2806, alt: 350, pitch: -20, heading: 30, buildingHeight: 35 },
-    ],
-  },
-  dc: {
-    name: 'Washington DC',
-    groundElevation: 10,
-    viewBounds: { southwest: { lat: 38.79, lng: -77.12 }, northeast: { lat: 38.995, lng: -76.91 } },
-    pois: [
-      { name: 'US Capitol', lat: 38.8897, lon: -77.0091, alt: 550, pitch: -25, heading: 270, buildingHeight: 45 },
-      { name: 'Washington Monument', lat: 38.8895, lon: -77.0353, alt: 500, pitch: -30, heading: 0, buildingHeight: 85 },
-      { name: 'Lincoln Memorial', lat: 38.8893, lon: -77.0502, alt: 400, pitch: -25, heading: 90, buildingHeight: 20 },
-      { name: 'Pentagon', lat: 38.8711, lon: -77.0559, alt: 800, pitch: -40, heading: 0, buildingHeight: 20 },
-      { name: 'Jefferson Memorial', lat: 38.8814, lon: -77.0365, alt: 400, pitch: -30, heading: 0, buildingHeight: 25 },
+      { name: 'Porto de Paranaguá', lat: -25.5011, lon: -48.5117, alt: 1200, pitch: -28, heading: 0, buildingHeight: 30 },
+      { name: 'Centro Histórico', lat: -25.5163, lon: -48.5089, alt: 500, pitch: -28, heading: 180, buildingHeight: 15 },
+      { name: 'Ilha do Mel', lat: -25.5330, lon: -48.3050, alt: 2500, pitch: -32, heading: 45, buildingHeight: 10 },
     ],
   },
 };

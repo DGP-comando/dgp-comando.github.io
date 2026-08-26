@@ -16,6 +16,7 @@
 // nativo do GEV (avioes, focos etc.).
 
 import * as Cesium from 'cesium';
+import { openFicha } from '../datageoFicha.js';
 
 const GEOJSON_URL = '/data/municipios-pr.geojson';
 const INFO_URL = '/data/municipios-info.json';
@@ -103,7 +104,9 @@ function tooltipHtml(nome, info) {
     lines.push(`Cadeia líder: ${info.cadeia}`);
   }
 
-  lines.push('<div class="mt-fontes">TSE 2024 · VBP SEAB/DERAL 24-25</div>');
+  lines.push(
+    '<div class="mt-fontes">Clique para abrir a ficha completa<br/>TSE 2024 · VBP SEAB/DERAL 24-25</div>',
+  );
   return lines.join('<br/>').replace('<br/><div class="mt-fontes">', '<div class="mt-fontes">');
 }
 
@@ -164,7 +167,7 @@ export function createDatageoMunicipiosLayer() {
 
   return {
     id: 'datageo-municipios',
-    name: 'Municípios (info)',
+    name: 'Municípios do Paraná',
     icon: '🏛️',
     source: 'TSE · IBGE/PAM · DataGeo PR',
     updateInterval: 6 * 3600_000,
@@ -180,6 +183,18 @@ export function createDatageoMunicipiosLayer() {
         (movement) => onMouseMove(viewer, movement),
         Cesium.ScreenSpaceEventType.MOUSE_MOVE,
       );
+      // Clique no poligono abre a ficha municipal detalhada (datageoFicha).
+      _handler.setInputAction((click) => {
+        if (!_enabled || !_dataSource) return;
+        const picked = viewer.scene.pick(click.position);
+        const entity = picked?.id;
+        if (!entity || entity.entityCollection?.owner !== _dataSource || !entity.polygon) return;
+        const nowJ = Cesium.JulianDate.now();
+        const ibge = String(entity.properties?.CD_MUN?.getValue(nowJ) ?? '');
+        const nome = entity.properties?.NM_MUN?.getValue(nowJ) ?? '';
+        if (!ibge) return;
+        openFicha({ ibge, nome, info: _info?.municipios?.[ibge] });
+      }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
       console.log('[Data:datageo-municipios] Initialized');
     },
 

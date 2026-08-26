@@ -1037,7 +1037,7 @@ export function createTeleGeographySubmarineCableLayer({
 
   return {
     id: 'telegeography-submarine-cables',
-    name: 'Submarine Cables',
+    name: 'Cabos submarinos',
     icon: '≋',
     source: 'TeleGeography',
     updateInterval: 0,

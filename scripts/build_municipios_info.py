@@ -33,8 +33,14 @@ TSE_MAP_URL = (
     'master/municipios_brasileiros_tse.csv'
 )
 TSE_RESULT = 'https://resultados.tse.jus.br/oficial/ele2024/{ele}/dados/pr/pr{cod}-c0011-e000{ele}-u.json'
-VBP_PARANA_DATA = Path('C:/Users/avner/OneDrive/Documentos/GitHub/vbp-parana/dashboard/public/data')
+GH = Path('C:/Users/avner/OneDrive/Documentos/GitHub')
+VBP_PARANA_DATA = GH / 'vbp-parana/dashboard/public/data'
 VBP_ANO_A, VBP_ANO_B = 2024, 2025
+# Bases do ecossistema DataGeo fora do c2 (repos irmaos, dados publicos):
+SEGURANCA_CRIM = GH / 'seguranca-parana/data/processed/criminalidade.json'  # SINESP 2018-2022
+POPULACAO = GH / 'saude-parana/data/raw/populacao_anos_pr.json'             # SIDRA estimativas ate 2025
+NASCIDOS = GH / 'saude-parana/data/raw/nascidos_municipios_pr.json'         # SIDRA ate 2024
+OBITOS = GH / 'saude-parana/data/raw/obitos_municipios_pr.json'             # SIDRA ate 2024
 
 
 def fetch(url, timeout=60, retries=3):
@@ -118,10 +124,12 @@ def load_vbp_local():
     cadeia lider (soma por cadeia) no ano mais recente. Valores em R$."""
     vbp = {}
     top = {}
+    top_prod = {}
     for ano in (VBP_ANO_A, VBP_ANO_B):
         path = VBP_PARANA_DATA / f'detailed_municipio_{ano}.json'
         rows = json.loads(path.read_text(encoding='utf-8'))
         cadeia_sum = {}
+        produto_sum = {}
         for row in rows:
             ibge = str(row.get('cod') or '')
             val = float(row.get('v') or 0)
@@ -132,11 +140,64 @@ def load_vbp_local():
             if ano == VBP_ANO_B:
                 key = (ibge, row.get('c') or '?')
                 cadeia_sum[key] = cadeia_sum.get(key, 0.0) + val
+                pkey = (ibge, row.get('n') or '?')
+                produto_sum[pkey] = produto_sum.get(pkey, 0.0) + val
         if ano == VBP_ANO_B:
+            por_mun = {}
             for (ibge, cadeia), total in cadeia_sum.items():
-                if total > top.get(ibge, (None, 0.0))[1]:
-                    top[ibge] = (cadeia, total)
-    return vbp, str(VBP_ANO_A), str(VBP_ANO_B), top
+                por_mun.setdefault(ibge, []).append((cadeia, total))
+            for ibge, cadeias in por_mun.items():
+                cadeias.sort(key=lambda x: x[1], reverse=True)
+                top[ibge] = cadeias[:1]  # cadeia lider (tooltip)
+            por_mun_p = {}
+            for (ibge, produto), total in produto_sum.items():
+                por_mun_p.setdefault(ibge, []).append((produto, total))
+            for ibge, produtos in por_mun_p.items():
+                produtos.sort(key=lambda x: x[1], reverse=True)
+                top_prod[ibge] = produtos[:3]  # top-3 PRODUTOS (ficha)
+    return vbp, str(VBP_ANO_A), str(VBP_ANO_B), top, top_prod
+
+
+def _sidra_latest(path):
+    # Ultimo ano com valor por municipio num JSON estilo SIDRA (D1C/V/D3N).
+    rows = json.loads(path.read_text(encoding='utf-8'))[1:]
+    out = {}
+    for r in rows:
+        ibge = r.get('D1C')
+        ano = r.get('D3N', '')
+        val = r.get('V')
+        if not ibge or not str(ano).isdigit() or val in ('...', '..', '-', 'X', None):
+            continue
+        cur = out.get(ibge)
+        if cur is None or ano > cur[0]:
+            out[ibge] = (ano, int(float(val)))
+    return out
+
+
+def load_ecossistema():
+    # Bases dos repos irmaos: populacao, nascidos, obitos, seguranca.
+    pop = _sidra_latest(POPULACAO)
+    nasc = _sidra_latest(NASCIDOS)
+    obit = _sidra_latest(OBITOS)
+
+    crim = json.loads(SEGURANCA_CRIM.read_text(encoding='utf-8'))
+    por_ano = {}
+    for r in crim:
+        ibge = str(r.get('cod_ibge') or '')
+        ano = r.get('ano')
+        if not ibge or ano is None:
+            continue
+        por_ano.setdefault(ibge, {})
+        por_ano[ibge][ano] = por_ano[ibge].get(ano, 0) + int(r.get('vitimas') or 0)
+    seguranca = {}
+    for ibge, anos in por_ano.items():
+        ultimo = max(anos)
+        seguranca[ibge] = {
+            'ano': ultimo,
+            'vitimas': anos[ultimo],
+            'vitimasPrev': anos.get(ultimo - 1),
+        }
+    return pop, nasc, obit, seguranca
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +218,8 @@ def main():
     print(f'  {len(mayors)} prefeitos resolvidos')
 
     print('3/3 VBP SEAB/DERAL (vbp-parana local)...')
-    vbp, y_prev, y_last, top = load_vbp_local()
+    vbp, y_prev, y_last, top, top_prod = load_vbp_local()
+    pop, nasc, obit, seguranca = load_ecossistema()
     print(f'  anos: {y_prev} -> {y_last}; {len(vbp)} municipios; top-produto p/ {len(top)}')
 
     info = {}
@@ -174,8 +236,23 @@ def main():
                 'deltaPct': round((b - a) / a * 100, 1),
             }
         if ibge in top:
-            entry['cadeia'] = top[ibge][0]
-            entry['cadeiaValor'] = top[ibge][1]
+            entry['cadeia'] = top[ibge][0][0]
+            entry['cadeiaValor'] = top[ibge][0][1]
+        if ibge in top_prod:
+            entry['produtos'] = [
+                {'nome': c, 'valor': round(v, 2)} for c, v in top_prod[ibge]
+            ]
+        if ibge in pop:
+            entry['pop'] = {'ano': pop[ibge][0], 'valor': pop[ibge][1]}
+        if ibge in nasc:
+            entry['nascidos'] = {'ano': nasc[ibge][0], 'valor': nasc[ibge][1]}
+        if ibge in obit:
+            entry['obitos'] = {'ano': obit[ibge][0], 'valor': obit[ibge][1]}
+        if ibge in seguranca:
+            seg = dict(seguranca[ibge])
+            if ibge in pop and pop[ibge][1]:
+                seg['taxa100k'] = round(seg['vitimas'] / pop[ibge][1] * 100000, 1)
+            entry['seguranca'] = seg
         info[ibge] = entry
 
     payload = {
@@ -184,6 +261,10 @@ def main():
             'prefeito': 'TSE resultados oficiais 2024 (mandato 2025-2028)',
             'vbp': f'SEAB/DERAL via vbp-parana ({y_prev}->{y_last}, R$ correntes)',
             'cadeia': f'SEAB/DERAL — cadeia produtiva de maior valor em {y_last}',
+            'produtos': f'SEAB/DERAL — top-3 produtos por valor em {y_last}',
+            'pop': 'IBGE — populacao residente estimada (ultimo ano disponivel)',
+            'vitais': 'IBGE registro civil — nascidos vivos e obitos (ultimo ano)',
+            'seguranca': 'SINESP — vitimas totais por municipio (serie 2018-2022)',
         },
         'municipios': info,
     }

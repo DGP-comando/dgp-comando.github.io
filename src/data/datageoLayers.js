@@ -131,7 +131,7 @@ function temperatureColor(t) {
 
 export const datageoClimaLayer = createDatageoLayer({
   id: 'datageo-clima',
-  name: 'Clima (estações)',
+  name: 'Estações de clima (INMET)',
   icon: '🌡️',
   source: 'INMET · DataGeo PR',
   updateInterval: 900_000,
@@ -186,7 +186,7 @@ const RIVER_COLORS = {
 
 export const datageoRiosLayer = createDatageoLayer({
   id: 'datageo-rios',
-  name: 'Rios (ANA)',
+  name: 'Nível dos rios (ANA)',
   icon: '🌊',
   source: 'ANA · DataGeo PR',
   updateInterval: 900_000,
@@ -238,7 +238,7 @@ const CEMADEN_COLORS = {
 
 export const datageoCemadenLayer = createDatageoLayer({
   id: 'datageo-cemaden',
-  name: 'Alertas CEMADEN',
+  name: 'Alertas de desastre (CEMADEN)',
   icon: '⚠️',
   source: 'CEMADEN · DataGeo PR',
   updateInterval: 300_000,
@@ -294,7 +294,7 @@ const IRTC_COLORS = {
 
 export const datageoIrtcLayer = createDatageoLayer({
   id: 'datageo-irtc',
-  name: 'IRTC (risco territorial)',
+  name: 'Risco territorial (IRTC)',
   icon: '🎯',
   source: 'IRTC · DataGeo PR',
   updateInterval: 1_800_000,
@@ -469,7 +469,7 @@ export const datageoArLayer = createDatageoLayer({
 
 export const datageoAnomaliasLayer = createDatageoLayer({
   id: 'datageo-anomalias',
-  name: 'Anomalias (z-score)',
+  name: 'Anomalias estatísticas',
   icon: '📈',
   source: 'DataGeo PR',
   updateInterval: 900_000,
@@ -518,7 +518,7 @@ const INCIDENT_SEVERITY_COLORS = {
 
 export const datageoIncidentesLayer = createDatageoLayer({
   id: 'datageo-incidentes',
-  name: 'Incidentes (OODA)',
+  name: 'Incidentes ativos',
   icon: '🚨',
   source: 'DataGeo PR',
   updateInterval: 300_000,
@@ -560,7 +560,7 @@ export const datageoIncidentesLayer = createDatageoLayer({
 
 export const datageoInfohidroLayer = createDatageoLayer({
   id: 'datageo-infohidro',
-  name: 'Telemetria InfoHidro',
+  name: 'Telemetria hídrica (InfoHidro)',
   icon: '📡',
   source: 'SIMEPAR · DataGeo PR',
   updateInterval: 3_600_000,
@@ -671,7 +671,7 @@ export const datageoFerroviasLayer = (() => {
   let _lastError = null;
   return {
     id: 'datageo-ferrovias',
-    name: 'Ferrovias (malha)',
+    name: 'Ferrovias',
     icon: '🚆',
     source: 'OpenStreetMap',
     updateInterval: 24 * 3600_000,

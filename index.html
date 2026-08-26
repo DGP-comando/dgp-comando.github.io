@@ -31,32 +31,32 @@
 
   <!-- Style indicator -->
   <div id="style-indicator">
-    <span class="indicator-label">ACTIVE STYLE</span>
+    <span class="indicator-label">ESTILO ATIVO</span>
     <span class="indicator-value" id="active-style-name">NORMAL</span>
   </div>
 
   <!-- Top-center camera and share actions -->
   <nav id="top-center-actions" aria-label="Globe actions">
-    <button id="clear-selected-layers" type="button" aria-label="Clear selected data layers" title="Turn off all selected data layers">
+    <button id="clear-selected-layers" type="button" aria-label="Desligar todas as camadas" title="Desligar todas as camadas selecionadas">
       <span class="material-symbols-outlined" aria-hidden="true">layers_clear</span>
     </button>
-    <button id="share-btn" type="button" aria-label="Copy share link" title="Copy share link">
+    <button id="share-btn" type="button" aria-label="Copiar link de compartilhamento" title="Copiar link de compartilhamento">
       <span class="share-icon" aria-hidden="true">&#x1F517;</span>
     </button>
-    <button id="reset-globe-view" type="button" aria-label="Reset to full globe view" title="Reset camera and return to full globe view">
+    <button id="reset-globe-view" type="button" aria-label="Voltar à visão geral" title="Voltar à visão geral do globo">
       <span class="material-symbols-outlined" aria-hidden="true">public</span>
     </button>
   </nav>
   <div id="global-loading-status" role="status" aria-live="polite" aria-atomic="true" hidden>
-    <span id="global-loading-label">LOADING LIVE DATA</span>
+    <span id="global-loading-label">CARREGANDO DADOS AO VIVO</span>
     <span id="global-loading-detail"></span>
   </div>
   <div id="traffic-sync-chip" aria-live="polite">
-    <span id="traffic-sync-label">syncing road network</span>
+    <span id="traffic-sync-label">sincronizando malha viária</span>
     <span id="traffic-sync-progress">0%</span>
   </div>
   <div id="cctv-sync-chip" aria-live="polite">
-    <span id="cctv-sync-label">loading frames</span>
+    <span id="cctv-sync-label">carregando imagens</span>
     <span id="cctv-sync-progress">0/0</span>
   </div>
 
@@ -356,9 +356,9 @@
   <!-- Post-processing toggles (top-right) -->
   <div id="pp-toggles" class="panel-collapsible collapsed" data-panel-id="pp-toggles">
     <div class="compact pp-header-row">
-      <span class="pp-header-label">DISPLAY</span>
+      <span class="pp-header-label">TELA</span>
       <span class="panel-divider" aria-hidden="true"></span>
-      <button class="panel-collapse-btn pp-collapse-btn" data-collapse-target="pp-toggles" title="Collapse panel">&#x25C0;</button>
+      <button class="panel-collapse-btn pp-collapse-btn" data-collapse-target="pp-toggles" title="Recolher painel">&#x25C0;</button>
     </div>
     <div class="pp-toggle-group">
       <button class="pp-toggle-btn" id="hud-toggle" title="Intelligence HUD (H)">
@@ -407,7 +407,7 @@
       <div class="param-panel-header">
         <span class="param-panel-title">PARAMETERS</span>
         <span class="param-panel-divider"></span>
-        <button class="panel-collapse-btn" id="param-panel-collapse-btn" data-collapse-target="param-slider-panel" title="Collapse panel">−</button>
+        <button class="panel-collapse-btn" id="param-panel-collapse-btn" data-collapse-target="param-slider-panel" title="Recolher painel">−</button>
       </div>
       <div id="param-sliders"></div>
     </div>
@@ -485,12 +485,12 @@
     <div class="panel-inner">
       <button id="control-panel-toggle" class="panel-header dock-tray-toggle" type="button"
         data-dock-toggle-target="control-panel" aria-expanded="false"
-        aria-controls="control-panel-popover" aria-label="Expand Visual Presets">
-        <span class="panel-title"><span class="dock-label-icon dock-label-icon-presets" aria-hidden="true"></span>VISUAL PRESETS</span>
+        aria-controls="control-panel-popover" aria-label="Abrir estilos visuais">
+        <span class="panel-title"><span class="dock-label-icon dock-label-icon-presets" aria-hidden="true"></span>ESTILOS VISUAIS</span>
         <span class="panel-divider"></span>
       </button>
       <div id="control-panel-popover" class="dock-popover-content">
-      <button class="dock-pin-btn" data-pin-target="control-panel" type="button" aria-label="Pin visual presets" aria-pressed="false" title="Keep visual presets open"><img src="/pin.svg" alt="" /></button>
+      <button class="dock-pin-btn" data-pin-target="control-panel" type="button" aria-label="Fixar estilos visuais" aria-pressed="false" title="Manter os estilos abertos"><img src="/pin.svg" alt="" /></button>
       <div id="style-buttons" class="button-grid">
         <button class="style-btn active" data-style="normal">
           <span class="btn-icon">◯</span>
@@ -530,14 +530,14 @@
       </div>
       <section class="map-source-section" aria-labelledby="map-source-label">
         <div class="map-source-heading">
-          <span id="map-source-label">MAP SOURCE</span>
+          <span id="map-source-label">MAPA BASE</span>
           <span id="map-stack-status" class="pp-stack-status" aria-live="polite">3D</span>
         </div>
         <div id="map-stack-chips" class="map-stack-chip-row" role="group" aria-label="Map source"></div>
       </section>
       </div>
       <div id="style-mini-status" class="panel-mini-status" aria-live="polite">
-        <span class="panel-mini-label">Style</span>
+        <span class="panel-mini-label">Estilo</span>
         <span id="style-mini-value" class="panel-mini-value">NORMAL</span>
       </div>
     </div>
@@ -548,15 +548,15 @@
     <div class="panel-glow"></div>
     <div class="location-inner">
       <div class="location-toolbar">
-        <span class="location-toolbar-label"><span class="dock-label-icon dock-label-icon-location" aria-hidden="true"></span>LOCATION</span>
-        <button class="panel-collapse-btn" data-collapse-target="location-bar" title="Collapse panel">+</button>
+        <span class="location-toolbar-label"><span class="dock-label-icon dock-label-icon-location" aria-hidden="true"></span>LOCALIZAÇÃO</span>
+        <button class="panel-collapse-btn" data-collapse-target="location-bar" title="Recolher painel">+</button>
       </div>
       <div id="location-mini-status" class="location-mini-status" aria-live="polite">
-        <div id="location-mini-city" class="location-mini-city">📍 Location: --</div>
-        <div id="location-mini-poi" class="location-mini-poi">Landmark: --</div>
+        <div id="location-mini-city" class="location-mini-city">📍 Local: --</div>
+        <div id="location-mini-poi" class="location-mini-poi">Referência: --</div>
       </div>
       <div class="dock-popover-content">
-        <button class="dock-pin-btn" data-pin-target="location-bar" type="button" aria-label="Pin location tray" aria-pressed="false" title="Keep location tray open"><img src="/pin.svg" alt="" /></button>
+        <button class="dock-pin-btn" data-pin-target="location-bar" type="button" aria-label="Fixar a barra de localização" aria-pressed="false" title="Manter a localização aberta"><img src="/pin.svg" alt="" /></button>
         <div id="poi-row" class="poi-row-container"></div>
         <div class="location-bar-divider" id="location-bar-divider"></div>
         <div class="location-city-row">
@@ -579,9 +579,9 @@
     <div class="panel-glow"></div>
     <div class="data-panel-inner">
       <div class="panel-header">
-        <span class="panel-title">DATA LAYERS</span>
+        <span class="panel-title">CAMADAS DE DADOS</span>
         <span class="panel-divider"></span>
-        <button class="panel-collapse-btn" data-collapse-target="data-panel" title="Collapse panel">+</button>
+        <button class="panel-collapse-btn" data-collapse-target="data-panel" title="Recolher painel">+</button>
       </div>
       <div id="data-toggles" class="data-toggle-list"></div>
     </div>
@@ -594,7 +594,7 @@
       <div class="panel-header">
         <span class="panel-title">CCTV</span>
         <span class="panel-divider"></span>
-        <button class="panel-collapse-btn" data-collapse-target="cctv-panel" title="Collapse panel">+</button>
+        <button class="panel-collapse-btn" data-collapse-target="cctv-panel" title="Recolher painel">+</button>
       </div>
       <div id="cctv-frame-wrap" class="cctv-frame-wrap">
         <img id="cctv-frame" alt="CCTV feed frame" />
@@ -648,35 +648,35 @@
     <div class="panel-glow"></div>
     <div class="scene-panel-inner">
       <div class="panel-header">
-        <span class="panel-title">SCENES</span>
+        <span class="panel-title">CENAS</span>
         <span class="panel-divider"></span>
-        <button class="panel-collapse-btn" data-collapse-target="scene-panel" title="Collapse panel">+</button>
+        <button class="panel-collapse-btn" data-collapse-target="scene-panel" title="Recolher painel">+</button>
       </div>
       <div class="scene-controls">
         <select id="scene-select" aria-label="Scene recipe"></select>
-        <button id="scene-new-btn" class="scene-btn">NEW</button>
+        <button id="scene-new-btn" class="scene-btn">NOVA</button>
         <button id="scene-delete-btn" class="scene-btn scene-btn-danger">DEL</button>
       </div>
       <div class="scene-controls">
-        <button id="scene-capture-btn" class="scene-btn">CAPTURE SHOT</button>
-        <button id="scene-update-shot-btn" class="scene-btn">UPDATE SHOT</button>
+        <button id="scene-capture-btn" class="scene-btn">CAPTURAR</button>
+        <button id="scene-update-shot-btn" class="scene-btn">ATUALIZAR</button>
       </div>
       <div id="scene-shot-list" class="scene-shot-list"></div>
       <div class="scene-controls">
-        <button id="scene-start-btn" class="scene-btn">START</button>
-        <button id="scene-stop-btn" class="scene-btn scene-btn-danger">STOP</button>
-        <button id="scene-next-btn" class="scene-btn">NEXT</button>
+        <button id="scene-start-btn" class="scene-btn">INICIAR</button>
+        <button id="scene-stop-btn" class="scene-btn scene-btn-danger">PARAR</button>
+        <button id="scene-next-btn" class="scene-btn">PRÓXIMA</button>
       </div>
       <div class="scene-controls">
-        <button id="scene-export-btn" class="scene-btn">EXPORT PRESETS</button>
-        <button id="scene-import-btn" class="scene-btn">IMPORT</button>
-        <button id="scene-download-btn" class="scene-btn">RUN LOG</button>
+        <button id="scene-export-btn" class="scene-btn">EXPORTAR</button>
+        <button id="scene-import-btn" class="scene-btn">IMPORTAR</button>
+        <button id="scene-download-btn" class="scene-btn">REGISTRO</button>
         <input type="file" id="scene-import-file" accept="application/json,.json" hidden />
       </div>
       <div class="scene-progress">
         <div id="scene-progress-fill">0%</div>
       </div>
-      <div id="scene-status">Ready</div>
+      <div id="scene-status">Pronto</div>
     </div>
   </div>
 
@@ -869,13 +869,13 @@
     <div class="first-run-footer">
       <label class="first-run-suppress">
         <input type="checkbox" data-first-run-suppress />
-        <span>Don't show this again</span>
+        <span>Não mostrar de novo</span>
       </label>
-      <span>ESC to dismiss</span>
+      <span>ESC para fechar</span>
     </div>
     <!-- Kept out of the footer row: it swaps to mission progress and errors, and
          a live region that also holds layout makes the row jump as it speaks. -->
-    <p class="first-run-note" data-first-run-status role="status" aria-live="polite">Tip: the GEV MIC button in the dock lets you talk to the map.</p>
+    <p class="first-run-note" data-first-run-status role="status" aria-live="polite">Dica: passe o mouse sobre um município para ver o resumo e clique para abrir a ficha completa.</p>
   </aside>
 
   <!-- Intelligence HUD Overlay -->

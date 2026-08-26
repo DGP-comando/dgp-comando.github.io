@@ -372,7 +372,20 @@ async function init() {
       getRenderGovernorDiagnostics,
       requestRender: governorRequestRender,
     };
-    window.__godsEyeView.voiceCommands = initGevVoiceCommands({ viewer, styleManager, dataManager, sceneDirector, annotations });
+    // Voz depende do proxy OpenAI do dev-server; no deploy estatico o dock
+    // ficaria morto (era o widget "VOICE STANDBY" que aparecia no celular).
+    if (import.meta.env.DEV) {
+      window.__godsEyeView.voiceCommands = initGevVoiceCommands({ viewer, styleManager, dataManager, sceneDirector, annotations });
+    }
+
+    // Paineis cujas camadas/backends nao existem no build estatico: remover o
+    // DOM inteiro (CCTV, contexto militar, radio) em vez de deixar acordeoes
+    // mortos — mesmo principio do PROXY_DEPENDENT_LAYER_IDS.
+    if (!import.meta.env.DEV) {
+      for (const id of ['cctv-panel', 'global-context-panel', 'radio-panel']) {
+        document.getElementById(id)?.remove();
+      }
+    }
 
   } catch (error) {
     console.error("God's Eye View initialization failed:", error);

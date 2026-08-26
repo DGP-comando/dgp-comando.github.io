@@ -25,7 +25,7 @@ const datacenters = createLocalGeoJsonLayer({
 const dams = createLocalGeoJsonLayer({
   id: 'local-dams',
   url: damsUrl,
-  name: 'Dams',
+  name: 'Barragens',
   color: '#0088ff', // Blue
   icon: '▰',
   source: 'USACE',
@@ -39,7 +39,7 @@ const dams = createLocalGeoJsonLayer({
 // but the data is NOT bundled anymore — it needs FIRMS_MAP_KEY server-side.
 const fires = createFirmsHeatmapLayer({
   id: 'local-firms',
-  name: 'FIRMS Active Fires',
+  name: 'Focos de calor (queimadas)',
   icon: '▲',
   source: 'NASA FIRMS · DataGeo PR',
 });

@@ -86,7 +86,7 @@ export class IntelHUD {
     this._lastSummarySignature = '';
     this._summaryRevision = 0;
     // One-shot guards so the very first summary lands immediately instead of
-    // waiting for the 15s interval tick: B) swap the "Awaiting telemetry..."
+    // waiting for the 15s interval tick: B) swap the "Aguardando telemetria..."
     // placeholder for the deterministic line as soon as metrics exist, then
     // A) kick a real AI summary once the intro fly-to settles.
     this._firstMetricsShown = false;
@@ -116,7 +116,7 @@ export class IntelHUD {
         this._setSummaryText(this._composeSummary(), false);
       }
       // First settled view: request the AI summary now rather than waiting for
-      // the periodic tick (saves up to ~15s of "Awaiting telemetry...").
+      // the periodic tick (saves up to ~15s of "Aguardando telemetria...").
       if (!this._firstSummaryKicked && this._visible && this._latestMetrics) {
         this._firstSummaryKicked = true;
         void this._updateSummary(true, true);
@@ -145,20 +145,20 @@ export class IntelHUD {
 
     this._el.innerHTML = `
       <div class="hud-top-bar">
-        <span class="hud-top-bar-left">TOP SECRET // SI-TK // NOFORN</span>
+        <span class="hud-top-bar-left">DADOS PÚBLICOS // DATAGEO PR</span>
         <span class="hud-top-bar-center">${this._missionId}</span>
-        <span class="hud-top-bar-right">PAGE 1/1</span>
+        <span class="hud-top-bar-right">PÁG 1/1</span>
       </div>
 
       <div class="hud-corner hud-top-left">
         <div class="hud-bracket">┌</div>
         <div class="hud-content">
-          <div class="hud-classification">TOP SECRET // SI-TK // NOFORN</div>
+          <div class="hud-classification">DADOS PÚBLICOS // DATAGEO PR</div>
           <div class="hud-system">${this._missionId}  ${this._sensorId}</div>
           <div class="hud-mode" id="hud-mode">NORMAL</div>
           <div class="hud-summary-wrap">
-            <div class="hud-summary-label">SUMMARY</div>
-            <div class="hud-summary" id="hud-summary">Awaiting telemetry...</div>
+            <div class="hud-summary-label">RESUMO</div>
+            <div class="hud-summary" id="hud-summary">Aguardando telemetria...</div>
           </div>
         </div>
       </div>
@@ -370,7 +370,7 @@ export class IntelHUD {
       ona,
     };
 
-    // First time we have real telemetry: replace the "Awaiting telemetry..."
+    // First time we have real telemetry: replace the "Aguardando telemetria..."
     // placeholder with the deterministic summary line instantly (no network),
     // so there's always meaningful context on screen. The AI summary upgrades
     // this within a second via the moveEnd kick / periodic refresh.
@@ -563,7 +563,7 @@ export class IntelHUD {
    */
   _composeSummary() {
     const m = this._latestMetrics;
-    if (!m) return 'Awaiting telemetry...';
+    if (!m) return 'Aguardando telemetria...';
 
     const modeEl = document.getElementById('hud-mode');
     const modeLabel = modeEl?.textContent || 'NORMAL';

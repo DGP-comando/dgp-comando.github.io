@@ -9323,7 +9323,7 @@ export class StyleManager {
         } catch (err) {
           console.error('[Search] Geocoding failed:', err);
           if (this._disposed || generation !== this._navigationGeneration) return;
-          this._showToast('Search failed');
+          this._showToast('Busca sem resultado');
         } finally {
           this._settleLocationSearchUi(generation);
         }

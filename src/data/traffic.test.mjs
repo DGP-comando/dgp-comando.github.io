@@ -111,7 +111,7 @@ test('the rendered steady-state meta line carries the SIMULATED copy', () => {
       source: 'OpenStreetMap',
       stats: stats(trafficFeedPresentation({ liveMode: false })),
     }),
-    'FALLBACK · OpenStreetMap · SIMULATED — add TomTom key for live',
+    'RESERVA · OpenStreetMap · SIMULATED — add TomTom key for live',
   );
   assert.equal(
     mgr._buildMetaText({
@@ -121,7 +121,7 @@ test('the rendered steady-state meta line carries the SIMULATED copy', () => {
         flowError: 'TomTom daily budget reached',
       })),
     }),
-    'DEGRADED · OpenStreetMap · SIMULATED — TomTom daily budget reached',
+    'DEGRADADA · OpenStreetMap · SIMULATED — TomTom daily budget reached',
   );
 });
 

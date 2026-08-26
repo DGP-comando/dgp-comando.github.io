@@ -11,12 +11,18 @@ function cloneLayerParams(value) {
 }
 
 const FEED_STATE_LABELS = Object.freeze({
-  nominal: 'ON',
-  loading: 'LOADING',
-  degraded: 'DEGRADED',
-  stale: 'STALE',
-  fallback: 'FALLBACK',
-  unavailable: 'UNAVAILABLE',
+  nominal: 'ATIVA',
+  loading: 'CARREGANDO',
+  degraded: 'DEGRADADA',
+  stale: 'DESATUALIZADA',
+  fallback: 'RESERVA',
+  unavailable: 'INDISPONÍVEL',
+});
+
+// Rotulos pt-BR dos estados transitorios do ciclo de vida (botao do painel).
+const LIFECYCLE_LABELS = Object.freeze({
+  enabling: 'LIGANDO',
+  disabling: 'DESLIGANDO',
 });
 
 const SUPERSEDED_VISIBILITY_INTENT = Symbol('superseded-visibility-intent');
@@ -2214,23 +2220,23 @@ export class DataLayerManager {
     const source = stats.source || layer.source;
     const lifecycleState = layer.lifecycleState || (layer.enabled ? 'enabled' : 'disabled');
     if (lifecycleState === 'enabling' || lifecycleState === 'disabling') {
-      return `${lifecycleState.toUpperCase()} · ${source}`;
+      return `${LIFECYCLE_LABELS[lifecycleState]} · ${source}`;
     }
     if (layer.lifecycleUncertain) {
-      return `UNCERTAIN · ${source} · lifecycle state requires reconciliation`;
+      return `INDEFINIDA · ${source} · estado pendente de reconciliação`;
     }
     const presentedError = stats.error || stats.lastError || stats.managerRefreshError;
     if (presentedError) {
       if (typeof stats.retryInSec === 'number' && stats.retryInSec > 0) {
-        return `${stateLabel} · ${source} · ${presentedError} · retry ${stats.retryInSec}s`;
+        return `${stateLabel} · ${source} · ${presentedError} · nova tentativa em ${stats.retryInSec}s`;
       }
       return `${stateLabel} · ${source} · ${presentedError}`;
     }
-    const ago = stats.lastUpdate ? this._timeAgo(stats.lastUpdate) : 'never';
+    const ago = stats.lastUpdate ? this._timeAgo(stats.lastUpdate) : 'sem atualização';
     if (stats.loading) {
       const loadingLabel = typeof stats.loadingLabel === 'string' && stats.loadingLabel.trim()
         ? stats.loadingLabel.trim()
-        : 'loading...';
+        : 'carregando...';
       return `${source} · ${loadingLabel}`;
     }
     if (feedState === 'fallback') {
@@ -2241,7 +2247,7 @@ export class DataLayerManager {
     }
     if (feedState === 'stale') {
       const retry = typeof stats.retryInSec === 'number' && stats.retryInSec > 0
-        ? ` · retrying in ${stats.retryInSec}s`
+        ? ` · nova tentativa em ${stats.retryInSec}s`
         : '';
       return `${stateLabel} · ${source} · ${ago}${retry}`;
     }
@@ -2268,8 +2274,8 @@ export class DataLayerManager {
       : (uncertain ? 'uncertain' : feedState);
     button.disabled = transitioning;
     button.textContent = transitioning
-      ? layer.lifecycleState.toUpperCase()
-      : (uncertain ? 'UNCERTAIN' : (layer.enabled ? FEED_STATE_LABELS[feedState] : 'OFF'));
+      ? LIFECYCLE_LABELS[layer.lifecycleState]
+      : (uncertain ? 'INDEFINIDA' : (layer.enabled ? FEED_STATE_LABELS[feedState] : 'DESLIGADA'));
     button.setAttribute('aria-label', `${layer.name}: ${button.textContent}`);
   }
 
@@ -2280,9 +2286,9 @@ export class DataLayerManager {
 
   _timeAgo(timestamp) {
     const diff = Math.floor((Date.now() - timestamp) / 1000);
-    if (diff < 5) return 'just now';
-    if (diff < 60) return `${diff}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 5) return 'agora mesmo';
+    if (diff < 60) return `há ${diff}s`;
+    if (diff < 3600) return `há ${Math.floor(diff / 60)} min`;
+    return `há ${Math.floor(diff / 3600)} h`;
   }
 }

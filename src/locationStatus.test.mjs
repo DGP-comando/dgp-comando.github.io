@@ -43,7 +43,7 @@ test('a free-text search reports the destination, never the empty placeholder', 
 test('a single-segment geocode says it was searched rather than inventing context', () => {
   assert.deepEqual(
     locationMiniStatus({ searchedLabel: 'Japan' }),
-    { city: '📍 Japan', poi: 'Searched location' },
+    { city: '📍 Japan', poi: 'Local pesquisado' },
   );
 });
 
@@ -55,7 +55,7 @@ test('a preset city outranks a stale searched label', () => {
 });
 
 test('nothing selected keeps the honest empty placeholder', () => {
-  const empty = { city: '📍 Location: --', poi: 'Landmark: --' };
+  const empty = { city: '📍 Local: --', poi: 'Referência: --' };
   assert.deepEqual(locationMiniStatus(), empty);
   assert.deepEqual(locationMiniStatus({ city: null, searchedLabel: '' }), empty);
   assert.deepEqual(locationMiniStatus({ searchedLabel: '   ,  , ' }), empty);

@@ -310,6 +310,120 @@ export async function fetchVessels() {
   return [...byMmsi.values()];
 }
 
+// --------------------------------------------------------------------------
+// Ficha municipal (clique no poligono) — agrega tudo que o ecossistema tem
+// por municipio. Cada chave e uma SECAO da ficha; novas bases = novas
+// chaves aqui + um builder em datageoFicha.js. Promise.allSettled: uma
+// fonte fora do ar nao derruba a ficha.
+// --------------------------------------------------------------------------
+
+const AQICN_IBGE_TO_CITY = {
+  4106902: 'curitiba', 4113700: 'londrina', 4115200: 'maringa',
+  4108304: 'foz', 4104808: 'cascavel', 4119905: 'ponta-grossa',
+  4125506: 'sao-jose-dos-pinhais', 4109401: 'guarapuava',
+  4128104: 'umuarama', 4127700: 'toledo', 4118204: 'paranagua',
+  4101408: 'apucarana',
+};
+
+const stripAccents = (t) =>
+  String(t ?? '').toLowerCase().trim().normalize('NFD').replace(/\p{Mn}/gu, '');
+
+export async function fetchMunicipioFicha(ibge, nome) {
+  const code = String(ibge);
+  const iso7 = isoZ(new Date(Date.now() - 7 * 86_400_000));
+  const d30 = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+  const nowIso = isoZ(new Date());
+
+  const tasks = {
+    irtc: dgSelect(
+      'irtc_scores',
+      'select=irtc_score,risk_level,dominant_domain,data_coverage,risk_clima,' +
+        `risk_saude,risk_ambiente,risk_hidro,risk_ar,calculated_at&ibge_code=eq.${code}&limit=1`,
+    ),
+    dengueSerie: dgSelect(
+      'dengue_data',
+      'select=year,epidemiological_week,cases,cases_est,alert_level,incidence_rate' +
+        `&ibge_code=eq.${code}&order=year.desc,epidemiological_week.desc&limit=8`,
+    ),
+    dengueProj: dgSelect(
+      'dengue_projections',
+      'select=projected_week,projected_year,projected_cases,trend,r_squared' +
+        `&ibge_code=eq.${code}&order=projected_year.asc,projected_week.asc&limit=4`,
+    ),
+    focos: dgSelect(
+      'fire_spots',
+      `select=acq_date&municipality=eq.${encodeURIComponent(nome)}&acq_date=gte.${d30}&limit=1000`,
+    ),
+    clima: dgSelect(
+      'climate_data',
+      'select=station_name,temperature,humidity,precipitation,wind_speed,observed_at' +
+        `&ibge_code=eq.${code}&order=observed_at.desc&limit=1`,
+    ),
+    rios: dgSelect(
+      'river_levels',
+      'select=station_name,river_name,level_cm,alert_level,observed_at' +
+        `&municipality=eq.${encodeURIComponent(nome)}&order=observed_at.desc&limit=5`,
+    ),
+    cemaden: dgSelect(
+      'cemaden_alerts',
+      `select=alert_type,severity,issued_at,expires_at&ibge_code=eq.${code}` +
+        `&issued_at=gte.${isoZ(new Date(Date.now() - 3 * 86_400_000))}` +
+        `&or=(expires_at.is.null,expires_at.gt.${nowIso})&order=issued_at.desc&limit=5`,
+    ),
+    anomalias: dgSelect(
+      'anomalies',
+      'select=indicator,z_score,observed_value,municipality,detected_at' +
+        `&detected_at=gte.${iso7}&order=detected_at.desc&limit=200`,
+    ),
+    ar: AQICN_IBGE_TO_CITY[code]
+      ? dgSelect(
+          'air_quality',
+          'select=aqi,dominant_pollutant,pm25,observed_at' +
+            `&city=eq.${AQICN_IBGE_TO_CITY[code]}&order=observed_at.desc&limit=1`,
+        )
+      : Promise.resolve([]),
+    incidentes: dgSelect(
+      'incidents',
+      'select=title,type,severity,status,detected_at' +
+        `&affected_municipalities=cs.${encodeURIComponent(
+          JSON.stringify([{ ibge_code: code }]),
+        )}&status=not.in.(resolved,closed)&order=detected_at.desc&limit=5`,
+    ),
+    noticias: dgSelect(
+      'news_items',
+      `select=title,source,url,urgency,published_at&title=ilike.${encodeURIComponent(
+        `*${nome}*`,
+      )}&order=published_at.desc&limit=3`,
+    ),
+  };
+
+  const keys = Object.keys(tasks);
+  const settled = await Promise.allSettled(Object.values(tasks));
+  const out = {};
+  keys.forEach((key, i) => {
+    const r = settled[i];
+    out[key] = r.status === 'fulfilled' ? r.value : { error: r.reason?.message };
+  });
+
+  // Anomalias: a tabela grava municipio sem padrao de acento (fonte INMET);
+  // o filtro por nome normalizado acontece aqui, client-side.
+  if (Array.isArray(out.anomalias)) {
+    const alvo = stripAccents(nome);
+    out.anomalias = out.anomalias
+      .filter((a) => stripAccents(a.municipality) === alvo)
+      .slice(0, 5);
+  }
+  // Focos: contagens 7d/30d a partir das datas.
+  if (Array.isArray(out.focos)) {
+    const corte7 = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+    out.focos = {
+      d30: out.focos.length,
+      d7: out.focos.filter((f) => (f.acq_date ?? '') >= corte7).length,
+    };
+  }
+  return out;
+}
+
 /** Dengue: ultima semana epidemiologica disponivel, por municipio. */
 export async function fetchDengueLatestWeek() {
   const latest = await dgSelect(
