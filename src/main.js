@@ -214,32 +214,65 @@ async function init() {
     const dataManager = new DataLayerManager(viewer, {
       allowQaRegistration: import.meta.env.DEV,
     });
-    dataManager.register(flightsLayer);
-    dataManager.register(militaryFlightsLayer);
-    dataManager.register(earthquakesLayer);
-    dataManager.register(satellitesLayer);
-    dataManager.register(rocketLaunchesLayer);
-    rocketLaunchesLayer.attachDataManager(dataManager);
-    dataManager.register(trafficLayer);
-    dataManager.register(cctvLayer);
-    dataManager.register(radioLayer);
-    dataManager.register(bikeshareLayer);
-    dataManager.register(aisLiveVesselsLayer);
-    dataManager.register(militaryInstallationsLayer);
-    dataManager.register(militaryAwarenessLayer);
-    militaryAwarenessLayer.attachDataManager(dataManager);
-    for (const layer of localDataLayers) {
+    // Camadas GEV cujo backend e um proxy do DEV-SERVER Vite (OpenSky,
+    // adsb.lol, CelesTrak, TomTom, CCTV, Radio Browser, GBFS, AISStream,
+    // Overpass...). No deploy estatico (Pages) esses endpoints nao existem:
+    // registrar essas camadas so produziria linhas mortas no painel — mesmo
+    // principio do seletor de basemaps, que exibe apenas o disponivel.
+    // Em dev todas continuam registradas.
+    const PROXY_DEPENDENT_LAYER_IDS = new Set([
+      'flights',
+      'military',
+      'satellites',
+      'rocket-launches',
+      'traffic',
+      'cctv',
+      'radio',
+      'bikeshare',
+      'ais-live-vessels',
+      'military-installations',
+      'military-awareness',
+    ]);
+    const layerAvailableInBuild = (id) =>
+      import.meta.env.DEV || !PROXY_DEPENDENT_LAYER_IDS.has(id);
+
+    // Ordem de registro = ordem do painel Data Layers: as camadas DataGeo
+    // (o produto) vem PRIMEIRO; as do GEV original viram contexto no fim.
+    for (const layer of DATAGEO_LAYERS) {
       dataManager.register(layer);
     }
-    // Camadas DataGeo PR (Supabase do c2-parana, sem proxy)
-    for (const layer of DATAGEO_LAYERS) {
+    if (layerAvailableInBuild('flights')) dataManager.register(flightsLayer);
+    if (layerAvailableInBuild('military')) dataManager.register(militaryFlightsLayer);
+    dataManager.register(earthquakesLayer);
+    if (layerAvailableInBuild('satellites')) dataManager.register(satellitesLayer);
+    if (layerAvailableInBuild('rocket-launches')) {
+      dataManager.register(rocketLaunchesLayer);
+      rocketLaunchesLayer.attachDataManager(dataManager);
+    }
+    if (layerAvailableInBuild('traffic')) dataManager.register(trafficLayer);
+    if (layerAvailableInBuild('cctv')) dataManager.register(cctvLayer);
+    if (layerAvailableInBuild('radio')) dataManager.register(radioLayer);
+    if (layerAvailableInBuild('bikeshare')) dataManager.register(bikeshareLayer);
+    if (layerAvailableInBuild('ais-live-vessels')) dataManager.register(aisLiveVesselsLayer);
+    if (layerAvailableInBuild('military-installations')) {
+      dataManager.register(militaryInstallationsLayer);
+    }
+    if (layerAvailableInBuild('military-awareness')) {
+      dataManager.register(militaryAwarenessLayer);
+      militaryAwarenessLayer.attachDataManager(dataManager);
+    }
+    for (const layer of localDataLayers) {
       dataManager.register(layer);
     }
     // Chrome DataGeo: ticker de noticias + briefing situacional diario
     initDatageoTicker();
     initDatageoBriefing();
     // Restoration starts only after the complete production registry is sealed.
-    dataManager.finalizeRegistrations(LAYER_STATE_REGISTRY);
+    // O registry filtrado espelha exatamente as camadas registradas acima
+    // (finalizeRegistrations exige correspondencia 1:1).
+    dataManager.finalizeRegistrations(
+      LAYER_STATE_REGISTRY.filter((entry) => layerAvailableInBuild(entry.id)),
+    );
     if (import.meta.env.DEV) {
       // Dev-only handles for QA scripts and console-driven camera work.
       window.__gevViewer = viewer;
