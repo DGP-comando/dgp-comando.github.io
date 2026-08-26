@@ -223,8 +223,10 @@ test('v2 codec distinguishes absent from empty and keeps canonical deterministic
 });
 
 test('unknown enabled-layer tokens reject the payload instead of becoming an empty set', () => {
-  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=z')), null);
-  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=c.z')), null);
+  // 'Z' esta fora do registry (o espaco foi estendido a A-Z em 2026-08-26 e
+  // 'z' minusculo, o token original deste teste, passou a ser atribuido).
+  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=Z')), null);
+  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=c.Z')), null);
 });
 
 test('unknown and forbidden option fields are ignored while missing options use codec defaults', () => {

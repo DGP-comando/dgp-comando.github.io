@@ -139,7 +139,51 @@ export const datageoSubestacoesLayer = makePointsLayer({
   }),
 });
 
+// Usinas SIGEL/ANEEL por tipo + aerogeradores individuais (torres) num
+// mesmo layer: cor por fonte, tamanho por potencia; aerogeradores so
+// aparecem de perto (sao detalhe dos parques eolicos, ja presentes como
+// usina 'eol').
+const USINA_STYLE = {
+  uhe: { cor: '#3b82f6', rotulo: 'UHE', base: 8 },
+  pch: { cor: '#7dd3fc', rotulo: 'PCH', base: 5 },
+  cgh: { cor: '#2dd4bf', rotulo: 'CGH', base: 4 },
+  ute: { cor: '#fb923c', rotulo: 'UTE', base: 5.5 },
+  eol: { cor: '#f8fafc', rotulo: 'EOL', base: 7 },
+  ufv: { cor: '#fde047', rotulo: 'UFV', base: 6 },
+};
+
+const fmtMw = (kw) => (kw ? `${(kw / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MW` : '');
+
+export const datageoGeracaoLayer = makePointsLayer({
+  id: 'datageo-geracao',
+  name: 'Usinas de energia',
+  category: 'Infraestrutura',
+  icon: '💡',
+  source: 'SIGEL/ANEEL',
+  url: '/data/usinas-pr.geojson',
+  styleFor: (p) => {
+    if (p.tipo === 'aerogerador') {
+      return {
+        size: 3.5,
+        color: Cesium.Color.WHITE.withAlpha(0.85),
+        label: `Aerogerador ${p.nome}${p.alt ? ` · ${p.alt} m` : ''}`,
+        labelMaxDist: 60_000,
+      };
+    }
+    const s = USINA_STYLE[p.tipo];
+    if (!s) return null;
+    const mw = (Number(p.pot_kw) || 0) / 1000;
+    return {
+      size: mw >= 500 ? s.base + 5 : mw >= 50 ? s.base + 2 : s.base,
+      color: Cesium.Color.fromCssColorString(s.cor).withAlpha(0.9),
+      label: `${s.rotulo} ${p.nome}${p.pot_kw ? ` · ${fmtMw(p.pot_kw)}` : ''}`,
+      labelMaxDist: mw >= 500 ? 1_500_000 : mw >= 50 ? 400_000 : 130_000,
+    };
+  },
+});
+
 export const DATAGEO_ENERGIA_LAYERS = [
   datageoLinhasTransmissaoLayer,
   datageoSubestacoesLayer,
+  datageoGeracaoLayer,
 ];

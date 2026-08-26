@@ -33,6 +33,7 @@ import { datageoVentosLayer } from './datageoVentos.js';
 import { datageoRodoviasLayer } from './datageoRodovias.js';
 import { DATAGEO_LOGISTICA_LAYERS } from './datageoLogistica.js';
 import { DATAGEO_ENERGIA_LAYERS } from './datageoEnergia.js';
+import { DATAGEO_TERRITORIOS_LAYERS } from './datageoTerritorios.js';
 
 const LABEL_FONT = '12px "JetBrains Mono", monospace';
 
@@ -736,6 +737,7 @@ export const datageoFerroviasLayer = (() => {
 
 export const DATAGEO_LAYERS = [
   datageoMunicipiosLayer,
+  ...DATAGEO_TERRITORIOS_LAYERS,
   datageoClimaLayer,
   datageoRiosLayer,
   datageoCemadenLayer,

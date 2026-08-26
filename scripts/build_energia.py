@@ -91,6 +91,77 @@ def build_ses():
           f'{out.stat().st_size / 1024:.0f} KB')
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Geracao: usinas SIGEL/ANEEL por tipo + aerogeradores
+# ---------------------------------------------------------------------------
+
+SIGEL = Path('E:/UPWORK/01-CONTRACTS/energy/data/raw/sigel')
+USINA_FILES = {
+    'uhe': 'sigel_uhe_pr.geojson',
+    'pch': 'sigel_pch_pr.geojson',
+    'cgh': 'sigel_cgh_pr.geojson',
+    'ute': 'sigel_ute_pr.geojson',
+    'eol': 'sigel_eol_pr.geojson',
+    'ufv': 'sigel_ufv_pr.geojson',
+}
+
+
+def _pot_kw(p):
+    for k in ('POT_KW', 'P_OUT_KW', 'P_FISC_KW', 'POT_FISC_KW'):
+        v = p.get(k)
+        if v:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def build_usinas():
+    feats = []
+    counts = {}
+    for tipo, fname in USINA_FILES.items():
+        data = json.loads((SIGEL / fname).read_text(encoding='utf-8'))
+        for f in data['features']:
+            p = f['properties']
+            nome = p.get('NOME') or p.get('Nome') or ''
+            feats.append({
+                'type': 'Feature',
+                'properties': {
+                    'tipo': tipo,
+                    'nome': nome,
+                    'pot_kw': _pot_kw(p),
+                },
+                'geometry': {'type': 'Point',
+                             'coordinates': round_coords(f['geometry']['coordinates'])},
+            })
+            counts[tipo] = counts.get(tipo, 0) + 1
+    # Aerogeradores: torres individuais dos parques eolicos
+    data = json.loads((SIGEL / 'sigel_aerogeradores_pr.geojson').read_text(encoding='utf-8'))
+    for f in data['features']:
+        p = f['properties']
+        feats.append({
+            'type': 'Feature',
+            'properties': {
+                'tipo': 'aerogerador',
+                'nome': p.get('NOME_EOL') or '',
+                'pot_kw': (float(p['POT_MW']) * 1000) if p.get('POT_MW') else None,
+                'alt': p.get('ALT_TOTAL'),
+            },
+            'geometry': {'type': 'Point',
+                         'coordinates': round_coords(f['geometry']['coordinates'])},
+        })
+    counts['aerogerador'] = len(data['features'])
+    out = OUT / 'usinas-pr.geojson'
+    out.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats},
+                              ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+    print(f'usinas: {counts}, total {len(feats)}, {out.stat().st_size / 1024:.0f} KB')
+
+
 if __name__ == '__main__':
     build_lts()
     build_ses()
+    build_usinas()
