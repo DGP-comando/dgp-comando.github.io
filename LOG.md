@@ -24,6 +24,10 @@
   produção** — o etl_agro do c2 usa v214 como VBP (bug latente anotado).
 - Verificado com hover real: Prudentópolis → Adelmo (PSD), VBP ▼ -17,3%,
   Soja (em grão).
+- **Fix do seletor de basemaps**: o tray usava a allowlist original do GEV
+  (Google/Bing/OSM) — o `esri` não aparecia e, ao escolher OSM, não havia
+  volta. Agora `esri` está na lista e o tray renderiza SÓ os stacks
+  disponíveis (keyless = SAT + OSM; com chaves, Google/Bing reaparecem).
 
 ## Sessão "gev" (continuação) — 2026-08-26: publicação
 

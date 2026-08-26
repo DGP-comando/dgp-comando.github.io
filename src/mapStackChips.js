@@ -13,6 +13,7 @@
 export const MAP_STACK_CHIP_CLASS = 'map-stack-chip';
 export const PRESENTED_MAP_STACK_IDS = Object.freeze([
   'photoreal',
+  'esri',
   'bing-aerial',
   'bing-labels',
   'osm',
@@ -65,7 +66,11 @@ export function mapStackChipModels(stacks, activeId) {
   return PRESENTED_MAP_STACK_IDS
     .map((id) => stacksById.get(id))
     .filter(Boolean)
-    .map((stack) => mapStackChipModel(stack, activeId));
+    .map((stack) => mapStackChipModel(stack, activeId))
+    // DataGeo: so stacks DISPONIVEIS viram chip. Um chip desabilitado de
+    // Google/Bing num deploy keyless e ruido sem acao possivel — quem
+    // configurar as chaves passa a ver os stacks correspondentes aparecerem.
+    .filter((model) => model.available);
 }
 
 /**
