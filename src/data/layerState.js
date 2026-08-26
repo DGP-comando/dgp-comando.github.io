@@ -311,6 +311,9 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-ceasas', token: '7', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-transmissao', token: '8', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-subestacoes', token: '9', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-geracao', token: '0', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-terras-indigenas', token: 'A', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-quilombolas', token: 'B', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));
@@ -356,7 +359,10 @@ export function validateLayerStateRegistry(registry = LAYER_STATE_REGISTRY) {
     if (!/^[a-z0-9-]+$/.test(entry.id)) throw new Error(`Invalid layer-state id: ${entry.id}`);
     if (ids.has(entry.id)) throw new Error(`Duplicate layer-state id: ${entry.id}`);
     ids.add(entry.id);
-    if (!/^[a-z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
+    // Espaco estendido para A-Z em 2026-08-26: os 36 tokens [a-z0-9]
+    // esgotaram. Encode/decode preservam case de ponta a ponta (join/split
+    // por '.' + Map por token), entao maiuscula e segura no hash.
+    if (!/^[a-zA-Z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
     if (tokens.has(entry.token)) throw new Error(`Duplicate layer-state token: ${entry.token}`);
     tokens.add(entry.token);
     if (!VALID_DISPOSITIONS.has(entry.disposition)) {

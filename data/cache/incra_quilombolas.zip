@@ -1,0 +1,422 @@
+		<!DOCTYPE html>
+		<!-- saved from url=(0060)https://acervofundiario.incra.gov.br/acervo/login.php -->
+		<html lang="pt-BR"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+			<meta charset="utf-8"/>
+			<meta http-equiv="X-UA-Compatible" content="IE=edge">
+			<meta name="viewport" content="width=device-width, initial-scale=1.0">
+			<title>Certificação - Login</title>
+			<link rel="preconnect" href="https://fonts.googleapis.com/">
+			<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin="">
+			<link rel="preconnect" href="https://fonts.googleapis.com/">
+			<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin="">
+			<link href="./Acervo - Login_files/css2" rel="stylesheet">
+			<link href="./Acervo - Login_files/bootstrap.min.css" rel="stylesheet" integrity="sha384-KK94CHFLLe+nY2dmCWGMq91rCGa5gtU4mk92HdvYe+M/SXH301p5ILy+dN9+nJOZ" crossorigin="anonymous">
+			<style>
+				*{
+					margin: 0;
+					padding: 0;
+					box-sizing: border-box;
+				}
+				:root{
+					--green1: #219653;
+					--green2: #52AB79;
+					--green3: #83C09F;
+					--green4: #B4D5C5;
+					--orange1: #FFBA41;
+					--orange2: #F9C66C;
+					--black: #000000;
+					--black2: #393A3B;
+					--black3: #727476;
+					--black4: #ABAEB1;
+					--white: #ffffff;
+					--white0: #fafafa;
+					--white1: #E5E9EB;
+					--blue1: #236BB7;
+					--blue2: #548BC4;
+					--bluex: #1c5692;
+				}
+				body{
+					width: 100%;
+					height: 100vh;
+					font-family: 'Roboto', sans-serif, Arial, Helvetica, sans-serif;
+					background: url('bg_incra.webp') repeat-x left center fixed;
+					color: var(--black2);
+				}
+				.main{
+					width: 100%;
+					height: 100%;
+					display: flex;
+					flex-direction: column;
+					justify-content: space-between;
+				}
+				.header{
+					width: 100%;
+					height: 70px;
+					background-color: var(--green1);
+					display: flex;
+					align-items: center;
+					padding: 30px;
+					gap:20px;
+				}
+				.logo-img{
+					width: 43px;
+				}
+				.header h2{
+					font-size: 1.4rem;
+					font-weight: 700;
+					margin-bottom: 0;
+					color: var(--dark5);
+				}
+				.logo-text{
+					display: flex;
+					flex-direction: column;
+					justify-content: center;
+					align-items: flex-start;
+					color: var(--white);
+				}
+				.content{
+					width: 100%;
+					height: 100%;
+					padding: 30px;
+					display: flex;
+					justify-content: center;
+					align-items: center;
+					background: radial-gradient(at left top, rgba(33, 150, 83, .4), rgba(0, 0, 0, .75));
+				}
+				.box-login{
+					width: 100%;
+					height: 100%;
+					border-radius: 4px;
+					display: flex;
+					justify-content: center;
+					align-items: flex-start;
+					gap: 60px;
+				}
+				.b-title-sub-link{
+					display: flex;
+					flex-direction: column;
+					justify-content: center;
+					height: 100%;
+				}
+				.box-title-btn{
+					height: 100%;
+					text-align: center;
+				}
+				.box-title-btn, .box-text{
+					width: 100%;
+				}
+				.box-text{
+					display: flex;
+					flex-direction: column;
+					align-self: center;
+				}
+				.box-text .external-link{
+					color: var(--orange2);
+					text-decoration: none;
+					font-weight: 600;
+				}
+				.box-text .external-link:hover{
+					color: var(--orange1);
+				}
+				.box-login h1{
+					font-size: 4.2rem;
+					font-weight: 900;
+					line-height: 4.2rem;
+					letter-spacing: 0.05rem;
+					color: var(--white);
+					margin:0 0 30px;
+					text-shadow: 0 0 10px rgba(0,0,0,0.3);
+				}
+				.box-login h1 span{
+					color: var(--orange1);
+				}
+				.box-login h2,
+				.box-login p{
+					text-shadow: 0 0 10px rgba(0,0,0,0.3);
+					color: var(--white0);
+				}
+				.box-login h2{
+					font-size: 1.6rem;
+					font-weight: 500;
+					letter-spacing: 0.05rem;
+					margin: 0 0 30px;
+					color: var(--white1);
+				}
+				.box-login p{
+					font-family: 'Nunito', sans-serif;
+					font-size: 1.5rem;
+					font-weight: 300;
+					line-height: 1.6rem;
+					text-align: justify;
+					margin: 0 0 18px;
+				}
+				.btn-gov{
+					width: 100%;
+					max-width: 300px;
+					height: 50px;
+					background-color: var(--blue1);
+					border-radius: 5px;
+					display: flex;
+					justify-content: center;
+					align-items: center;
+					text-decoration: none;
+					color: var(--white);
+					font-size: 1.1rem;
+					font-weight: 500;
+					transition: all 0.3s ease-in-out;
+					margin: 0 auto;
+				}
+				.btn-gov:hover{
+					background-color: var(--bluex);
+				}
+				.btn-gov span{
+					font-weight: 700;
+					margin-left: 5px;
+				}
+				.btn-mobile{
+					display: none!important;
+				}
+				.Footer{
+					width: 100%;
+					height: auto;
+					background-color: var(--black2);
+					display: flex;
+					justify-content: space-between;
+					align-items: center;
+					padding: 0 30px;
+					gap:10px;
+					position: relative;
+					color: var(--black4);
+				}
+				.Footer h3{
+					color: var(--white);
+					font-size: 1.3rem;
+					margin: 0;
+				}
+				.Footer p{
+					font-size: 0.85rem;
+					font-weight: 400;
+					margin: 0;
+				}
+				.Footer .btn-link{
+					color: var(--black4);
+					font-weight: 600;
+					text-decoration: none;
+					background: transparent;
+					border: none;
+					padding: 14px 5px;
+					transition: all 0.3s ease-in-out;
+				}
+				.Footer .btn-link:hover{
+					background: rgba(0, 0, 0, .04);
+				}
+				.logo-footer{
+					width: 100%;
+					max-width: 100px;
+					height: auto;
+					display: flex;
+					justify-content: center;
+					align-items: center;
+					gap: 10px;
+				}
+				.modal-content{
+					border-radius: 4px;
+				}
+				.modal-body{
+					padding: 1.3rem;
+				}
+				.modal h4{
+					margin: 0 0 1.5rem;
+				}
+				.modal .btn{
+					text-decoration: none;
+					color: var(--black2);
+					font-size: 0.9rem;
+					font-weight: 500;
+					padding: 0.5rem 1.5rem;
+					border: none!important;
+					border-radius: 4px;
+				}
+				.modal .btn:hover{
+					background: var(--white1);
+				}
+				.modal .btn:active{
+					border: none!important;
+				}
+				@media(max-width:991px){
+					.box-login h1{
+						font-size: 3.2rem;
+						line-height: 3.2rem;
+					}
+					.box-login h2{
+						font-size: 1.3rem;
+					}
+					.box-login p{
+						font-size: 1.1rem;
+						line-height: 1.3rem;
+					}
+				}
+				@media(max-width:767px){
+					.header{
+						padding: 20px;
+					}
+					.header h2{
+						font-size: 1.2rem;
+					}
+					.box-login h1{
+						font-size: 2.8rem;
+						line-height: 2.8rem;
+					}
+					.box-login h2{
+						font-size: 1.2rem;
+					}
+					.box-login p{
+						font-size: 1.05rem;
+						line-height: 1.2rem;
+					}
+					.modal-body{
+						padding: 1rem;
+					}
+					.modal h4{
+						margin: 0 0 1rem;
+					}
+					.modal p{
+						font-size: 0.9rem;
+						line-height: 1.1rem;
+					}
+					.modal ul{
+						font-size: 0.9rem;
+						line-height: 1.1rem;
+					}
+					.modal .btn{
+						font-size: 0.8rem;
+						padding: 0.5rem 1rem;
+					}
+
+				}
+				@media(max-width:600px){
+					body{
+						height: auto;
+					}
+					.header{
+						padding: 10px;
+					}
+					.header h2{
+						font-size: 1.1rem;
+					}
+					.box-login{
+						flex-direction: column;
+						gap: 0;
+					}
+					.box-login h1{
+						font-size: 2.3rem;
+						line-height: 2.3rem;
+					}
+					.box-login h2{
+						font-size: 1.1rem;
+					}
+					.box-login p{
+						font-size: 1rem;
+						line-height: 1.1rem;
+					}
+					.box-login .btn-gov{
+						display: none;
+					}
+					.box-login a span{
+						font-weight: 700;
+						margin-left: 5px;
+					}
+					.b-title-sub-link .btn{
+						display: none;
+					}
+					.box-text .btn-gov{
+						display: flex!important;
+						margin-top: 12px;
+					}
+					.Footer{
+						padding: 10px;
+						flex-direction: column;
+						gap: 5px;
+					}
+					.Footer h3{
+						font-size: 0.9rem;
+					}
+					.Footer p{
+						font-size: 0.8rem;
+					}
+					.Footer .btn-link{
+						font-size: 0.8rem;
+						padding: 0 5px;
+					}
+					.modal-body h4{
+						font-size: 1rem;
+						line-height: 1.2rem;
+					}
+					.modal-body p{
+						font-size: 0.8rem;
+						line-height: 1rem;
+					}
+					.modal-body ul{
+						font-size: 0.8rem;
+						line-height: 1rem;
+					}
+					.modal .btn{
+						font-size: 0.7rem;
+						padding: 0.5rem 0.8rem;
+					}
+
+				}
+			</style>
+			<script>
+				function addcooki() {
+					// Adicione aqui a lógica para remover os cookies
+					// Pode ser uma chamada AJAX para o servidor ou manipulação local do cookie
+					// Exemplo de manipulação local (considerando cookies simples):
+					document.cookie = "dtCookie=; expires=Thu, 01 Jan 2999 00:00:00 GMT; path=/";
+				}
+			</script>
+		</head>
+		<body>
+			<div class="main">
+				<section class="header">
+					<img class="logo-img" src="https://acervofundiario.incra.gov.br/acervo/logo-incra.png" alt="Certifica&ccedil" title="Certifica&ccedil">
+					<div class="logo-text">
+						<h2>Certifica&ccedil;&atilde;o</h2>
+					</div>
+				</section>
+				<section class="content">
+					<div class="box-login">
+						<div class="box-title-btn">
+							<div class="b-title-sub-link">
+								<div class="title">
+									<h1>O acesso ao <span>Certifica&ccedil;&atilde;o</span> mudou,</h1>
+									<h2>mas as informa&ccedil;&otilde;es continuam no formato que voc&ecirc; utilizava antes.</h2>
+								</div>
+								<div class="btn">
+									<a class="btn-gov" href="https://sso.acesso.gov.br/authorize?client_id=certificacao.incra.gov.br&redirect_uri=https://certificacao.incra.gov.br/csv_shp/export_shp.py&response_type=code&scope=openid+email+phone+profile+govbr_confiabilidades" title="Entrar com GOV.BR" onclick="addcooki()">Entrar com <span>GOV.BR</span></a>
+								</div>
+							</div>
+						</div>
+						<div class="box-text">
+							<p>Para acess&aacute;-lo, &eacute; necess&aacute;rio autenticar com a credencial do <a class="external-link" href="https://www.gov.br/governodigital/pt-br/conta-gov-br">gov.br</a>, dispon&iacute;vel para qualquer cidad&atilde;o, e que tamb&eacute;m &eacute; usada nos demais servi&ccedil;os digitais do Governo Federal.</p>
+							<p>A estrutura das informa&ccedil;&otilde;es continua da forma que voc&ecirc; acessava antes, sejam elas relativas &agrave;s &aacute;reas certificadas (SIGEF e SNCI), assentamentos de reforma agr&aacute;ria, territ&oacute;rios quilombolas, entre outras bases de dados fornecidas pelo Incra dentro da pol&iacute;tica de dados abertos.</p>
+							<a class="btn-gov btn-mobile" href="https://sso.acesso.gov.br/authorize?client_id=certificacao.incra.gov.br&redirect_uri=https://certificacao.incra.gov.br/csv_shp/export_shp.py&response_type=code&scope=openid+email+phone+profile+govbr_confiabilidades" title="Entrar com GOV.BR">Entrar com <span>GOV.BR</span></a>
+						</div>
+					</div>
+				</section>
+				<footer class="Footer">	
+					<p>Todos os direitos Reservados © Copyright 2024 - INCRA | <button class="btn-link" data-bs-toggle="modal" data-bs-target="#contato">Contato</button> | <button class="btn-link" data-bs-toggle="modal" data-bs-target="#sobre">Sobre</button></p>
+					<div class="logo-footer">
+						<img class="logo-img" src="https://acervofundiario.incra.gov.br/acervo/logo-incra.png" alt="Certifica&ccedil" title="Certifica&ccedil">
+						<div class="logo-text">
+							<h3>INCRA</h3>
+						</div>
+					</div>
+				</footer>
+			</div>
+			<!-- Modal Contato -->
+			<!-- Modal Sobre -->
+			<script src="./Acervo - Login_files/popper.min.js.download" integrity="sha384-zYPOMqeu1DAVkHiLqWBUTcbYfZ8osu1Nd6Z89ify25QV9guujx43ITvfi12/QExE" crossorigin="anonymous"></script>
+			<script src="./Acervo - Login_files/bootstrap.min.js.download" integrity="sha384-Y4oOpwW3duJdCWv5ly8SCFYWqFDsfob/3GkgExXKV4idmbt98QcxXYs9UoXAB7BZ" crossorigin="anonymous"></script>
+		</body>
+		</html>
