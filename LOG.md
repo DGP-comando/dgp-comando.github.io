@@ -6,6 +6,34 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: usinas, TIs e quilombolas
+
+- **Usinas de energia (token 0, Infraestrutura)**: SIGEL/ANEEL do projeto
+  energy — 62 UHE + 323 PCH + 239 CGH + 222 UTE + 22 EOL + 3 UFV + 106
+  aerogeradores individuais (977 pontos, 145 KB). Cor por fonte, tamanho
+  por potência; UHE ≥500 MW tem label na visão estadual (a cascata do
+  Iguaçu — Foz do Areia 1.676 MW, Salto Santiago 1.420, Segredo 1.268 —
+  conta a história sozinha). Aerogeradores só aparecem < 60 km.
+- **Terras indígenas (token A, Limites)**: FUNAI/CMR via seed
+  restricted_areas do valor-de-terras (regex sobre WKT + shapely), 57
+  polígonos com etapa e hectares, laranja com fill 0.25 + borda por anel.
+  Pegadinha: o nome da FUNAI já vem com prefixo "TI " — checar antes de
+  prefixar ("TI TI Marrecas" no primeiro screenshot).
+- **Territórios quilombolas (token B, Limites)**: o INCRA passou a exigir
+  LOGIN no acervo de certificação (o export_shp.py devolve a tela de
+  login) — a fonte virou a malha OFICIAL do Censo 2022 do IBGE
+  (ftp.ibge.gov.br/.../Quilombolas_Primeiros_resultados_do_universo/
+  Arquivos_geoespaciais_vetoriais_2a_apuracao_20231222/BR_TQ_*.zip,
+  colunas sg_uf/nom_tq/status). 10 territórios no PR com fase
+  (PORTARIA/RTID/DECRETO), roxo. geopandas via zip://...!caminho/arquivo.shp
+  (o zip tem subpasta; sem o fragmento o pyogrio não acha o .shp).
+- **Espaço de tokens estendido a A-Z**: os 36 [a-z0-9] esgotaram (35 em
+  uso + '0'). Encode/decode do hash preservam case de ponta a ponta
+  (join/split '.' + Map por token), então maiúscula é segura. Dois testes
+  usavam 'z' como "token desconhecido" e quebraram quando o 'z' foi
+  atribuído na Fase 2 (falha pré-existente) — migrados para 'Z' e
+  voltaram a passar.
+
 ## Sessão "gev" (continuação) — 2026-08-26: transmissão de energia (EPE)
 
 - **Linhas de transmissão (token 8)** e **Subestações (token 9)** na
