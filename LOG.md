@@ -6,6 +6,34 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: Tráfego aéreo ao vivo em produção
+
+- **Causa raiz do feed morto**: airplanes.live respondeu 403 "contact us" a
+  partir de 2026-08-12 e o etl-aviacao do c2 parou de gravar. Fonte trocada
+  para **adsb.lol** (mesma API v2/readsb, aberta por política, parser
+  intacto) — commit 0a78778 no c2, função redeployada, tabela voltou a
+  receber snapshots por minuto no mesmo dia.
+- **Camada "Tráfego aéreo" (ex Live Flights) em produção, classe
+  Infraestrutura**: `_fetchStatesPayload` em flights.js — dev/testes seguem
+  no proxy OpenSky; o build de produção lê `aviation_traffic` do Supabase
+  (janela 5 min, dedupe por icao24) convertida client-side para o shape
+  `/states/all` num Response sintético, então TODO o pipeline GEV
+  (billboards, trilha, dead-reckoning, click-to-track) funciona sem tocar.
+  ~44 aeronaves no PR em teste.
+- Pegadinhas:
+  - A string "adsb.lol" no rótulo da fonte dispara a heurística de
+    FALLBACK do manager (era a fonte reserva do GEV) — rótulo virou
+    "DataGeo PR · etl-aviacao" e o estado lê ATIVA.
+  - `import.meta.env` NÃO existe sob node:test: acesso direto crashava o
+    LOAD de todo teste que importa datageoClient (flights, firms, voice,
+    sprites — falhavam como arquivo desde a ponte de fires). `?.` +
+    `DEV !== false` destravou; 6 arquivos voltaram a rodar e expuseram 7
+    falhas latentes do FIRMS (pré-existentes, não desta feature).
+  - "Aviões parados" na visão estadual é escala, não bug: 240 m/s ≈ 1 px
+    a cada ~5 s com o estado inteiro na tela; em zoom próximo o
+    dead-reckoning desliza entre os snapshots de 1 min (verificado com
+    capturas em T e T+12 s).
+
 ## Sessão "gev" (continuação) — 2026-08-26: rodovias em 3 níveis + painel por classes
 
 - **Camada Rodovias (token 4)** em três níveis:
