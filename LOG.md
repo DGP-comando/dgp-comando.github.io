@@ -6,6 +6,30 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: rodovias em 3 níveis + painel por classes
+
+- **Camada Rodovias (token 4)** em três níveis:
+  - Federais (BR-xxx, âmbar) e estaduais (PR/PRC-xxx, azul) estáticas:
+    `scripts/build_rodovias.py` consulta o Overpass pela área do PR
+    (relation 297640), arredonda a 5 casas e decima vértices — 6,2 MB,
+    16,4k trechos, 38 BRs + 268 PRs.
+  - **Municipais só com zoom no município** (< 90 km de altura):
+    secondary/tertiary/unclassified SEM ref BR/PR, buscadas AO VIVO no
+    Overpass por células de 0,25° cacheadas, somem ao afastar o zoom.
+    Pegadinha: fan-out paralelo leva 429 do overpass-api.de (limite ~2
+    conexões) — a busca é uma FILA SERIAL com 700 ms de respiro e rotação
+    de espelho para overpass.kumi.systems em erro. Verificado: 420 vias
+    carregadas sobre Guarapuava, show=false ao subir para 500 km.
+- **Painel de camadas por classes** (Limites, Infraestrutura, Clima,
+  Hidrologia, Ambiente, Saúde e ar, Riscos e alertas, Contexto global):
+  módulo declara `category`, `getAll()` expõe, `_renderToggles` agrupa com
+  headers estáticos (o refresh só reescreve rows, headers ficam). Fallback
+  "Contexto global" para as camadas GEV herdadas. As factories
+  (`createDatageoLayer`, `createFirmsHeatmapLayer`) precisaram repassar o
+  campo — config com category sem repasse morre em silêncio.
+- Teste `cockpitMarkup` pinava a linha literal `if (!layer.showInTogglePanel)
+  continue;` do manager — regex atualizada para o novo filter.
+
 ## Sessão "gev" (continuação) — 2026-08-26: ficha municipal, UI pt-BR e mobile
 
 - **Ficha municipal ao clique** (`src/datageoFicha.js` + LEFT_CLICK em
