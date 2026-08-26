@@ -54,12 +54,12 @@ Tokens do LAYER_STATE_REGISTRY entre parênteses (livres no GEV: h,j,k,l,n,o,p,v
 | `datageo-cemaden` (n) | `cemaden_alerts` ativos | marcadores por severidade | **Fase 1 ✅** |
 | `datageo-irtc` (z) | `irtc_scores` × centróides | disco por município, cor por risk_level, raio ∝ score | **Fase 1 ✅** |
 | `datageo-dengue` (j) | `dengue_data` (última semana) × centróides | disco por alert_level InfoDengue 1-4 | **Fase 1 ✅** |
-| `datageo-ar` (y) | `air_quality` | AQI nas 12 cidades | Fase 2 |
-| `datageo-incidentes` (o) | `incidents` (OODA) | ícone por tipo + severity | Fase 2 (tabela hoje vazia) |
-| `datageo-anomalias` (p) | `anomalies` | marcador z-score | Fase 2 |
-| `datageo-infohidro` (l) | `data_cache:infohidro_estacoes_pr` | 1.110 estações de telemetria | Fase 2 |
-| ticker de notícias | `news_items` | faixa no HUD (não é camada espacial) | Fase 2 |
-| briefing diário | `situational_reports` | painel CONTEXT do HUD | Fase 2 |
+| `datageo-ar` (y) | `air_quality` | AQI nas 12 cidades | **Fase 2 ✅** |
+| `datageo-incidentes` (o) | `incidents` (OODA) | ícone por tipo + severity | **Fase 2 ✅** (tabela hoje vazia) |
+| `datageo-anomalias` (p) | `anomalies` | marcador z-score | **Fase 2 ✅** |
+| `datageo-infohidro` (l) | `data_cache:infohidro_estacoes_pr` | 1.312 estações de telemetria | **Fase 2 ✅** |
+| ticker de notícias | `news_items` | faixa no rodapé (`datageoTicker.js`) | **Fase 2 ✅** |
+| briefing diário | `situational_reports` | card colapsável (`datageoBriefing.js`) | **Fase 2 ✅** |
 | KPIs agro/leitos | caches vbp/comex/credito/leitos | cards no HUD | Fase 3 |
 | voz/analista | getAnalystRecords das camadas DataGeo | "quantos municípios em risco alto?" | Fase 3 |
 
@@ -88,9 +88,15 @@ produto quiser foco 100 % Paraná.
   chave Google + datageoClient + 5 camadas novas + fires client-side +
   registro no painel/share links. Critério: globo Esri com as camadas
   DataGeo ligadas e dados reais do Supabase, verificado em browser.
-- **Fase 2:** camadas restantes (ar, incidentes, anomalias, infohidro),
-  ticker de notícias e briefing no HUD, presets de missão ("Defesa Civil",
-  "Epidemiológico", "Agro"), deploy estático em Pages.
+- **Fase 2 (2026-08-26 ✅):** camadas restantes (ar, anomalias, incidentes,
+  infohidro), ticker de notícias, briefing diário, presets de missão no
+  first-run (Defesa Civil / Epidemiológico / Agroambiental) e build estático
+  validado (`npm run build` + `vite preview`, zero erros de console).
+  Decisão de proxies em estático: camadas GEV dependentes de dev-server
+  (flights/satellites/radio/launches/traffic/cctv/vessels) ficam default OFF
+  e degradam graceful (o painel da camada mostra o erro); portá-las para
+  Edge Functions do Supabase é opção da Fase 3. Publicação em Pages: pronta
+  (dist/), aguardando decisão de hospedagem/domínio.
 - **Fase 3:** auth Supabase (login do console c2), gating por plano
   (free/pro), integração com a public-api, voz (opcional, exige backend p/
   token OpenAI), embed no console React (`app.datageoparana.com.br/comando`).

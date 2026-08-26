@@ -16,6 +16,8 @@ import militaryInstallationsLayer from './data/militaryInstallations.js';
 import militaryAwarenessLayer from './data/militaryAwareness.js';
 import localDataLayers from './data/localLayers.js';
 import { DATAGEO_LAYERS } from './data/datageoLayers.js';
+import { initDatageoTicker } from './datageoTicker.js';
+import { initDatageoBriefing } from './datageoBriefing.js';
 import { LAYER_STATE_REGISTRY } from './data/layerState.js';
 import { registerDataCredits } from './data/dataCredits.js';
 import { SceneDirector } from './scenes/director.js';
@@ -233,6 +235,9 @@ async function init() {
     for (const layer of DATAGEO_LAYERS) {
       dataManager.register(layer);
     }
+    // Chrome DataGeo: ticker de noticias + briefing situacional diario
+    initDatageoTicker();
+    initDatageoBriefing();
     // Restoration starts only after the complete production registry is sealed.
     dataManager.finalizeRegistrations(LAYER_STATE_REGISTRY);
     if (import.meta.env.DEV) {

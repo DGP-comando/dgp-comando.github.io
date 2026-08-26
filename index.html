@@ -836,37 +836,33 @@
   <aside id="first-run-launcher" role="dialog" aria-labelledby="first-run-title" aria-describedby="first-run-description" hidden>
     <div class="first-run-scanline" aria-hidden="true"></div>
     <header class="first-run-header">
-      <span class="first-run-kicker">MISSION CONTROL · FIRST LAUNCH</span>
+      <span class="first-run-kicker">SALA DE SITUAÇÃO · DATAGEO PR</span>
     </header>
-    <h2 id="first-run-title">Choose your first view</h2>
+    <h2 id="first-run-title">Escolha a sua missão</h2>
     <!-- The card's one persuasive line, final and VERBATIM (2026-08-23)
          — including the unspaced em dash. The arc it has to carry: this looks
          like something you should not have access to → the sources are all
          public → the data is real. Tile subcopy stays purely functional. -->
-    <p id="first-run-description">It feels like a forbidden cockpit—then you realize the sources are public and the data is real.</p>
+    <p id="first-run-description">Os 399 municípios do Paraná numa sala de comando. Dados públicos, pipelines próprios, tudo ao vivo.</p>
     <div class="first-run-choices">
-      <button type="button" data-first-run-choice="contacts">
-        <span class="material-symbols-outlined" aria-hidden="true">radar</span>
-        <span><strong>LIVE CONTACTS</strong><small>Aircraft, vessels and nearby intelligence</small></span>
+      <button type="button" data-first-run-choice="defesa-civil">
+        <span class="material-symbols-outlined" aria-hidden="true">emergency</span>
+        <span><strong>DEFESA CIVIL</strong><small>Alertas CEMADEN, rios, clima e focos de calor</small></span>
         <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
       </button>
-      <button type="button" data-first-run-choice="space-missions">
-        <span class="material-symbols-outlined" aria-hidden="true">rocket_launch</span>
-        <span><strong>SPACE MISSIONS</strong><small>Launches, spacecraft and orbital context</small></span>
+      <button type="button" data-first-run-choice="epidemiologico">
+        <span class="material-symbols-outlined" aria-hidden="true">coronavirus</span>
+        <span><strong>EPIDEMIOLÓGICO</strong><small>Dengue InfoDengue e risco territorial IRTC</small></span>
         <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
       </button>
-      <button type="button" data-first-run-choice="environmental">
+      <button type="button" data-first-run-choice="agro-ambiental">
         <span class="material-symbols-outlined" aria-hidden="true">local_fire_department</span>
-        <!-- Title text is painted from ENVIRONMENTAL_LABEL_CHOICE at init. -->
-        <!-- Subcopy names BOTH feeds this tile turns on, because the launcher
-             optimizes for the fully configured experience (product decision,
-             2026-08-23) — see the mission table in src/firstRunExperience.js. -->
-        <span><strong data-first-run-environmental-title>ENVIRONMENTAL</strong><small>Live earthquakes and active fires, from USGS and NASA</small></span>
+        <span><strong>AGROAMBIENTAL</strong><small>Focos FIRMS, clima, qualidade do ar e IRTC</small></span>
         <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
       </button>
       <button type="button" class="first-run-explore" data-first-run-choice="explore">
         <span class="material-symbols-outlined" aria-hidden="true">public</span>
-        <span><strong>EXPLORE MANUALLY</strong><small>Begin with a clean globe</small></span>
+        <span><strong>EXPLORAR LIVREMENTE</strong><small>Começar com o globo limpo</small></span>
         <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
       </button>
     </div>

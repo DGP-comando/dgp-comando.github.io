@@ -413,3 +413,24 @@ const BY_IBGE = new Map(PR_CENTROIDS.map(([code, name, lat, lon]) => [code, { na
 export function centroidByIbge(code) {
   return BY_IBGE.get(String(code)) ?? null;
 }
+
+/** Normaliza nome para casamento: minusculas, sem acentos, sem espacos nas bordas. */
+function normalizeName(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/\p{Mn}/gu, '');
+}
+
+const BY_NAME = new Map(
+  PR_CENTROIDS.map(([code, name, lat, lon]) => [normalizeName(name), { code, name, lat, lon }]),
+);
+
+/**
+ * {code, name, lat, lon} pelo nome do municipio (tolerante a acento/caixa —
+ * fontes como INMET e anomalies gravam nomes sem acento), ou null.
+ */
+export function centroidByName(name) {
+  return BY_NAME.get(normalizeName(name)) ?? null;
+}

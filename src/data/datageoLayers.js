@@ -21,8 +21,12 @@ import {
   fetchCemadenAlerts,
   fetchIrtcScores,
   fetchDengueLatestWeek,
+  fetchAirQuality,
+  fetchAnomalies,
+  fetchActiveIncidents,
+  fetchInfohidroStations,
 } from './datageoClient.js';
-import { centroidByIbge } from './prCentroids.js';
+import { centroidByIbge, centroidByName } from './prCentroids.js';
 
 const LABEL_FONT = '12px "JetBrains Mono", monospace';
 
@@ -389,10 +393,211 @@ export const datageoDengueLayer = createDatageoLayer({
   },
 });
 
+// --------------------------------------------------------------------------
+// Qualidade do ar — AQICN nas cidades monitoradas
+// --------------------------------------------------------------------------
+
+// air_quality nao guarda lat/lon; coordenadas por city id (mesmo mapa do
+// etl-ambiente do c2, CIDADES_AR_GEO).
+const AQICN_CITY_GEO = {
+  curitiba: { lat: -25.43, lon: -49.27, nome: 'Curitiba' },
+  londrina: { lat: -23.31, lon: -51.16, nome: 'Londrina' },
+  maringa: { lat: -23.42, lon: -51.94, nome: 'Maringá' },
+  foz: { lat: -25.52, lon: -54.59, nome: 'Foz do Iguaçu' },
+  cascavel: { lat: -24.9545, lon: -53.4596, nome: 'Cascavel' },
+  'ponta-grossa': { lat: -25.0959, lon: -50.1647, nome: 'Ponta Grossa' },
+  'sao-jose-dos-pinhais': { lat: -25.5307, lon: -49.2, nome: 'São José dos Pinhais' },
+  guarapuava: { lat: -25.389, lon: -51.4638, nome: 'Guarapuava' },
+  umuarama: { lat: -23.7652, lon: -53.3248, nome: 'Umuarama' },
+  toledo: { lat: -24.7257, lon: -53.7406, nome: 'Toledo' },
+  paranagua: { lat: -25.5169, lon: -48.7296, nome: 'Paranaguá' },
+  apucarana: { lat: -23.5707, lon: -51.4635, nome: 'Apucarana' },
+};
+
+function aqiColor(aqi) {
+  if (aqi === null || aqi === undefined) return Cesium.Color.GRAY;
+  if (aqi <= 50) return Cesium.Color.LIME;
+  if (aqi <= 100) return Cesium.Color.YELLOW;
+  if (aqi <= 150) return Cesium.Color.ORANGE;
+  if (aqi <= 200) return Cesium.Color.RED;
+  return Cesium.Color.PURPLE;
+}
+
+export const datageoArLayer = createDatageoLayer({
+  id: 'datageo-ar',
+  name: 'Qualidade do ar',
+  icon: '🌫️',
+  source: 'AQICN · DataGeo PR',
+  updateInterval: 1_800_000,
+  fetcher: fetchAirQuality,
+  build(rows, entities) {
+    let count = 0;
+    for (const row of rows) {
+      const geo = AQICN_CITY_GEO[row.city ?? ''];
+      if (!geo) continue;
+      const aqi = row.aqi === null ? null : Math.trunc(Number(row.aqi));
+      const color = aqiColor(aqi);
+      entities.add({
+        id: `datageo-ar:${row.city}`,
+        position: Cesium.Cartesian3.fromDegrees(geo.lon, geo.lat),
+        point: {
+          pixelSize: 9,
+          color: color.withAlpha(0.9),
+          outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
+          outlineWidth: 1,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: labelGraphics(
+          `${geo.nome}\nAQI ${aqi ?? '?'}${row.dominant_pollutant ? ` · ${row.dominant_pollutant}` : ''}`,
+          { maxDistance: 1_200_000 },
+        ),
+        properties: { aqi, pollutant: row.dominant_pollutant, observedAt: row.observed_at },
+      });
+      count++;
+    }
+    return count;
+  },
+});
+
+// --------------------------------------------------------------------------
+// Anomalias — z-score dos ultimos 7 dias (detector do c2)
+// --------------------------------------------------------------------------
+
+export const datageoAnomaliasLayer = createDatageoLayer({
+  id: 'datageo-anomalias',
+  name: 'Anomalias (z-score)',
+  icon: '📈',
+  source: 'DataGeo PR',
+  updateInterval: 900_000,
+  fetcher: fetchAnomalies,
+  build(rows, entities) {
+    let count = 0;
+    for (const row of rows) {
+      const anchor = centroidByName(row.municipality) ?? centroidByName(row.station_code);
+      if (!anchor) continue;
+      const z = Number(row.z_score ?? 0);
+      const severe = Math.abs(z) >= 4;
+      const color = severe ? Cesium.Color.MAGENTA : Cesium.Color.ORANGE;
+      entities.add({
+        id: `datageo-anomalias:${row.domain}:${row.indicator}:${row.station_code}:${row.detected_at}`,
+        position: Cesium.Cartesian3.fromDegrees(anchor.lon, anchor.lat),
+        point: {
+          pixelSize: severe ? 12 : 9,
+          color: color.withAlpha(0.95),
+          outlineColor: Cesium.Color.WHITE.withAlpha(0.7),
+          outlineWidth: 2,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: labelGraphics(
+          `ANOMALIA · ${row.indicator}\n${anchor.name} · z=${z.toFixed(1)} · obs ${Number(row.observed_value ?? 0).toFixed(1)}`,
+          { maxDistance: 2_500_000 },
+        ),
+        properties: { domain: row.domain, indicator: row.indicator, zScore: z },
+      });
+      count++;
+    }
+    return count;
+  },
+});
+
+// --------------------------------------------------------------------------
+// Incidentes — OODA (Fase 4 do c2), ativos
+// --------------------------------------------------------------------------
+
+const INCIDENT_SEVERITY_COLORS = {
+  low: Cesium.Color.LIME,
+  medium: Cesium.Color.YELLOW,
+  high: Cesium.Color.ORANGE,
+  critical: Cesium.Color.RED,
+};
+
+export const datageoIncidentesLayer = createDatageoLayer({
+  id: 'datageo-incidentes',
+  name: 'Incidentes (OODA)',
+  icon: '🚨',
+  source: 'DataGeo PR',
+  updateInterval: 300_000,
+  fetcher: fetchActiveIncidents,
+  build(rows, entities) {
+    let count = 0;
+    for (const row of rows) {
+      const munis = Array.isArray(row.affected_municipalities) ? row.affected_municipalities : [];
+      const first = munis[0] ?? {};
+      const anchor = centroidByIbge(first.ibge_code) ?? centroidByName(first.name);
+      if (!anchor) continue;
+      const color = INCIDENT_SEVERITY_COLORS[row.severity ?? 'medium'] ?? Cesium.Color.YELLOW;
+      entities.add({
+        id: `datageo-incidentes:${row.id}`,
+        position: Cesium.Cartesian3.fromDegrees(anchor.lon, anchor.lat),
+        point: {
+          pixelSize: 14,
+          color: color.withAlpha(0.95),
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: labelGraphics(
+          `INCIDENTE · ${(row.type ?? 'outro').toUpperCase()}\n${row.title ?? ''} · ${(row.status ?? '').toUpperCase()}`,
+          { maxDistance: 4_000_000 },
+        ),
+        properties: { severity: row.severity, status: row.status, type: row.type },
+      });
+      count++;
+    }
+    return count;
+  },
+});
+
+// --------------------------------------------------------------------------
+// InfoHidro — 1.300+ estacoes de telemetria SIMEPAR (contexto denso)
+// --------------------------------------------------------------------------
+
+export const datageoInfohidroLayer = createDatageoLayer({
+  id: 'datageo-infohidro',
+  name: 'Telemetria InfoHidro',
+  icon: '📡',
+  source: 'SIMEPAR · DataGeo PR',
+  updateInterval: 3_600_000,
+  fetcher: fetchInfohidroStations,
+  build(rows, entities) {
+    let count = 0;
+    for (const row of rows) {
+      const lat = Number(row.latitude);
+      const lon = Number(row.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      entities.add({
+        id: `datageo-infohidro:${row.codigo}`,
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        point: {
+          pixelSize: 4,
+          color: Cesium.Color.CYAN.withAlpha(0.55),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        // Label so bem de perto: 1.300 pontos sao contexto, nao leitura.
+        label: labelGraphics(`${row.nome ?? row.codigo}`, {
+          maxDistance: 120_000,
+          pixelOffsetY: -10,
+        }),
+        properties: { codigo: row.codigo, tipoId: row.tipo_id },
+      });
+      count++;
+    }
+    return count;
+  },
+});
+
 export const DATAGEO_LAYERS = [
   datageoClimaLayer,
   datageoRiosLayer,
   datageoCemadenLayer,
   datageoIrtcLayer,
   datageoDengueLayer,
+  datageoArLayer,
+  datageoAnomaliasLayer,
+  datageoIncidentesLayer,
+  datageoInfohidroLayer,
 ];

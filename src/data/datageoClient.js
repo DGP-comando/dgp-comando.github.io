@@ -182,6 +182,68 @@ export async function fetchIrtcScores() {
   );
 }
 
+/** Qualidade do ar AQICN nas cidades monitoradas (linha mais recente por cidade). */
+export async function fetchAirQuality() {
+  const rows = await dgSelect(
+    'air_quality',
+    'select=city,station_name,aqi,dominant_pollutant,pm25,pm10,o3,no2,observed_at' +
+      '&order=observed_at.desc&limit=200',
+  );
+  const byCity = new Map();
+  for (const row of rows) {
+    const city = row.city ?? '';
+    if (!city || byCity.has(city)) continue;
+    byCity.set(city, row);
+  }
+  return [...byCity.values()];
+}
+
+/** Anomalias estatisticas (z-score) dos ultimos 7 dias. */
+export async function fetchAnomalies() {
+  const cutoff = isoZ(new Date(Date.now() - 7 * 86_400_000));
+  return dgSelect(
+    'anomalies',
+    'select=domain,indicator,station_code,municipality,observed_value,z_score,' +
+      `window_mean,detected_at&detected_at=gte.${cutoff}&order=detected_at.desc&limit=200`,
+  );
+}
+
+/** Incidentes OODA ativos (nao resolvidos/fechados). */
+export async function fetchActiveIncidents() {
+  return dgSelect(
+    'incidents',
+    'select=id,title,type,severity,status,detected_at,affected_municipalities' +
+      '&status=not.in.(resolved,closed)&order=detected_at.desc&limit=200',
+  );
+}
+
+/** Estacoes de telemetria InfoHidro/SIMEPAR (cache do scrape-infohidro). */
+export async function fetchInfohidroStations() {
+  const cached = await dgCache('infohidro_estacoes_pr');
+  if (!cached) return [];
+  const payload = cached.data;
+  const items = Array.isArray(payload) ? payload : (payload?.items ?? []);
+  return Array.isArray(items) ? items : [];
+}
+
+/** Ultimas noticias do PR (ticker). */
+export async function fetchNews(limit = 30) {
+  return dgSelect(
+    'news_items',
+    `select=title,source,url,urgency,published_at&order=published_at.desc&limit=${limit}`,
+  );
+}
+
+/** Relatorio situacional mais recente. */
+export async function fetchLatestSituationalReport() {
+  const rows = await dgSelect(
+    'situational_reports',
+    'select=report_date,executive_summary,recommendations,active_alerts_count,' +
+      'top_risks,generated_at&order=report_date.desc&limit=1',
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+
 /** Dengue: ultima semana epidemiologica disponivel, por municipio. */
 export async function fetchDengueLatestWeek() {
   const latest = await dgSelect(

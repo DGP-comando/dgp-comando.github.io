@@ -87,33 +87,23 @@ export function environmentalLabel(choice = ENVIRONMENTAL_LABEL_CHOICE) {
 
 /** @type {Readonly<Record<string, object>>} */
 export const FIRST_RUN_MISSIONS = Object.freeze({
-  contacts: Object.freeze({
-    kind: 'context',
-    contextMode: 'contacts',
-    busyText: 'Starting live contacts…',
-  }),
-  'space-missions': Object.freeze({
-    kind: 'context',
-    contextMode: 'space-missions',
-    busyText: 'Opening space missions…',
-  }),
-  environmental: Object.freeze({
+  // Presets de missao da Sala de Situacao DataGeo PR (Fase 2 da fusao,
+  // PLANO_FUSAO.md §5). Todos sao missoes "globe": ligam um conjunto de
+  // camadas DataGeo e deixam o operador na visao estadual.
+  'defesa-civil': Object.freeze({
     kind: 'globe',
-    // Live USGS earthquakes AND NASA FIRMS active fires. The launcher optimizes
-    // for the FULLY CONFIGURED experience (product decision, 2026-08-23): the tile
-    // promises both, so it turns on both, and the subcopy in index.html says so.
-    //
-    // Keyless, FIRMS is honest where it counts — its own layer row reads
-    // "UNAVAILABLE · NASA FIRMS · LIVE · KEY REQUIRED", and the quakes half of
-    // the tile still delivers in full. What is NOT honest is the GLOBAL status
-    // chip, which has no key-required terminal state and folds that row into
-    // "LOAD FAILED". That aggregation is the defect, not this preset: fixing it
-    // means a KEY REQUIRED terminal state in src/loadingFeedback.js, a state
-    // machine shared by every layer and not a thing to refactor the night
-    // before a launch. LEDGERED post-launch. Until it lands, keyless visitors
-    // are judged on the layer row, which tells them the truth.
-    layerIds: Object.freeze(['earthquakes', 'local-firms']),
-    busyText: 'Scanning active events…',
+    layerIds: Object.freeze(['datageo-cemaden', 'datageo-rios', 'datageo-clima', 'local-firms']),
+    busyText: 'Montando o quadro de Defesa Civil…',
+  }),
+  epidemiologico: Object.freeze({
+    kind: 'globe',
+    layerIds: Object.freeze(['datageo-dengue', 'datageo-irtc']),
+    busyText: 'Carregando vigilância epidemiológica…',
+  }),
+  'agro-ambiental': Object.freeze({
+    kind: 'globe',
+    layerIds: Object.freeze(['local-firms', 'datageo-clima', 'datageo-ar', 'datageo-irtc']),
+    busyText: 'Carregando quadro agroambiental…',
   }),
   explore: Object.freeze({ kind: 'none' }),
 });

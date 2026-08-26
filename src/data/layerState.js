@@ -297,6 +297,10 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-cemaden', token: 'n', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-irtc', token: 'z', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-dengue', token: 'j', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-ar', token: 'y', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-anomalias', token: 'p', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-incidentes', token: 'o', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-infohidro', token: 'l', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));
