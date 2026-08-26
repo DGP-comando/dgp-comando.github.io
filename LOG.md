@@ -6,6 +6,22 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: transmissão de energia (EPE)
+
+- **Linhas de transmissão (token 8)** e **Subestações (token 9)** na
+  classe Infraestrutura, segundo saque do backlog §8 (raw EPE do projeto
+  energy local, normalizado por `scripts/build_energia.py`):
+  - LTs: 248 em operação + **49 planejadas 2025-2037** (731 KB). Cor por
+    tensão — 525 kV violeta (o corredor de Itaipu salta), 230 kV azul,
+    demais cinza; planejadas TRACEJADAS em âmbar
+    (PolylineDashMaterialProperty funciona em polyline clamped).
+  - SEs: 83 + 10 planejadas (16 KB), via `makePointsLayer` (agora
+    exportada de datageoLogistica.js com `category` parametrizável);
+    planejadas maiores, âmbar, com ano previsto no label.
+- Encoding: os raw EPE têm acentos corretos (0xE1 = á em "SE Andirá
+  Leste"); o `�` no console é só o Git Bash — checar bytes antes de
+  "consertar" encoding que não está quebrado.
+
 ## Sessão "gev" (continuação) — 2026-08-26: classe "Logística agro"
 
 - **Conjunto novo de camadas** (classe própria no painel, após
