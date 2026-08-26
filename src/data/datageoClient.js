@@ -244,6 +244,24 @@ export async function fetchLatestSituationalReport() {
   return rows.length > 0 ? rows[0] : null;
 }
 
+/** Embarcacoes AIS das ultimas 24 h (posicao mais recente por MMSI). */
+export async function fetchVessels() {
+  const since = isoZ(new Date(Date.now() - 24 * 3600_000));
+  const rows = await dgSelect(
+    'maritime_traffic',
+    'select=mmsi,vessel_name,ship_type_label,latitude,longitude,sog_knots,' +
+      `cog_deg,nav_status_label,destination,observed_at&observed_at=gte.${since}` +
+      '&order=observed_at.desc&limit=2000',
+  );
+  const byMmsi = new Map();
+  for (const row of rows) {
+    const mmsi = row.mmsi;
+    if (mmsi === null || mmsi === undefined || byMmsi.has(mmsi)) continue;
+    byMmsi.set(mmsi, row);
+  }
+  return [...byMmsi.values()];
+}
+
 /** Dengue: ultima semana epidemiologica disponivel, por municipio. */
 export async function fetchDengueLatestWeek() {
   const latest = await dgSelect(

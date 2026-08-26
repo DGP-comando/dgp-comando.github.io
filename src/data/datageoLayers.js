@@ -25,6 +25,7 @@ import {
   fetchAnomalies,
   fetchActiveIncidents,
   fetchInfohidroStations,
+  fetchVessels,
 } from './datageoClient.js';
 import { centroidByIbge, centroidByName } from './prCentroids.js';
 import { datageoMunicipiosLayer } from './datageoMunicipios.js';
@@ -591,6 +592,132 @@ export const datageoInfohidroLayer = createDatageoLayer({
   },
 });
 
+// --------------------------------------------------------------------------
+// Maritimo — AIS das ultimas 24 h (maritime_traffic do c2)
+// --------------------------------------------------------------------------
+//
+// FONTE HOJE INATIVA: a conta AISStream do c2 esta cortada desde 2026-08-02
+// (o etl-maritimo coleta zero com subscription aceita — diagnostico no plano
+// de migracao do c2). A camada le maritime_traffic com janela ESTRITA de
+// 24 h — plotar navio de dias atras como se fosse posicao atual seria
+// desinformacao — entao ela mostra 0 ate a conta ser reativada
+// (aisstream.io -> supabase secrets set AISSTREAM_API_KEY -> reagendar o
+// cron do etl-maritimo). Quando a fonte voltar, os navios aparecem aqui
+// sem mudanca de codigo.
+
+export const datageoMaritimoLayer = createDatageoLayer({
+  id: 'datageo-maritimo',
+  name: 'Embarcações (AIS)',
+  icon: '🚢',
+  source: 'AISStream · DataGeo PR',
+  updateInterval: 600_000,
+  fetcher: fetchVessels,
+  build(rows, entities) {
+    let count = 0;
+    for (const row of rows) {
+      const lat = Number(row.latitude);
+      const lon = Number(row.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const sog = row.sog_knots === null ? null : Number(row.sog_knots);
+      const moving = sog !== null && sog >= 0.5;
+      const ageMin = Math.max(0, Math.round((Date.now() - Date.parse(row.observed_at)) / 60_000));
+      entities.add({
+        id: `datageo-maritimo:${row.mmsi}`,
+        position: Cesium.Cartesian3.fromDegrees(lon, lat),
+        point: {
+          pixelSize: moving ? 10 : 8,
+          color: (moving ? Cesium.Color.AQUA : Cesium.Color.LIGHTSTEELBLUE).withAlpha(0.95),
+          outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
+          outlineWidth: 1,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: labelGraphics(
+          `${row.vessel_name ?? `MMSI ${row.mmsi}`}` +
+            `
+${sog !== null ? `${sog.toFixed(1)} kn · ` : ''}` +
+            `${row.nav_status_label ?? ''} · ${ageMin}min`,
+          { maxDistance: 1_500_000 },
+        ),
+        properties: {
+          mmsi: row.mmsi,
+          shipType: row.ship_type_label,
+          destination: row.destination,
+          observedAt: row.observed_at,
+        },
+      });
+      count++;
+    }
+    return count;
+  },
+});
+
+// --------------------------------------------------------------------------
+// Ferrovias — malha ferroviaria (OSM, estatica)
+// --------------------------------------------------------------------------
+//
+// CONTEXTO, nao fluxo: nao existe posicao de trem em tempo real publica no
+// Brasil (Rumo/concessionarias nao expoem GPS). O que e publico e a MALHA
+// (OSM railway=rail, gerada em public/data/ferrovias-pr.geojson) — por onde
+// escoa a safra ate Paranagua. Se um dia houver telemetria publica, ela
+// vira uma camada dinamica em cima deste traçado.
+
+export const datageoFerroviasLayer = (() => {
+  let _dataSource = null;
+  let _enabled = false;
+  let _count = 0;
+  let _lastUpdate = null;
+  let _lastError = null;
+  return {
+    id: 'datageo-ferrovias',
+    name: 'Ferrovias (malha)',
+    icon: '🚆',
+    source: 'OpenStreetMap',
+    updateInterval: 24 * 3600_000,
+    init() {
+      console.log('[Data:datageo-ferrovias] Initialized');
+    },
+    enable() {
+      _enabled = true;
+      if (_dataSource) _dataSource.show = true;
+    },
+    disable() {
+      _enabled = false;
+      if (_dataSource) _dataSource.show = false;
+    },
+    async update(viewer) {
+      try {
+        if (!_dataSource) {
+          _dataSource = await Cesium.GeoJsonDataSource.load('/data/ferrovias-pr.geojson', {
+            clampToGround: true,
+            stroke: Cesium.Color.fromCssColorString('#f59e0b').withAlpha(0.65),
+            strokeWidth: 2,
+          });
+          _dataSource.show = _enabled;
+          await viewer.dataSources.add(_dataSource);
+        }
+        _count = _dataSource.entities.values.length;
+        _lastUpdate = Date.now();
+        _lastError = null;
+        return true;
+      } catch (err) {
+        _lastError = err?.message || String(err);
+        console.warn('[Data:datageo-ferrovias]', err);
+        return false;
+      }
+    },
+    destroy(viewer) {
+      if (_dataSource) {
+        viewer.dataSources.remove(_dataSource, true);
+        _dataSource = null;
+      }
+    },
+    getStats() {
+      return { count: _count, lastUpdate: _lastUpdate, error: _lastError };
+    },
+  };
+})();
+
 export const DATAGEO_LAYERS = [
   datageoMunicipiosLayer,
   datageoClimaLayer,
@@ -602,4 +729,6 @@ export const DATAGEO_LAYERS = [
   datageoAnomaliasLayer,
   datageoIncidentesLayer,
   datageoInfohidroLayer,
+  datageoMaritimoLayer,
+  datageoFerroviasLayer,
 ];

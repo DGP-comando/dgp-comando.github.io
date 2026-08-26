@@ -6,6 +6,30 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: marítimo, ferrovias e a verdade sobre trânsito/CCTV
+
+- **`datageo-maritimo` (token 1)**: lê `maritime_traffic` com janela ESTRITA
+  de 24 h — mostra 0 hoje porque a conta AISStream segue cortada (health de
+  hoje: total_vessels 0; tabela parada em 2026-08-02 com 52 linhas). Plotar
+  navio velho como posição atual seria desinformação. Reativação = conta
+  nova em aisstream.io → `supabase secrets set AISSTREAM_API_KEY` →
+  reagendar o cron do etl-maritimo (ação do usuário; a camada acorda
+  sozinha).
+- **`datageo-ferrovias` (token 2)**: malha ferroviária via Overpass/OSM
+  (railway=rail, 1.819 trechos, 1,1 MB em public/data/ferrovias-pr.geojson),
+  clamped, no preset Agroambiental. CONTEXTO, não fluxo: não existe posição
+  de trem pública no Brasil (Rumo não expõe GPS).
+- **Trânsito**: fluxo ao vivo tokenless para o PR NÃO existe. EPR Paraná tem
+  mapa "tempo real" (obras/acidentes/interdições) sem API pública; rota real
+  é TomTom BYOK via Edge Function (Fase 3) ou parceria Waze CCP (nota: órgão
+  público pode pleitear). Nada fingido com simulação.
+- **CCTV**: o pack do GEV (Austin/TfL/Caltrans) depende de open data de
+  câmeras com CORS — não existe equivalente no PR. URBS tem CCO/câmeras mas
+  sem catálogo público acessível (site 403 para fetch externo; streams
+  municipais sem CORS não embedam client-side). Camada CCTV segue sem fonte
+  PR; candidata a ocultar do painel em produção (item Fase 3).
+- Tokens a-z esgotaram; validador aceita [a-z0-9] — passamos aos dígitos.
+
 ## Sessão "gev" (continuação) — 2026-08-26: tooltip municipal
 
 - **Camada `datageo-municipios` (token v)**: 399 polígonos do
