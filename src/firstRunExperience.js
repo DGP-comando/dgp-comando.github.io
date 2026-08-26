@@ -92,17 +92,17 @@ export const FIRST_RUN_MISSIONS = Object.freeze({
   // camadas DataGeo e deixam o operador na visao estadual.
   'defesa-civil': Object.freeze({
     kind: 'globe',
-    layerIds: Object.freeze(['datageo-cemaden', 'datageo-rios', 'datageo-clima', 'local-firms']),
+    layerIds: Object.freeze(['datageo-municipios', 'datageo-cemaden', 'datageo-rios', 'datageo-clima', 'local-firms']),
     busyText: 'Montando o quadro de Defesa Civil…',
   }),
   epidemiologico: Object.freeze({
     kind: 'globe',
-    layerIds: Object.freeze(['datageo-dengue', 'datageo-irtc']),
+    layerIds: Object.freeze(['datageo-municipios', 'datageo-dengue', 'datageo-irtc']),
     busyText: 'Carregando vigilância epidemiológica…',
   }),
   'agro-ambiental': Object.freeze({
     kind: 'globe',
-    layerIds: Object.freeze(['local-firms', 'datageo-clima', 'datageo-ar', 'datageo-irtc']),
+    layerIds: Object.freeze(['datageo-municipios', 'local-firms', 'datageo-clima', 'datageo-ar', 'datageo-irtc']),
     busyText: 'Carregando quadro agroambiental…',
   }),
   explore: Object.freeze({ kind: 'none' }),

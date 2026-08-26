@@ -27,6 +27,7 @@ import {
   fetchInfohidroStations,
 } from './datageoClient.js';
 import { centroidByIbge, centroidByName } from './prCentroids.js';
+import { datageoMunicipiosLayer } from './datageoMunicipios.js';
 
 const LABEL_FONT = '12px "JetBrains Mono", monospace';
 
@@ -591,6 +592,7 @@ export const datageoInfohidroLayer = createDatageoLayer({
 });
 
 export const DATAGEO_LAYERS = [
+  datageoMunicipiosLayer,
   datageoClimaLayer,
   datageoRiosLayer,
   datageoCemadenLayer,

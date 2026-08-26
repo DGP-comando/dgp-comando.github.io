@@ -6,6 +6,25 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: tooltip municipal
+
+- **Camada `datageo-municipios` (token v)**: 399 polígonos do
+  municipios-pr.geojson (207 KB, clamped) com hover → highlight + tooltip
+  DOM: prefeito atual (partido), variação do VBP de lavouras entre os dois
+  últimos anos da PAM e lavoura líder. Incluída nos 3 presets de missão.
+- **Dataset `public/data/municipios-info.json`** (73 KB) gerado por
+  `scripts/build_municipios_info.py`: prefeitos dos resultados OFICIAIS do
+  TSE 2024 (JSONs de resultados.tse.jus.br — o CDN de dados abertos
+  bloqueia curl/urllib com 403; a rota de resultados não), 1º e 2º turno;
+  VBP e lavoura líder do SIDRA t5457 v215 (2023→2024 — PAM 2025 ainda não
+  existe; o tooltip rotula o biênio real). 398/399 prefeitos — São Tomé
+  (4126108) deu 404 no TSE (provável pleito anulado/suplementar), tooltip
+  mostra "—".
+- Nota SIDRA: na t5457, v214 é QUANTIDADE (t) e **v215 é o valor da
+  produção** — o etl_agro do c2 usa v214 como VBP (bug latente anotado).
+- Verificado com hover real: Prudentópolis → Adelmo (PSD), VBP ▼ -17,3%,
+  Soja (em grão).
+
 ## Sessão "gev" (continuação) — 2026-08-26: publicação
 
 - **Org GitHub `DGP-comando` criada** (via browser — criação de org não tem
