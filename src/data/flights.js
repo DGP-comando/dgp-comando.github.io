@@ -34,6 +34,7 @@ import {
 } from './trackingClickGesture.js';
 import { createTrail } from './trailRenderer.js';
 import { isExplicitLayerStateOrigin } from './layerState.js';
+import { fetchAviationStates } from './datageoClient.js';
 import {
   screenProjectedRotation,
   stabilizeScreenRotation,
@@ -321,6 +322,34 @@ let _lastStatus = null;
 let _lastSource = 'OpenSky Network';
 /** @type {string} Completeness boundary for the latest successful snapshot. */
 let _lastCoverage = 'worldwide upstream snapshot';
+
+/**
+ * Producao (deploy estatico): o proxy /api/opensky nao existe — os estados
+ * vem da tabela aviation_traffic do Supabase (etl-aviacao, pg_cron 1min,
+ * fonte adsb.lol), ja no shape /states/all. O shim devolve um Response
+ * sintetico para que TODO o pipeline de status/headers/parsing abaixo
+ * continue identico nos dois ambientes.
+ */
+async function _fetchStatesPayload(viewer, signal) {
+  // `?.` + `!== false`: sob node:test import.meta.env nao existe — os testes
+  // exercitam o caminho do proxy, igual ao dev. So o build de producao
+  // (DEV === false literal) usa o Supabase.
+  if (import.meta.env?.DEV !== false) {
+    return fetch(_flightApiUrl(viewer), { signal });
+  }
+  const payload = await fetchAviationStates();
+  signal?.throwIfAborted();
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      // "adsb.lol" no rotulo dispararia a heuristica de FALLBACK do
+      // manager (era a fonte reserva do GEV); aqui e a fonte PRIMARIA.
+      'x-flight-source': 'DataGeo PR · etl-aviacao',
+      'x-flight-coverage': 'Paraná · raio 250 NM',
+    },
+  });
+}
 
 function _flightApiUrl(viewer) {
   const cartographic = viewer?.camera?.positionCartographic;
@@ -3885,7 +3914,8 @@ function _focusEvidenceSnapshot() {
  */
 const flightsLayer = {
   id: 'flights',
-  name: 'Live Flights',
+  name: 'Tráfego aéreo',
+  category: 'Infraestrutura',
   icon: '✈️',
   source: 'OpenSky Network',
   // Browser-harness seam: isolates synthetic display-floor scenarios without
@@ -4082,7 +4112,7 @@ const flightsLayer = {
       : resourceController.signal;
     try {
       updateSignal.throwIfAborted();
-      const response = await fetch(_flightApiUrl(viewer || _viewer), { signal: updateSignal });
+      const response = await _fetchStatesPayload(viewer || _viewer, updateSignal);
       _lastStatus = response.status;
       const responseSource = response.headers.get('x-flight-source');
       const responseCoverage = response.headers.get('x-flight-coverage');

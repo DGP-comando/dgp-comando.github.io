@@ -9,12 +9,14 @@
 // via VITE_DATAGEO_SUPABASE_URL / VITE_DATAGEO_ANON_KEY quando o projeto
 // Supabase mudar.
 
+// `import.meta.env` so existe sob Vite; no node:test (imports transitivos,
+// ex. flights.test.mjs) e undefined — dai o optional chaining.
 const SUPABASE_URL = (
-  import.meta.env.VITE_DATAGEO_SUPABASE_URL || 'https://fialxjcsgywvvuxjxcly.supabase.co'
+  import.meta.env?.VITE_DATAGEO_SUPABASE_URL || 'https://fialxjcsgywvvuxjxcly.supabase.co'
 ).replace(/\/+$/, '');
 
 const ANON_KEY =
-  import.meta.env.VITE_DATAGEO_ANON_KEY ||
+  import.meta.env?.VITE_DATAGEO_ANON_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpYWx4amNzZ3l3dnZ1eGp4Y2x5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNjczNTMsImV4cCI6MjA4Nzk0MzM1M30.e3X-LSPVUbxl-P9KLB9TuGB0nkmZ4OrNyHL9SuxaRgM';
 
 /**
@@ -308,6 +310,53 @@ export async function fetchVessels() {
     byMmsi.set(mmsi, row);
   }
   return [...byMmsi.values()];
+}
+
+/**
+ * Trafego aereo para a camada de voos em PRODUCAO (deploy estatico, sem o
+ * proxy OpenSky do dev-server). Le aviation_traffic (etl-aviacao no pg_cron
+ * a cada 1min; fonte adsb.lol desde 2026-08-26, airplanes.live bloqueou) e
+ * devolve JA NO SHAPE /states/all do OpenSky, que e o contrato que o
+ * flights.js do GEV inteiro fala (arrays posicionais).
+ */
+export async function fetchAviationStates() {
+  const since = isoZ(new Date(Date.now() - 5 * 60_000));
+  const rows = await dgSelect(
+    'aviation_traffic',
+    'select=icao24,callsign,origin_country,latitude,longitude,baro_altitude_m,' +
+      'geo_altitude_m,velocity_ms,true_track,vertical_rate_ms,on_ground,' +
+      `squawk,category,observed_at&observed_at=gte.${since}` +
+      '&order=observed_at.desc&limit=3000',
+  );
+  const byIcao = new Map();
+  for (const row of rows) {
+    if (!row.icao24 || byIcao.has(row.icao24)) continue;
+    byIcao.set(row.icao24, row);
+  }
+  const states = [...byIcao.values()].map((r) => {
+    const t = Math.floor(new Date(r.observed_at).getTime() / 1000);
+    return [
+      r.icao24,                 // 0 icao24
+      r.callsign ?? '',         // 1 callsign
+      r.origin_country ?? '',   // 2 origin_country (registro da aeronave)
+      t,                        // 3 time_position
+      t,                        // 4 last_contact
+      r.longitude,              // 5 lon
+      r.latitude,               // 6 lat
+      r.baro_altitude_m,        // 7 baro_altitude (m)
+      r.on_ground === true,     // 8 on_ground
+      r.velocity_ms,            // 9 velocity (m/s)
+      r.true_track,             // 10 true_track
+      r.vertical_rate_ms,       // 11 vertical_rate (m/s)
+      null,                     // 12 sensors
+      r.geo_altitude_m,         // 13 geo_altitude
+      r.squawk ?? null,         // 14 squawk
+      false,                    // 15 spi
+      0,                        // 16 position_source
+      r.category ?? 0,          // 17 category
+    ];
+  });
+  return { time: Math.floor(Date.now() / 1000), states };
 }
 
 // --------------------------------------------------------------------------
