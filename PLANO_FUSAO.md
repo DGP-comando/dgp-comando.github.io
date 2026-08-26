@@ -101,6 +101,46 @@ produto quiser foco 100 % Paraná.
   (free/pro), integração com a public-api, voz (opcional, exige backend p/
   token OpenAI), embed no console React (`app.datageoparana.com.br/comando`).
 
+## 5b. Mapa das páginas do console c2 → destino na fusão
+
+O produto passa a ter DUAS superfícies sobre o mesmo Supabase, e cada página
+do console React tem um destino explícito (isto conclui a consolidação
+26→~10 páginas que o PIVOT.md do c2 já pedia):
+
+**Absorvidas pela Sala de Situação (o globo JÁ cobre ou cobre na Fase 3):**
+
+| Página do c2 | Destino no GEV | Status |
+|---|---|---|
+| MapPage (COP Leaflet 2D) | É o globo inteiro — a Sala de Situação substitui e supera | ✅ Fases 1-2 |
+| ClimaPage | camada `datageo-clima` | ✅ Fase 1 |
+| AmbientePage (FIRMS/AQI/rios) | camadas `local-firms` + `datageo-ar` + `datageo-rios` | ✅ Fases 1-2 |
+| SaudePage (dengue) | camada `datageo-dengue`; leitos SUS → KPI no HUD | ✅ / Fase 3 |
+| AguaPage (InfoHidro) | camada `datageo-infohidro`; reservatórios SAIC → card no HUD | ✅ / Fase 3 |
+| NoticiasPage | ticker `datageoTicker.js` | ✅ Fase 2 |
+| RelatoriosPage (situacional) | briefing `datageoBriefing.js` | ✅ Fase 2 |
+| ReconhecimentoPage (perfil municipal, 8 indicadores) | **card de clique no município** — o candidato natural para o sistema de cards/contextStore do GEV | Fase 3 |
+| AgroPage (VBP/Comex/emprego/crédito) | KPIs no HUD + coropléticos VBP/crédito por município (camadas novas em potencial) | Fase 3 |
+| GetecPage | card por município (dado segue vindo do Actions) | Fase 3 |
+| Dashboard (KPIs executivos) | os KPIs migram para o HUD; a página 2D pode aposentar | Fase 3 |
+
+**Ficam no console React (CRUD, conta e análise tabular — não fazem sentido no globo):**
+
+| Página | Motivo |
+|---|---|
+| Login/Register/ForgotPassword/ResetPassword/AuthCallback | Auth Supabase; o GEV consome a MESMA sessão na Fase 3 |
+| PricingPage/CheckoutSuccess/CheckoutCancel | Billing Stripe |
+| PrivacyPage/TermsPage | Legal |
+| NotificationPrefsPage | preferências por usuário |
+| AlertasPage (centro de alertas read/unread) | interação por usuário; a parte espacial já está no globo (cemaden + briefing) |
+| IncidentesPage/IncidentDetailPage/ComandoPage | o CRUD OODA (criar, atribuir, playbook, audit) fica no console; a VISUALIZAÇÃO já está na camada `datageo-incidentes` — clique no incidente do globo abre o detail do console (deep link) |
+| TendenciasPage | séries temporais/Recharts leem melhor em 2D; candidata a painel lateral no futuro |
+| LegislativoPage | não-espacial; pode virar segunda faixa do ticker |
+
+**Integração entre as superfícies (Fase 3):** auth compartilhada (mesmo
+Supabase Auth), botão "Sala de Situação 3D" no console e botão "Console" no
+HUD do GEV, deep links do globo para o console (incidente → IncidentDetail,
+município → Reconhecimento) e embed em `app.datageoparana.com.br/comando`.
+
 ## 6. Limitações e pontos de atenção
 
 - **Proxies do GEV em deploy estático:** flights/satellites/radio/launches
