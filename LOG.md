@@ -6,6 +6,52 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: ficha municipal, UI pt-BR e mobile
+
+- **Ficha municipal ao clique** (`src/datageoFicha.js` + LEFT_CLICK em
+  `datageoMunicipios.js`): painel lateral (quase-modal, z=120) com seções
+  extensíveis — Economia SEAB (VBP 24→25 + **top-3 produtos** com barras e
+  R$), População IBGE (estimativa 2025 + nascidos/óbitos 2024 + saldo
+  vegetativo), Segurança SINESP (vítimas 2022 vs 2021 + taxa/100k, com o
+  aviso de que a série municipal para em 2022), IRTC com barras por
+  domínio, Dengue (série 8 SE + projeção), focos 7/30d, clima, hidro,
+  ar, incidentes e notícias. `fetchMunicipioFicha` faz Promise.allSettled
+  em 11 fontes Supabase; o resto vem do `municipios-info.json` local.
+- **Gerador agrega o ecossistema DataGeo** (o que não está no c2):
+  `saude-parana` (populacao_anos/nascidos/obitos, SIDRA D1C/V/D3N) e
+  `seguranca-parana` (criminalidade SINESP 2018-2022, soma de vítimas por
+  município/ano). 209 KB, cobertura 399/399 em produtos+pop+segurança.
+- **UI 100% pt-BR** (pedido: vai para o secretário da agricultura):
+  painéis (CAMADAS DE DADOS, CENAS, TELA, MAPA BASE, ESTILOS VISUAIS,
+  LOCALIZAÇÃO), estados das camadas (ATIVA/DESLIGADA/CARREGANDO/
+  DESATUALIZADA/INDISPONÍVEL...), meta-linhas ("há 2 min", "nova tentativa
+  em 30s"), HUD — o "TOP SECRET // SI-TK // NOFORN" fake virou
+  "DADOS PÚBLICOS // DATAGEO PR" (mandar classificação falsa para um
+  secretário de Estado seria um tiro no pé). Nomes de camadas em pt claro
+  (Terremotos, Barragens, Cabos submarinos, Focos de calor (queimadas),
+  Nível dos rios, Alertas de desastre...).
+- **LOCALIZAÇÃO agora é o Paraná**: Austin/SF/NYC/Tóquio/Londres/Paris/
+  Dubai/DC substituídas por Curitiba, Londrina, Maringá, Cascavel, Foz
+  (Cataratas/Itaipu/Marco/Ponte), Ponta Grossa (Vila Velha), Guarapuava e
+  Paranaguá (porto/Ilha do Mel). Nada referencia as chaves antigas fora de
+  testes de voz (dev-only) — 12 testes de voz/cockpit derivaram por citar
+  Austin; deriva intencional, documentada aqui.
+- **Passe mobile** (screenshot do Android mostrou o estrago): dock sem a
+  coluna de voz via `:has()`, ficha em tela quase cheia, painéis da
+  esquerda na largura útil, HUD/TELA/CENAS ocultos ≤700px, alvos de toque
+  maiores, tooltip municipal desativado em `pointer: coarse` (sem hover em
+  touch; o clique abre a ficha).
+- **Produção sem cadáveres**: `main.js` remove os painéis CCTV/contexto/
+  rádio do DOM e não inicializa a voz (dock "VOICE STANDBY" morto que
+  aparecia no celular) fora do dev.
+- Testes: rótulos atualizados em manager/traffic/panelStack/mapStackChips/
+  locationStatus; suíte sem falhas NOVAS além da deriva de voz acima
+  (baseline já tinha dezenas de falhas próprias do fork; 4 do chip esri
+  seguem).
+- **Inventário de assets** (agente varreu 6 projetos: valor-de-terras,
+  3d-land-cover, ndvi/no2-parana, pr-temp, energy) — backlog em
+  PLANO_FUSAO.md §7.
+
 ## Sessão "gev" (continuação) — 2026-08-26: ventos, VBP 24→25 e bordas
 
 - **`datageo-ventos` (token 3)**: partículas estilo earth.nullschool via

@@ -161,3 +161,51 @@ município → Reconhecimento) e embed em `app.datageoparana.com.br/comando`.
 - Checklist: globo Esri ✅ · fires do Supabase ✅ · 5 camadas novas com
   contagem > 0 (exceto cemaden quando não há alerta ativo — estado válido) ✅
   · painel Data Layers listando as camadas ✅ · screenshot arquivado.
+
+## 8. Backlog de assets do ecossistema (inventário 2026-08-26)
+
+Varredura de 6 projetos locais em E:\UPWORK\01-CONTRACTS à procura de dados
+reutilizáveis. LOG da sessão tem o contexto; abaixo só o acionável.
+
+### Ficha municipal — já indexado por código IBGE (plug-and-play)
+- `energy/data/processed/land_value_pr.json` (183 KB): preço da terra R$/ha
+  (lavoura/pastagem, base/low/high) por município, 2017-2025.
+- `energy/data/processed/mercado_municipio_pr.parquet` (14 KB): nº geradoras/
+  EPCs/distribuidoras/titulares GD + potência instalada por município.
+- `energy/.../grid_pr.gpkg` layer `municipios`: pop urbana/rural + área km².
+  Layer `gd_points` (272k): agregando por `ano_conexao` → série de GD (MW)
+  por município/ano, dezenas de KB.
+- `valor-de-terras/supabase/migrations/`: seeds SQL com `deral_ref` (preço
+  DERAL 2009-2025), `price_refs` (VTN/RFB 2025 + INCRA 2024),
+  `land_appreciation` (CAGR 1998-2025), `zarc_summary` (janelas de plantio
+  por cultura, safra 25/26, cod_ibge). Extrair INSERTs → JSON < 1 MB.
+- `3d-land-cover-map-main/poster/data/pop_pr_2024.json` e
+  `output/municipios_3d/*.png` (render 3D do território de cada município;
+  203 MB → reamostrar p/ WebP ~600 px = ~20 MB).
+
+### Camadas para o globo (leves, sem retrabalho)
+- `energy/data/raw/epe/*.geojson` + `raw/sigel/*.geojson` (~3 MB): linhas de
+  transmissão existentes e planejadas (com ano), subestações, usinas por
+  tipo, 106 aerogeradores. Alto impacto visual.
+- `valor-de-terras`: perímetros urbanos (995 polígonos) e áreas restritas
+  (UCs/TIs/embargos, 3.005 feições) — WKT → GeoJSON simplificado ~2-3 MB.
+- `no2-parana/data/no2_2018..2026.tif`: NO₂ anual Sentinel-5P ~1,1 km →
+  colorizar em PNG (~300 KB/ano) = slider temporal 2018-2026.
+- `3d-land-cover-map-main/raster/srtm_parana.tif` (5,6 MB) e
+  `satellite_parana.tif` (799 KB).
+- `ndvi-parana/data/thumbs/` (37 datas de NDVI estadual, ~6 MB em WebP) =
+  timeline animada.
+
+### Pipelines a re-rodar com saída municipal (melhor retorno/esforço)
+- `ndvi-parana/fetch_gee.py`: trocar reduceRegion (estado) por
+  reduceRegions sobre os polígonos municipais → NDVI mensal por cod_ibge.
+- `no2-parana`: zonal stats dos 9 GeoTIFFs → NO₂ médio anual por município
+  (~200 KB de JSON).
+- `pr-temp`: rodar o downloader Open-Meteo/ERA5 sobre centroides municipais
+  (centroides em `3d-land-cover-map-main/poster/data/municipios_br.csv`).
+
+### Pesado demais para o Pages (não trazer em bruto)
+SICAR (466 MB), BDGD COPEL (161 MB + 2 GB), LULC 10 m (278 MB-3 GB), MDE
+12,5 m (418 MB), car_scored.parquet (66 MB), MP4/GIFs. Se necessário:
+PMTiles em repo/host separado ou agregação por município.
+
