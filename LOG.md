@@ -6,6 +6,21 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: publicação
+
+- **Org GitHub `DGP-comando` criada** (via browser — criação de org não tem
+  API pública; form preenchido com a conta do Avner, plano Free).
+- **Repo `DGP-comando/dgp-comando.github.io`** criado via gh CLI; main
+  pushado (histórico completo da fusão).
+- **GitHub Pages no ar: https://dgp-comando.github.io/** com o workflow
+  `.github/workflows/deploy-pages.yml` (Node 26, npm ci + vite build +
+  actions/deploy-pages).
+- Pegadinha de Pages em repo `<org>.github.io`: o Pages se auto-ativa em
+  modo BRANCH (Jekyll) e o build automático serve o fonte cru por cima do
+  artifact do workflow (`Failed to resolve module specifier "cesium"` foi o
+  sintoma — o HTML publicado era o `/src/main.js` fonte). Fix:
+  `gh api repos/.../pages -X PUT -f build_type=workflow` + re-dispatch.
+
 ## Sessão "gev" — 2026-08-25 → 2026-08-26
 
 A sessão que criou este repo. Arco completo, do estudo ao produto:
