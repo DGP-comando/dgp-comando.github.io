@@ -6,11 +6,12 @@ Fontes (todas publicas, sem chave):
      (resultados.tse.jus.br, eleicao 619 = 1o turno; 620 = 2o turno para os
      municipios que tiveram). Mapeamento cod TSE <-> IBGE do repo
      betafcc/Municipios-Brasileiros-TSE.
-  2. VBP de lavouras por municipio: IBGE SIDRA tabela 5457, v215 (Valor da
-     producao, Mil Reais), ultimos 2 anos DISPONIVEIS (hoje 2023 e 2024 —
-     a PAM de um ano sai em setembro do ano seguinte).
-  3. Principal lavoura: mesma tabela, produto (c782) de maior valor no
-     ultimo ano disponivel.
+  2. VBP por municipio: SEAB/DERAL via o projeto vbp-parana do Avner
+     (dashboard/public/data/detailed_municipio_<ano>.json, R$ correntes),
+     comparando 2024 -> 2025 (ultima informacao disponivel, igual ao
+     avnergomes.github.io/vbp-parana).
+  3. Cadeia lider: maior soma de valor por cadeia produtiva (26 cadeias
+     SEAB, inclui pecuaria — mais completo que a PAM/IBGE) em 2025.
 
 Uso:  py -3 scripts/build_municipios_info.py
 Saida: public/data/municipios-info.json ({ibge: {...}}, ~399 entradas).
@@ -32,12 +33,8 @@ TSE_MAP_URL = (
     'master/municipios_brasileiros_tse.csv'
 )
 TSE_RESULT = 'https://resultados.tse.jus.br/oficial/ele2024/{ele}/dados/pr/pr{cod}-c0011-e000{ele}-u.json'
-SIDRA_TOTAL = (
-    'https://apisidra.ibge.gov.br/values/t/5457/n6/in%20n3%2041/v/215/p/last%202/c782/0?formato=json'
-)
-SIDRA_PROD = (
-    'https://apisidra.ibge.gov.br/values/t/5457/n6/in%20n3%2041/v/215/p/last%201/c782/all?formato=json'
-)
+VBP_PARANA_DATA = Path('C:/Users/avner/OneDrive/Documentos/GitHub/vbp-parana/dashboard/public/data')
+VBP_ANO_A, VBP_ANO_B = 2024, 2025
 
 
 def fetch(url, timeout=60, retries=3):
@@ -116,33 +113,30 @@ def fetch_mayor(cod_tse):
 # 2 & 3. VBP + principal lavoura (SIDRA)
 # ---------------------------------------------------------------------------
 
-def load_sidra():
-    total = json.loads(fetch(SIDRA_TOTAL, timeout=120).decode('utf-8'))[1:]
+def load_vbp_local():
+    """VBP SEAB/DERAL do repo vbp-parana: total por municipio nos 2 anos e
+    cadeia lider (soma por cadeia) no ano mais recente. Valores em R$."""
     vbp = {}
-    years = set()
-    for row in total:
-        ibge = row['D1C']
-        year = row['D3N']
-        years.add(year)
-        val = row['V']
-        entry = vbp.setdefault(ibge, {})
-        entry[year] = None if val in ('...', '..', '-', 'X') else float(val)
-    y_prev, y_last = sorted(years)[-2:]
-
-    prod = json.loads(fetch(SIDRA_PROD, timeout=180).decode('utf-8'))[1:]
     top = {}
-    for row in prod:
-        if row['D4C'] == '0':  # Total — ja coberto acima
-            continue
-        val = row['V']
-        if val in ('...', '..', '-', 'X'):
-            continue
-        ibge = row['D1C']
-        value = float(val)
-        if value > top.get(ibge, (None, 0.0))[1]:
-            # Nome do produto vem com sufixos tipo " (Tonelada)" as vezes — nao na 5457
-            top[ibge] = (row['D4N'], value)
-    return vbp, y_prev, y_last, top
+    for ano in (VBP_ANO_A, VBP_ANO_B):
+        path = VBP_PARANA_DATA / f'detailed_municipio_{ano}.json'
+        rows = json.loads(path.read_text(encoding='utf-8'))
+        cadeia_sum = {}
+        for row in rows:
+            ibge = str(row.get('cod') or '')
+            val = float(row.get('v') or 0)
+            if not ibge or not val:
+                continue
+            vbp.setdefault(ibge, {})
+            vbp[ibge][str(ano)] = vbp[ibge].get(str(ano), 0.0) + val
+            if ano == VBP_ANO_B:
+                key = (ibge, row.get('c') or '?')
+                cadeia_sum[key] = cadeia_sum.get(key, 0.0) + val
+        if ano == VBP_ANO_B:
+            for (ibge, cadeia), total in cadeia_sum.items():
+                if total > top.get(ibge, (None, 0.0))[1]:
+                    top[ibge] = (cadeia, total)
+    return vbp, str(VBP_ANO_A), str(VBP_ANO_B), top
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +156,8 @@ def main():
                 mayors[ibge] = result
     print(f'  {len(mayors)} prefeitos resolvidos')
 
-    print('3/3 SIDRA (VBP + principal lavoura)...')
-    vbp, y_prev, y_last, top = load_sidra()
+    print('3/3 VBP SEAB/DERAL (vbp-parana local)...')
+    vbp, y_prev, y_last, top = load_vbp_local()
     print(f'  anos: {y_prev} -> {y_last}; {len(vbp)} municipios; top-produto p/ {len(top)}')
 
     info = {}
@@ -176,7 +170,7 @@ def main():
         if a and b:
             entry['vbp'] = {
                 'anoA': y_prev, 'anoB': y_last,
-                'valA': a, 'valB': b,  # Mil Reais
+                'valA': a, 'valB': b,  # R$ correntes
                 'deltaPct': round((b - a) / a * 100, 1),
             }
         if ibge in top:
@@ -188,8 +182,8 @@ def main():
         'geradoEm': time.strftime('%Y-%m-%d'),
         'fontes': {
             'prefeito': 'TSE resultados oficiais 2024 (mandato 2025-2028)',
-            'vbp': f'IBGE/SIDRA PAM t5457 v215 (valor da producao de lavouras, {y_prev}->{y_last})',
-            'cadeia': f'IBGE/SIDRA PAM t5457 — lavoura de maior valor em {y_last}',
+            'vbp': f'SEAB/DERAL via vbp-parana ({y_prev}->{y_last}, R$ correntes)',
+            'cadeia': f'SEAB/DERAL — cadeia produtiva de maior valor em {y_last}',
         },
         'municipios': info,
     }

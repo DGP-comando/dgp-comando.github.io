@@ -29,6 +29,7 @@ import {
 } from './datageoClient.js';
 import { centroidByIbge, centroidByName } from './prCentroids.js';
 import { datageoMunicipiosLayer } from './datageoMunicipios.js';
+import { datageoVentosLayer } from './datageoVentos.js';
 
 const LABEL_FONT = '12px "JetBrains Mono", monospace';
 
@@ -731,4 +732,5 @@ export const DATAGEO_LAYERS = [
   datageoInfohidroLayer,
   datageoMaritimoLayer,
   datageoFerroviasLayer,
+  datageoVentosLayer,
 ];

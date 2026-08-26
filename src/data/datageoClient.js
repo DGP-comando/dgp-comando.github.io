@@ -244,6 +244,54 @@ export async function fetchLatestSituationalReport() {
   return rows.length > 0 ? rows[0] : null;
 }
 
+/**
+ * Grade de vento a 10 m sobre o PR (Open-Meteo, gratuito e sem chave) no
+ * formato do cesium-wind-layer: componentes u/v em Float32Array row-major,
+ * linha 0 = SUL (flipY false, convencao default da lib).
+ * Grade 22x15 (~0,33 graus) e suficiente para o efeito nullschool estadual.
+ */
+export async function fetchWindGrid() {
+  const bounds = { west: -55.0, south: -27.0, east: -48.0, north: -22.3 };
+  const width = 22;
+  const height = 15;
+  const lats = [];
+  const lons = [];
+  for (let j = 0; j < height; j++) {
+    const lat = bounds.south + ((bounds.north - bounds.south) * j) / (height - 1);
+    for (let i = 0; i < width; i++) {
+      const lon = bounds.west + ((bounds.east - bounds.west) * i) / (width - 1);
+      lats.push(lat.toFixed(3));
+      lons.push(lon.toFixed(3));
+    }
+  }
+
+  const u = new Float32Array(width * height);
+  const v = new Float32Array(width * height);
+  const chunk = 110;
+  for (let start = 0; start < lats.length; start += chunk) {
+    const la = lats.slice(start, start + chunk).join(',');
+    const lo = lons.slice(start, start + chunk).join(',');
+    const resp = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}` +
+        '&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms',
+      { signal: AbortSignal.timeout(20_000) },
+    );
+    if (!resp.ok) throw new Error(`Open-Meteo HTTP ${resp.status}`);
+    const data = await resp.json();
+    const points = Array.isArray(data) ? data : [data];
+    points.forEach((pt, k) => {
+      const idx = start + k;
+      const speed = Number(pt?.current?.wind_speed_10m ?? 0);
+      const dir = (Number(pt?.current?.wind_direction_10m ?? 0) * Math.PI) / 180;
+      // Direcao meteorologica = de onde o vento VEM.
+      u[idx] = -speed * Math.sin(dir);
+      v[idx] = -speed * Math.cos(dir);
+    });
+  }
+
+  return { u: { array: u }, v: { array: v }, width, height, bounds };
+}
+
 /** Embarcacoes AIS das ultimas 24 h (posicao mais recente por MMSI). */
 export async function fetchVessels() {
   const since = isoZ(new Date(Date.now() - 24 * 3600_000));

@@ -6,6 +6,28 @@
 
 ---
 
+## Sessão "gev" (continuação) — 2026-08-26: ventos, VBP 24→25 e bordas
+
+- **`datageo-ventos` (token 3)**: partículas estilo earth.nullschool via
+  `cesium-wind-layer` (GPU, 4.096 partículas) alimentada por grade 22×15 do
+  **Open-Meteo** (gratuito, sem chave — funciona no deploy estático).
+  u/v da direção meteorológica; flipY false com linha 0 = sul. A camada
+  segura `holdContinuousRender` enquanto ligada (partícula anima todo
+  frame) e libera no disable. No preset Agroambiental.
+- **VBP do tooltip agora 24→25 (SEAB/DERAL)**: o gerador trocou a PAM/IBGE
+  pela base local do projeto vbp-parana do Avner
+  (dashboard/public/data/detailed_municipio_*.json, R$ correntes) — mesma
+  fonte do avnergomes.github.io/vbp-parana. Bônus: "cadeia líder" agora usa
+  as 26 cadeias SEAB (inclui pecuária) — Toledo virou Suinocultura (antes a
+  PAM cegava para pecuária e dizia soja), Curitiba Olericultura.
+- **Bordas municipais permanentes**: polyline clamped por anel externo
+  (399), cyan 0.32 — contorno "queimado" no satélite o tempo todo; o hover
+  ignora o pick da divisa para o tooltip não piscar.
+- Painel reordenado (DataGeo primeiro) e, em produção, só camadas com
+  backend vivo (proxy-dependentes do GEV ficam fora do build estático).
+- Pegadinha nova: heredoc do Git Bash come backslashes em scripts Python
+  inline — usar forward slashes em paths Windows.
+
 ## Sessão "gev" (continuação) — 2026-08-26: marítimo, ferrovias e a verdade sobre trânsito/CCTV
 
 - **`datageo-maritimo` (token 1)**: lê `maritime_traffic` com janela ESTRITA

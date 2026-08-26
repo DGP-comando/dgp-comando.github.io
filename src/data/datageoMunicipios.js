@@ -69,8 +69,7 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
-const fmtBRL = (milReais) => {
-  const reais = milReais * 1000;
+const fmtBRL = (reais) => {
   if (reais >= 1e9) return `R$ ${(reais / 1e9).toFixed(1).replace('.', ',')} bi`;
   if (reais >= 1e6) return `R$ ${(reais / 1e6).toFixed(1).replace('.', ',')} mi`;
   return `R$ ${Math.round(reais).toLocaleString('pt-BR')}`;
@@ -92,19 +91,19 @@ function tooltipHtml(nome, info) {
     const cls = up ? 'mt-up' : 'mt-down';
     const pct = `${up ? '+' : ''}${String(deltaPct).replace('.', ',')}%`;
     lines.push(
-      `VBP lavouras ${anoA.slice(2)}→${anoB.slice(2)}: ` +
+      `VBP ${anoA.slice(2)}→${anoB.slice(2)}: ` +
         `<span class="${cls}">${arrow} ${pct}</span> ` +
         `<span class="mt-dim">(${fmtBRL(valB)})</span>`,
     );
   } else {
-    lines.push('VBP lavouras: <span class="mt-dim">sem dado</span>');
+    lines.push('VBP: <span class="mt-dim">sem dado</span>');
   }
 
   if (info?.cadeia) {
-    lines.push(`Lavoura líder: ${info.cadeia}`);
+    lines.push(`Cadeia líder: ${info.cadeia}`);
   }
 
-  lines.push('<div class="mt-fontes">TSE 2024 · IBGE/PAM 5457</div>');
+  lines.push('<div class="mt-fontes">TSE 2024 · VBP SEAB/DERAL 24-25</div>');
   return lines.join('<br/>').replace('<br/><div class="mt-fontes">', '<div class="mt-fontes">');
 }
 

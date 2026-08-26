@@ -102,7 +102,7 @@ export const FIRST_RUN_MISSIONS = Object.freeze({
   }),
   'agro-ambiental': Object.freeze({
     kind: 'globe',
-    layerIds: Object.freeze(['datageo-municipios', 'local-firms', 'datageo-clima', 'datageo-ar', 'datageo-irtc', 'datageo-ferrovias']),
+    layerIds: Object.freeze(['datageo-municipios', 'local-firms', 'datageo-clima', 'datageo-ar', 'datageo-irtc', 'datageo-ferrovias', 'datageo-ventos']),
     busyText: 'Carregando quadro agroambiental…',
   }),
   explore: Object.freeze({ kind: 'none' }),
