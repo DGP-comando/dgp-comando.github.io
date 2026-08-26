@@ -21,6 +21,11 @@ const GEOJSON_URL = '/data/municipios-pr.geojson';
 const INFO_URL = '/data/municipios-info.json';
 
 const IDLE_COLOR = Cesium.Color.CYAN.withAlpha(0.03);
+// Contorno permanente "queimado" sobre o satelite. Poligono clamped nao
+// suporta outline no Cesium (limitacao de GroundPrimitive), entao as bordas
+// sao polylines clamped geradas do anel externo de cada municipio no load.
+const BORDER_COLOR = Cesium.Color.CYAN.withAlpha(0.32);
+const BORDER_WIDTH = 1.4;
 const HOVER_COLOR = Cesium.Color.CYAN.withAlpha(0.22);
 const HOVER_THROTTLE_MS = 40;
 
@@ -131,8 +136,11 @@ export function createDatageoMunicipiosLayer() {
 
     const picked = viewer.scene.pick(movement.endPosition);
     const entity = picked?.id;
-    const isOurs =
-      entity && entity.entityCollection?.owner === _dataSource && entity.polygon;
+    const fromThisSource = entity && entity.entityCollection?.owner === _dataSource;
+    // Sobre a linha da divisa o pick devolve a borda, nao o poligono:
+    // manter o hover corrente em vez de piscar o tooltip.
+    if (fromThisSource && !entity.polygon) return;
+    const isOurs = fromThisSource && entity.polygon;
 
     if (!isOurs) {
       clearHover();
@@ -200,10 +208,27 @@ export function createDatageoMunicipiosLayer() {
             stroke: Cesium.Color.CYAN.withAlpha(0.12),
             strokeWidth: 1,
           });
+          // Bordas permanentes: uma polyline clamped por anel externo. O id
+          // com prefixo "muni-border:" e o que o hover usa para ignora-las.
+          const nowJ = Cesium.JulianDate.now();
+          const polygons = _dataSource.entities.values.filter((e) => e.polygon);
+          for (const entity of polygons) {
+            const hierarchy = entity.polygon.hierarchy?.getValue(nowJ);
+            if (!hierarchy?.positions?.length) continue;
+            _dataSource.entities.add({
+              id: `muni-border:${entity.id}`,
+              polyline: {
+                positions: [...hierarchy.positions, hierarchy.positions[0]],
+                clampToGround: true,
+                width: BORDER_WIDTH,
+                material: new Cesium.ColorMaterialProperty(BORDER_COLOR),
+              },
+            });
+          }
           _dataSource.show = _enabled;
           await viewer.dataSources.add(_dataSource);
         }
-        _count = _dataSource.entities.values.length;
+        _count = _dataSource.entities.values.filter((e) => e.polygon).length;
         _lastUpdate = Date.now();
         _lastError = null;
         console.log(`[Data:datageo-municipios] ${_count} poligonos prontos`);
