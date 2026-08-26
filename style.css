@@ -9234,3 +9234,17 @@ body.scene-playback-mode #first-run-launcher {
 @media (hover: none), (pointer: coarse) {
   #datageo-muni-tooltip { display: none !important; }
 }
+
+/* Headers das classes de camadas (Limites, Infraestrutura, Clima...). */
+.data-toggle-group-header {
+  margin: 10px 10px 2px;
+  padding-bottom: 3px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #67e8f9;
+  border-bottom: 1px dashed rgba(103, 232, 249, 0.25);
+}
+.data-toggle-group-header:first-child { margin-top: 4px; }

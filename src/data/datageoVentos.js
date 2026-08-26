@@ -47,6 +47,7 @@ export const datageoVentosLayer = (() => {
   return {
     id: 'datageo-ventos',
     name: 'Ventos',
+    category: 'Clima',
     icon: '💨',
     source: 'Open-Meteo',
     updateInterval: 1_800_000,

@@ -40,6 +40,7 @@ const dams = createLocalGeoJsonLayer({
 const fires = createFirmsHeatmapLayer({
   id: 'local-firms',
   name: 'Focos de calor (queimadas)',
+  category: 'Ambiente',
   icon: '▲',
   source: 'NASA FIRMS · DataGeo PR',
 });

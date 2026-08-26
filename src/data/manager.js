@@ -25,6 +25,21 @@ const LIFECYCLE_LABELS = Object.freeze({
   disabling: 'DESLIGANDO',
 });
 
+// Classes do painel de camadas (subdividido por tema). Cada modulo declara
+// `category`; sem declaracao cai em "Contexto global" (camadas GEV herdadas
+// — terremotos, cabos, voos etc.). A ordem aqui e a ordem do painel.
+const LAYER_CATEGORY_ORDER = Object.freeze([
+  'Limites',
+  'Infraestrutura',
+  'Clima',
+  'Hidrologia',
+  'Ambiente',
+  'Saúde e ar',
+  'Riscos e alertas',
+  'Contexto global',
+]);
+const DEFAULT_LAYER_CATEGORY = 'Contexto global';
+
 const SUPERSEDED_VISIBILITY_INTENT = Symbol('superseded-visibility-intent');
 const VALID_LAYER_SERIALIZATION_DISPOSITIONS = new Set([
   'enabled-only',
@@ -1928,6 +1943,7 @@ export class DataLayerManager {
         name: entry.module.name,
         icon: entry.module.icon,
         source: entry.module.source,
+        category: entry.module.category || DEFAULT_LAYER_CATEGORY,
         showInTogglePanel: entry.module.showInTogglePanel !== false,
         enabled: entry.enabled,
         lifecycleState: entry.lifecycleState,
@@ -2028,8 +2044,34 @@ export class DataLayerManager {
     if (!this._toggleContainer) return;
     this._toggleContainer.innerHTML = '';
 
-    for (const layer of this.getAll()) {
-      if (!layer.showInTogglePanel) continue;
+    // Agrupa por categoria na ordem canonica; dentro do grupo, mantem a
+    // ordem de registro. Os headers sao estaticos — _refreshTogglePanel so
+    // reescreve o conteudo das rows, entao nada aqui precisa de re-sync.
+    const visible = this.getAll().filter((layer) => layer.showInTogglePanel);
+    const byCategory = new Map();
+    for (const layer of visible) {
+      const cat = layer.category || DEFAULT_LAYER_CATEGORY;
+      if (!byCategory.has(cat)) byCategory.set(cat, []);
+      byCategory.get(cat).push(layer);
+    }
+    const orderedCats = [
+      ...LAYER_CATEGORY_ORDER.filter((cat) => byCategory.has(cat)),
+      ...[...byCategory.keys()].filter((cat) => !LAYER_CATEGORY_ORDER.includes(cat)),
+    ];
+    const orderedLayers = [];
+    for (const cat of orderedCats) {
+      orderedLayers.push({ __header: cat });
+      orderedLayers.push(...byCategory.get(cat));
+    }
+
+    for (const layer of orderedLayers) {
+      if (layer.__header) {
+        const header = document.createElement('div');
+        header.className = 'data-toggle-group-header';
+        header.textContent = layer.__header;
+        this._toggleContainer.appendChild(header);
+        continue;
+      }
       const row = document.createElement('div');
       row.className = 'data-toggle-row';
       row.dataset.layerId = layer.id;

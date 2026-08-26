@@ -124,6 +124,7 @@ export function mapAnalystRecord(fire) {
 export function createFirmsHeatmapLayer({
   id,
   name,
+  category,
   icon = '▲',
   source = 'NASA FIRMS',
   overlayHost = {
@@ -194,6 +195,7 @@ export function createFirmsHeatmapLayer({
   return {
     id,
     name,
+    category,
     icon,
     source,
     // Live layer: the manager calls update() every 10 minutes while enabled,

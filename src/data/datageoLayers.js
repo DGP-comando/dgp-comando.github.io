@@ -30,6 +30,7 @@ import {
 import { centroidByIbge, centroidByName } from './prCentroids.js';
 import { datageoMunicipiosLayer } from './datageoMunicipios.js';
 import { datageoVentosLayer } from './datageoVentos.js';
+import { datageoRodoviasLayer } from './datageoRodovias.js';
 
 const LABEL_FONT = '12px "JetBrains Mono", monospace';
 
@@ -52,7 +53,7 @@ function labelGraphics(text, { maxDistance = 2_500_000, pixelOffsetY = -14 } = {
  * `build(rows, entities)` popula o CustomDataSource e retorna a contagem
  * exibida em getStats/painel.
  */
-function createDatageoLayer({ id, name, icon, source, updateInterval, fetcher, build }) {
+function createDatageoLayer({ id, name, category, icon, source, updateInterval, fetcher, build }) {
   let _dataSource = null;
   let _count = 0;
   let _lastUpdate = null;
@@ -61,6 +62,7 @@ function createDatageoLayer({ id, name, icon, source, updateInterval, fetcher, b
   return {
     id,
     name,
+    category,
     icon,
     source,
     updateInterval,
@@ -132,6 +134,7 @@ function temperatureColor(t) {
 export const datageoClimaLayer = createDatageoLayer({
   id: 'datageo-clima',
   name: 'Estações de clima (INMET)',
+  category: 'Clima',
   icon: '🌡️',
   source: 'INMET · DataGeo PR',
   updateInterval: 900_000,
@@ -187,6 +190,7 @@ const RIVER_COLORS = {
 export const datageoRiosLayer = createDatageoLayer({
   id: 'datageo-rios',
   name: 'Nível dos rios (ANA)',
+  category: 'Hidrologia',
   icon: '🌊',
   source: 'ANA · DataGeo PR',
   updateInterval: 900_000,
@@ -239,6 +243,7 @@ const CEMADEN_COLORS = {
 export const datageoCemadenLayer = createDatageoLayer({
   id: 'datageo-cemaden',
   name: 'Alertas de desastre (CEMADEN)',
+  category: 'Hidrologia',
   icon: '⚠️',
   source: 'CEMADEN · DataGeo PR',
   updateInterval: 300_000,
@@ -295,6 +300,7 @@ const IRTC_COLORS = {
 export const datageoIrtcLayer = createDatageoLayer({
   id: 'datageo-irtc',
   name: 'Risco territorial (IRTC)',
+  category: 'Riscos e alertas',
   icon: '🎯',
   source: 'IRTC · DataGeo PR',
   updateInterval: 1_800_000,
@@ -357,6 +363,7 @@ const DENGUE_COLORS = {
 export const datageoDengueLayer = createDatageoLayer({
   id: 'datageo-dengue',
   name: 'Dengue (InfoDengue)',
+  category: 'Saúde e ar',
   icon: '🦟',
   source: 'InfoDengue · DataGeo PR',
   updateInterval: 3_600_000,
@@ -429,6 +436,7 @@ function aqiColor(aqi) {
 export const datageoArLayer = createDatageoLayer({
   id: 'datageo-ar',
   name: 'Qualidade do ar',
+  category: 'Saúde e ar',
   icon: '🌫️',
   source: 'AQICN · DataGeo PR',
   updateInterval: 1_800_000,
@@ -470,6 +478,7 @@ export const datageoArLayer = createDatageoLayer({
 export const datageoAnomaliasLayer = createDatageoLayer({
   id: 'datageo-anomalias',
   name: 'Anomalias estatísticas',
+  category: 'Riscos e alertas',
   icon: '📈',
   source: 'DataGeo PR',
   updateInterval: 900_000,
@@ -519,6 +528,7 @@ const INCIDENT_SEVERITY_COLORS = {
 export const datageoIncidentesLayer = createDatageoLayer({
   id: 'datageo-incidentes',
   name: 'Incidentes ativos',
+  category: 'Riscos e alertas',
   icon: '🚨',
   source: 'DataGeo PR',
   updateInterval: 300_000,
@@ -561,6 +571,7 @@ export const datageoIncidentesLayer = createDatageoLayer({
 export const datageoInfohidroLayer = createDatageoLayer({
   id: 'datageo-infohidro',
   name: 'Telemetria hídrica (InfoHidro)',
+  category: 'Hidrologia',
   icon: '📡',
   source: 'SIMEPAR · DataGeo PR',
   updateInterval: 3_600_000,
@@ -609,6 +620,7 @@ export const datageoInfohidroLayer = createDatageoLayer({
 export const datageoMaritimoLayer = createDatageoLayer({
   id: 'datageo-maritimo',
   name: 'Embarcações (AIS)',
+  category: 'Infraestrutura',
   icon: '🚢',
   source: 'AISStream · DataGeo PR',
   updateInterval: 600_000,
@@ -672,6 +684,7 @@ export const datageoFerroviasLayer = (() => {
   return {
     id: 'datageo-ferrovias',
     name: 'Ferrovias',
+    category: 'Infraestrutura',
     icon: '🚆',
     source: 'OpenStreetMap',
     updateInterval: 24 * 3600_000,
@@ -732,5 +745,6 @@ export const DATAGEO_LAYERS = [
   datageoInfohidroLayer,
   datageoMaritimoLayer,
   datageoFerroviasLayer,
+  datageoRodoviasLayer,
   datageoVentosLayer,
 ];

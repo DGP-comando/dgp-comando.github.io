@@ -168,6 +168,7 @@ export function createDatageoMunicipiosLayer() {
   return {
     id: 'datageo-municipios',
     name: 'Municípios do Paraná',
+    category: 'Limites',
     icon: '🏛️',
     source: 'TSE · IBGE/PAM · DataGeo PR',
     updateInterval: 6 * 3600_000,
