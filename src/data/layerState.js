@@ -318,6 +318,27 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));
 
+/**
+ * Camadas de BASE da sala de situacao: ligadas em TODO boot, venha o estado de
+ * onde vier (primeira visita, localStorage ou share link).
+ *
+ * Os 399 poligonos municipais sao a cartografia do produto, nao uma camada
+ * opcional: o cabecalho diz "SALA DE SITUACAO · 399 MUNICIPIOS", os rotulos de
+ * todas as outras camadas DataGeo sao lidos por municipio, e a ficha municipal
+ * so tem onde ser clicada com as divisas na tela. Por isso esta lista NAO e uma
+ * preferencia restaurada — e o piso.
+ *
+ * O operador continua livre para desligar a camada durante a sessao: o toggle
+ * funciona normalmente e o desligamento e gravado no estado duravel (o share
+ * link gerado a partir dali diz "desligada", honestamente). O que o piso
+ * garante e que o PROXIMO boot volta com ela ligada.
+ *
+ * Deliberadamente NAO aplicado dentro de normalizeLayerState: o estado duravel
+ * precisa continuar CAPAZ de representar "desligada", senao o toggle mentiria
+ * no localStorage e no link. O piso e aplicado uma unica vez, em start().
+ */
+export const BASELINE_LAYER_IDS = Object.freeze(['datageo-municipios']);
+
 const REGISTRY_BY_ID = new Map(LAYER_STATE_REGISTRY.map((entry) => [entry.id, entry]));
 const REGISTRY_BY_TOKEN = new Map(LAYER_STATE_REGISTRY.map((entry) => [entry.token, entry]));
 const OPTION_OWNER_IDS = Object.freeze([...new Set(
@@ -429,6 +450,24 @@ export function normalizeLayerState(candidate) {
     enabledLayerIds,
     options,
   };
+}
+
+/**
+ * Completa um estado ja escolhido com o piso de camadas de base.
+ *
+ * Completa, nunca substitui: tudo o que o operador (ou o autor do share) pediu
+ * continua exatamente como veio; so as camadas de BASELINE_LAYER_IDS que
+ * faltavam entram. Chamado uma unica vez por boot, em start().
+ * @param {object} state
+ * @returns {object} estado normalizado com as camadas de base ligadas
+ */
+export function withBaselineLayers(state) {
+  const normalized = normalizeLayerState(state);
+  const enabled = new Set(normalized.enabledLayerIds);
+  const missing = BASELINE_LAYER_IDS.filter((id) => !enabled.has(id));
+  if (!missing.length) return normalized;
+  for (const id of missing) enabled.add(id);
+  return normalizeLayerState({ ...normalized, enabledLayerIds: [...enabled] });
 }
 
 export function cloneLayerState(state) {
@@ -616,11 +655,17 @@ export class LayerStateCoordinator {
       // unrelated recipient's saved local layer preferences.
       this._source = 'legacy-share';
     }
-    this._durableState = selected || createDefaultLayerState();
+    // O piso da sala de situacao entra DEPOIS da escolha da fonte, para que
+    // `source` continue dizendo de onde veio o estado do operador — o piso
+    // completa esse estado, nao o substitui. Ver BASELINE_LAYER_IDS.
+    this._durableState = withBaselineLayers(selected || createDefaultLayerState());
     this.shareLinkManager?.setLayerStateProvider?.(() => this.getDurableState());
     this.shareLinkManager?.onLayerStateChange?.();
     this._notifyDurableState();
-    if (!selected) return this.restorePromise;
+    if (!selected) {
+      this.restorePromise = this._restoreBaselineLayers(LAYER_RESTORE_ORIGINS.local);
+      return this.restorePromise;
+    }
     this.restorePromise = this._restoreSelectedState(
       this._source === 'share' ? LAYER_RESTORE_ORIGINS.share : LAYER_RESTORE_ORIGINS.local,
     );
@@ -750,6 +795,70 @@ export class LayerStateCoordinator {
   async _waitForRestoreGate() {
     if (!this.restoreGate) return;
     await (typeof this.restoreGate === 'function' ? this.restoreGate() : this.restoreGate);
+  }
+
+  /**
+   * Ligar SOMENTE as camadas de base, passivamente.
+   *
+   * Separado de _restoreSelectedState de proposito. Numa primeira visita
+   * nenhuma OUTRA camada pode ser tocada — nem com um `enabled: false`
+   * explicito, nem com um setLayerParams de valores padrao — porque o contrato
+   * de boot limpo continua sendo que os inicializadores dos proprios modulos
+   * sao a unica fonte da verdade (ver a nota de `models3d` em OPTION_GROUPS).
+   * A varredura completa do registry passaria por cima justamente disso.
+   * @param {string} origin
+   * @returns {Promise<object[]>}
+   */
+  async _restoreBaselineLayers(origin) {
+    const targets = BASELINE_LAYER_IDS.filter((id) => REGISTRY_BY_ID.has(id));
+    for (const layerId of targets) {
+      this._restoreControllers.set(layerId, new AbortController());
+    }
+    try {
+      await this._waitForRestoreGate();
+      const settled = await Promise.allSettled(targets.map(async (layerId) => {
+        const controller = this._restoreControllers.get(layerId);
+        if (this._destroyed || controller?.signal.aborted) {
+          return {
+            layerId,
+            targetEnabled: true,
+            origin,
+            phase: 'reserved',
+            ...currentLayerOutcome(this.dataManager, layerId),
+            appliedOptions: {},
+            cancellationReason: this._destroyed ? 'destroyed' : 'superseded',
+            errorClass: 'cancelled',
+            persistenceWrite: false,
+            succeeded: false,
+          };
+        }
+        const result = await this.dataManager.restoreLayerState(layerId, {
+          enabled: true,
+          params: null,
+        }, { origin, signal: controller.signal });
+        return { ...result, appliedOptions: {} };
+      }));
+      this.lastRestoreResults = settled.map((result, index) => {
+        if (result.status === 'fulfilled') return result.value;
+        return {
+          layerId: targets[index],
+          targetEnabled: true,
+          origin,
+          phase: 'coordinator',
+          ...currentLayerOutcome(this.dataManager, targets[index]),
+          appliedOptions: {},
+          cancellationReason: null,
+          errorClass: result.reason?.name || 'Error',
+          error: String(result.reason?.message || result.reason),
+          persistenceWrite: false,
+          succeeded: false,
+        };
+      });
+      return this.lastRestoreResults.map((result) => ({ ...result }));
+    } finally {
+      this._restoreControllers.clear();
+      this._notifyDurableState();
+    }
   }
 
   async _restoreSelectedState(origin) {

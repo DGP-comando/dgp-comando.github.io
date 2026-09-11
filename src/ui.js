@@ -12,8 +12,13 @@ import {
   clampBloomIntensity,
   decodeBloomIntensity,
 } from './bloom.js';
-import { LOCATIONS, CITY_POIS, GLOBE_VIEW, flyToGlobeView, flyToPresetLocation, flyToPOI, searchAndFlyTo } from './locations.js';
+import { LOCATIONS, CITY_POIS, GLOBE_VIEW, flyToGlobeView, flyToMunicipio, flyToPresetLocation, flyToPOI, searchAndFlyTo } from './locations.js';
 import { locationMiniStatus } from './locationStatus.js';
+import {
+  exactMunicipioMatch,
+  municipioMatchRange,
+  searchMunicipios,
+} from './municipioSearch.js';
 import { interruptCameraMotion } from './cameraVerbs.js';
 import {
   aircraftTrackingTarget,
@@ -73,6 +78,7 @@ import aisLiveVesselsLayer from './data/aisLiveVessels.js';
 import militaryAwarenessLayer from './data/militaryAwareness.js';
 import militaryInstallationsLayer from './data/militaryInstallations.js';
 import rocketLaunchesLayer from './data/rocketLaunches.js';
+import { datageoMunicipiosLayer } from './data/datageoMunicipios.js';
 import {
   aggregateLayerLoading,
   canPresentDeferredStatusNotice,
@@ -2368,6 +2374,11 @@ export class StyleManager {
     this._toast = document.getElementById('toast');
     this._locationSearch = document.getElementById('location-search');
     this._searchToggle = document.getElementById('search-toggle');
+    this._locationSearchResults = document.getElementById('location-search-results');
+    /** Municípios ofertados pela busca local agora; [] quando a lista está fechada. */
+    this._municipioSuggestions = [];
+    /** Índice realçado na lista, ou -1 quando nenhum foi escolhido com as setas. */
+    this._municipioSuggestionIndex = -1;
     this._locationPills = document.getElementById('location-pills');
     this._poiRow = document.getElementById('poi-row');
     this._locationBarDivider = document.getElementById('location-bar-divider');
@@ -2805,6 +2816,7 @@ export class StyleManager {
   _settleLocationSearchUi(generation) {
     if (this._activeLocationSearchGeneration !== generation) return;
     this._activeLocationSearchGeneration = null;
+    this._closeMunicipioSuggestions();
     this._locationSearch?.classList.remove('searching', 'expanded');
     if (this._locationSearch) this._locationSearch.value = '';
     this._locationSearch?.blur();
@@ -9280,14 +9292,49 @@ export class StyleManager {
       this._locationSearch.classList.toggle('expanded');
       if (this._locationSearch.classList.contains('expanded')) {
         this._locationSearch.focus();
+      } else {
+        this._closeMunicipioSuggestions();
       }
+    });
+
+    // Sugestões de município. Os 399 nomes viajam no bundle (prCentroids), então
+    // a lista repinta a cada tecla — sem rede, sem debounce, sem chave de API.
+    this._locationSearch.addEventListener('input', () => {
+      this._renderMunicipioSuggestions(this._locationSearch.value);
+    });
+
+    // O clique num item usa mousedown (que roda ANTES do blur), então fechar
+    // aqui não derruba a lista debaixo do cursor.
+    this._locationSearch.addEventListener('blur', () => {
+      this._closeMunicipioSuggestions();
     });
 
     // Search submit on Enter
     this._locationSearch.addEventListener('keydown', async (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!this._municipioSuggestions.length) return;
+        e.preventDefault();
+        this._moveMunicipioSuggestion(e.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
+      if (e.key === 'Escape' && this._municipioSuggestions.length) {
+        e.preventDefault();
+        this._closeMunicipioSuggestions();
+        return;
+      }
       if (e.key === 'Enter') {
+        // Um município NOMEADO não é um endereço: ele tem código IBGE, divisa e
+        // ficha própria. Resolver pela tabela local antes de chamar o geocoder é
+        // o que permite abrir a ficha certa em vez de pousar num ponto genérico.
+        const municipio = this._pickedMunicipioSuggestion();
+        if (municipio) {
+          e.preventDefault();
+          this._flyToMunicipioResult(municipio);
+          return;
+        }
         const query = this._locationSearch.value.trim();
         if (!query) return;
+        this._closeMunicipioSuggestions();
         const generation = this._beginDeferredNavigation('location');
         if (generation === false) {
           this._locationSearch.classList.remove('searching');
@@ -9497,6 +9544,215 @@ export class StyleManager {
     this._poiRow.querySelectorAll('.poi-pill').forEach(pill => {
       pill.classList.toggle('active', parseInt(pill.dataset.poiIndex) === this._activePoiIndex);
     });
+  }
+
+  // ── Busca de município ───────────────────────
+
+  /**
+   * Repinta a lista de municípios para o que está escrito na caixa.
+   * @param {string} query - Texto cru do input.
+   * @returns {void}
+   */
+  _renderMunicipioSuggestions(query) {
+    if (!this._locationSearchResults) return;
+    const matches = searchMunicipios(query);
+    if (!matches.length) {
+      this._closeMunicipioSuggestions();
+      return;
+    }
+    this._municipioSuggestions = matches;
+    this._municipioSuggestionIndex = -1;
+    // A lista antiga morre aqui, e o descendente ativo que apontava para ela
+    // junto — senão o leitor de tela anunciaria um município que o Enter já
+    // não abre mais.
+    this._locationSearch?.removeAttribute('aria-activedescendant');
+    this._locationSearchResults.innerHTML = '';
+
+    const hint = document.createElement('li');
+    hint.className = 'location-search-results-hint';
+    hint.setAttribute('role', 'presentation');
+    hint.textContent = `Municípios do Paraná · ${matches.length}`;
+    this._locationSearchResults.appendChild(hint);
+
+    matches.forEach((match, index) => {
+      const option = document.createElement('li');
+      option.className = 'location-search-option';
+      option.id = `location-search-option-${index}`;
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', 'false');
+      option.dataset.index = String(index);
+      option.appendChild(this._buildMunicipioOptionLabel(match, query));
+      const code = document.createElement('span');
+      code.className = 'location-search-option-code';
+      code.textContent = match.code;
+      option.appendChild(code);
+      // mousedown, não click: o blur do input dispara primeiro e fecharia a
+      // lista antes de o click chegar. Só o botão principal escolhe — sem a
+      // guarda, o botão direito (ou um toque de dois dedos no trackpad) levava
+      // a câmera embora junto com o menu de contexto que ele abriu.
+      option.addEventListener('mousedown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        this._flyToMunicipioResult(match);
+      });
+      this._locationSearchResults.appendChild(option);
+    });
+
+    this._locationSearchResults.hidden = false;
+    this._locationSearch?.setAttribute('aria-expanded', 'true');
+    this._clampMunicipioSuggestions();
+  }
+
+  /**
+   * Mantém a lista dentro da tela.
+   *
+   * Em telas estreitas o popover do dock já nasce começando fora da borda
+   * esquerda — a fileira de pills convive com isso rolando dentro de si —, e a
+   * lista, ancorada na caixa de busca, herdaria o mesmo deslocamento e perderia
+   * as primeiras letras de cada nome. A correção é medir depois de abrir, que é
+   * a única hora em que a posição real é conhecida.
+   * @returns {void}
+   */
+  _clampMunicipioSuggestions() {
+    const list = this._locationSearchResults;
+    if (!list || list.hidden) return;
+    const gutter = 8;
+    list.style.marginLeft = '0px';
+    const rect = list.getBoundingClientRect();
+    const viewportWidth = globalThis.innerWidth || rect.right + gutter;
+    const pastLeft = gutter - rect.left;
+    const pastRight = rect.right - (viewportWidth - gutter);
+    const shift = pastLeft > 0 ? pastLeft : (pastRight > 0 ? -pastRight : 0);
+    if (shift) list.style.marginLeft = `${Math.round(shift)}px`;
+  }
+
+  /**
+   * Nome do município com o trecho digitado em destaque. Montado com nós de
+   * texto, nunca innerHTML — o que o operador digita não vira marcação.
+   * @param {{name: string}} match
+   * @param {string} query
+   * @returns {HTMLElement}
+   */
+  _buildMunicipioOptionLabel(match, query) {
+    const label = document.createElement('span');
+    label.className = 'location-search-option-name';
+    const range = municipioMatchRange(match.name, query);
+    if (!range) {
+      label.textContent = match.name;
+      return label;
+    }
+    const end = range.start + range.length;
+    label.appendChild(document.createTextNode(match.name.slice(0, range.start)));
+    const hit = document.createElement('span');
+    hit.className = 'location-search-option-hit';
+    hit.textContent = match.name.slice(range.start, end);
+    label.appendChild(hit);
+    label.appendChild(document.createTextNode(match.name.slice(end)));
+    return label;
+  }
+
+  /**
+   * Fecha a lista e esquece as sugestões. Idempotente.
+   * @returns {void}
+   */
+  _closeMunicipioSuggestions() {
+    this._municipioSuggestions = [];
+    this._municipioSuggestionIndex = -1;
+    if (!this._locationSearchResults) return;
+    this._locationSearchResults.hidden = true;
+    this._locationSearchResults.innerHTML = '';
+    this._locationSearch?.setAttribute('aria-expanded', 'false');
+    this._locationSearch?.removeAttribute('aria-activedescendant');
+  }
+
+  /**
+   * Move o realce na lista, circulando nas pontas.
+   * @param {number} step - +1 para baixo, -1 para cima.
+   * @returns {void}
+   */
+  _moveMunicipioSuggestion(step) {
+    const total = this._municipioSuggestions.length;
+    if (!total) return;
+    const current = this._municipioSuggestionIndex;
+    // Sem nada realçado, ↑ vai direto ao último: a lista abre para cima, então
+    // subir a partir da caixa é o gesto natural para pegar o item mais próximo.
+    const next = current === -1
+      ? (step > 0 ? 0 : total - 1)
+      : (current + step + total) % total;
+    this._municipioSuggestionIndex = next;
+    this._locationSearchResults?.querySelectorAll('.location-search-option').forEach((option) => {
+      const active = Number(option.dataset.index) === next;
+      option.classList.toggle('active', active);
+      option.setAttribute('aria-selected', String(active));
+      if (!active) return;
+      option.scrollIntoView({ block: 'nearest' });
+      this._locationSearch?.setAttribute('aria-activedescendant', option.id);
+    });
+  }
+
+  /**
+   * Município que o Enter deve levar, ou null para deixar o geocoder assumir.
+   *
+   * Com um item realçado, é ele. Sem realce, só um nome escrito por inteiro (ou
+   * o código IBGE) captura o Enter: "cascavel" vai para o município, "rua
+   * Cascavel, Curitiba" continua sendo endereço e segue para o geocoder.
+   * @returns {{code: string, name: string, lat: number, lon: number}|null}
+   */
+  _pickedMunicipioSuggestion() {
+    if (this._municipioSuggestionIndex >= 0) {
+      return this._municipioSuggestions[this._municipioSuggestionIndex] || null;
+    }
+    return exactMunicipioMatch(this._locationSearch?.value);
+  }
+
+  /**
+   * Enquadra o município no mapa e abre a ficha dele.
+   *
+   * As duas coisas juntas são o ponto: o resultado local carrega o código IBGE,
+   * que é a identidade que datageoFicha precisa. O geocoder devolveria um ponto
+   * e nenhuma identidade, e por isso nunca conseguiu abrir a aba do município.
+   * @param {{code: string, name: string, lat: number, lon: number}} match
+   * @returns {void}
+   */
+  _flyToMunicipioResult(match) {
+    if (!match) return;
+    this._closeMunicipioSuggestions();
+    // Divisa real quando o GeoJSON já carregou (enquadra ilhas e formatos
+    // alongados corretamente); centroide quando ainda não.
+    const focus = datageoMunicipiosLayer.getMunicipioFocus?.(match.code) || null;
+    // Mesmo critério do clique numa cidade-polo: só é salto de mundo quando já
+    // havia um destino enquadrado para deixar para trás.
+    const result = this._flyWithTransition(
+      Boolean(this._activeLocationId),
+      (hooks) => flyToMunicipio(this.viewer, {
+        lat: match.lat,
+        lon: match.lon,
+        boundingSphere: focus?.boundingSphere || null,
+      }, hooks),
+    );
+    if (result === false) return;
+
+    // Depois do voo: a navegação limpa o rótulo pesquisado na saída, então
+    // escrevê-lo antes seria apagá-lo.
+    this._searchedLocationLabel = `${match.name} (PR)`;
+    this._setActiveLocation(null);
+    this._currentPoi = null;
+    this._collapsePOIRow();
+    if (result) this._currentTarget = result.targetPosition;
+    this._updateLocationMiniStatus();
+    this._resetLocationSearchInput();
+    void datageoMunicipiosLayer.openMunicipioFicha?.({ ibge: match.code, nome: match.name });
+  }
+
+  /**
+   * Devolve a caixa de busca ao repouso depois de um destino aceito.
+   * @returns {void}
+   */
+  _resetLocationSearchInput() {
+    if (!this._locationSearch) return;
+    this._locationSearch.value = '';
+    this._locationSearch.classList.remove('searching', 'expanded');
+    this._locationSearch.blur();
   }
 
   /**

@@ -113,6 +113,11 @@ function tooltipHtml(nome, info) {
 export function createDatageoMunicipiosLayer() {
   let _dataSource = null;
   let _info = null;
+  let _infoPromise = null;
+  // IBGE -> { nome, boundingSphere }. Enquadramento real de cada municipio,
+  // montado uma vez no load do GeoJSON para a busca por nome nao precisar
+  // varrer 399 entidades a cada tecla. Ver getMunicipioFocus.
+  let _focus = new Map();
   let _handler = null;
   let _tooltip = null;
   let _enabled = false;
@@ -121,6 +126,31 @@ export function createDatageoMunicipiosLayer() {
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+
+  /**
+   * Carrega municipios-info.json no maximo uma vez, mesmo com chamadas
+   * concorrentes. Vive fora de update() porque a BUSCA por nome precisa do
+   * prefeito/VBP para montar a ficha, e ela pode ser usada antes do primeiro
+   * update — ou com a camada desligada pelo operador.
+   * @returns {Promise<object|null>}
+   */
+  function loadInfo() {
+    if (_info) return Promise.resolve(_info);
+    if (!_infoPromise) {
+      _infoPromise = fetch(INFO_URL)
+        .then((resp) => (resp.ok ? resp.json() : null))
+        .catch((err) => {
+          console.warn('[Data:datageo-municipios] info indisponivel:', err);
+          return null;
+        })
+        .then((json) => {
+          if (json) _info = json;
+          _infoPromise = null;
+          return _info;
+        });
+    }
+    return _infoPromise;
+  }
 
   function clearHover() {
     if (_hovered) {
@@ -210,12 +240,49 @@ export function createDatageoMunicipiosLayer() {
       clearHover();
     },
 
+    /**
+     * Entrada de municipios-info.json (prefeito, VBP, cadeias) do municipio.
+     * Carrega o arquivo sob demanda, independente da camada estar ligada.
+     * @param {string|number} ibge
+     * @returns {Promise<object|null>}
+     */
+    async getMunicipioInfo(ibge) {
+      const info = await loadInfo();
+      return info?.municipios?.[String(ibge ?? '')] ?? null;
+    },
+
+    /**
+     * Enquadramento do municipio: a BoundingSphere que cobre TODOS os aneis do
+     * poligono (ilhas do litoral incluidas), para a camera cair exatamente
+     * sobre a divisa em vez de num raio fixo em torno do centroide. Devolve
+     * null enquanto o GeoJSON nao carregou — quem chama cai no centroide.
+     * @param {string|number} ibge
+     * @returns {{ibge: string, nome: string, boundingSphere: Cesium.BoundingSphere}|null}
+     */
+    getMunicipioFocus(ibge) {
+      const code = String(ibge ?? '');
+      const found = code ? _focus.get(code) : null;
+      return found ? { ibge: code, nome: found.nome, boundingSphere: found.boundingSphere } : null;
+    },
+
+    /**
+     * Abre a ficha municipal sem depender de um clique no mapa — e o que a
+     * busca por nome usa. O nome vem do GeoJSON quando ja carregou, senao do
+     * chamador (a tabela de centroides), para a ficha nunca abrir sem titulo.
+     * @param {{ibge: string|number, nome?: string}} target
+     * @returns {Promise<boolean>} se a ficha foi aberta
+     */
+    async openMunicipioFicha({ ibge, nome = '' } = {}) {
+      const code = String(ibge ?? '');
+      if (!code) return false;
+      const info = await this.getMunicipioInfo(code);
+      openFicha({ ibge: code, nome: _focus.get(code)?.nome || nome, info });
+      return true;
+    },
+
     async update(viewer) {
       try {
-        if (!_info) {
-          const resp = await fetch(INFO_URL);
-          if (resp.ok) _info = await resp.json();
-        }
+        await loadInfo();
         if (!_dataSource) {
           _dataSource = await Cesium.GeoJsonDataSource.load(GEOJSON_URL, {
             clampToGround: true,
@@ -227,6 +294,7 @@ export function createDatageoMunicipiosLayer() {
           // com prefixo "muni-border:" e o que o hover usa para ignora-las.
           const nowJ = Cesium.JulianDate.now();
           const polygons = _dataSource.entities.values.filter((e) => e.polygon);
+          const focus = new Map();
           for (const entity of polygons) {
             const hierarchy = entity.polygon.hierarchy?.getValue(nowJ);
             if (!hierarchy?.positions?.length) continue;
@@ -239,7 +307,29 @@ export function createDatageoMunicipiosLayer() {
                 material: new Cesium.ColorMaterialProperty(BORDER_COLOR),
               },
             });
+            // Indice de enquadramento. Um municipio com ilhas (Paranagua,
+            // Guaraquecuba) chega como varias entidades com o MESMO CD_MUN:
+            // unir as esferas e o que faz "ir para o municipio" enquadrar o
+            // municipio inteiro, e nao so o primeiro anel do arquivo.
+            const ibge = String(entity.properties?.CD_MUN?.getValue(nowJ) ?? '');
+            if (!ibge) continue;
+            const sphere = Cesium.BoundingSphere.fromPoints(hierarchy.positions);
+            const previous = focus.get(ibge);
+            focus.set(ibge, previous
+              ? {
+                nome: previous.nome,
+                boundingSphere: Cesium.BoundingSphere.union(
+                  previous.boundingSphere,
+                  sphere,
+                  new Cesium.BoundingSphere(),
+                ),
+              }
+              : {
+                nome: String(entity.properties?.NM_MUN?.getValue(nowJ) ?? ''),
+                boundingSphere: sphere,
+              });
           }
+          _focus = focus;
           _dataSource.show = _enabled;
           await viewer.dataSources.add(_dataSource);
         }
@@ -270,6 +360,7 @@ export function createDatageoMunicipiosLayer() {
         viewer.dataSources.remove(_dataSource, true);
         _dataSource = null;
       }
+      _focus = new Map();
     },
 
     getStats() {
