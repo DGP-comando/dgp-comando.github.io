@@ -3,6 +3,32 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-09-11
+
+### Added
+
+- A busca da barra LOCALIZAÇÃO agora resolve os 399 municípios do Paraná
+  localmente, antes de chamar o geocoder. Digitar parte do nome abre uma lista
+  de sugestões (setas ↑/↓, Enter, Esc, clique), tolerante a acento, caixa e
+  conectivo — "foz do iguacu" encontra "Foz do Iguaçu" e "sao jorge do oeste"
+  encontra "São Jorge d'Oeste". Um código IBGE de 7 dígitos também busca.
+- Escolher um município enquadra a câmera na divisa dele e abre a ficha
+  municipal completa (IRTC, SEAB/DERAL, IBGE, SINESP, InfoDengue e o resto),
+  que antes só abria com um clique no polígono. O que torna isso possível é o
+  código IBGE que a busca local devolve: o geocoder devolvia um ponto sem
+  identidade e por isso nunca conseguiu abrir a ficha certa.
+
+### Changed
+
+- A camada **Municípios do Paraná** passa a ser o piso da sala de situação:
+  entra ATIVA em todo boot, venha o estado de primeira visita, do
+  `localStorage` ou de um share link. O operador continua livre para
+  desligá-la durante a sessão — o toggle funciona e o desligamento é gravado
+  com honestidade no estado durável e no link gerado; apenas o próximo boot
+  volta a ligá-la.
+- A caixa de busca passou a ser escrita em português ("Buscar município ou
+  local...").
+
 ## [Unreleased] — 2026-08-24
 
 ### Added

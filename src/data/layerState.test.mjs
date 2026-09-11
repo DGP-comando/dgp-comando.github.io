@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { DataLayerManager } from './manager.js';
 import {
+  BASELINE_LAYER_IDS,
   LAYER_STATE_REGISTRY,
   LAYER_STATE_STORAGE_KEY,
   LayerStateCoordinator,
@@ -339,12 +340,13 @@ test('a fresh boot starts 3D aircraft ON in proximity — codec, both layers, an
   // below the fleet altitude ceiling and only for the nearest MODEL_MAX in view,
   // so "on" costs nothing at globe scale and `all` stays a deliberate opt-in.
   //
-  // The reason this is one test rather than four is the early return in `start()`
-  // below: with no share payload and no stored state, restoration NEVER RUNS, so
-  // nothing pushes the codec default into the layers. Four independent
-  // initializers decide what a first-run operator actually sees, and changing any
-  // one alone ships a lit button over an unarmed layer, or an armed layer under a
-  // dark button. Pinning them together is what makes "state and UI agree" a fact.
+  // The reason this is one test rather than four is what `start()` does below:
+  // with no share payload and no stored state it restores ONLY the baseline
+  // layers (BASELINE_LAYER_IDS — visibility, never params), so nothing pushes
+  // the codec default into the flight layers. Four independent initializers
+  // decide what a first-run operator actually sees, and changing any one alone
+  // ships a lit button over an unarmed layer, or an armed layer under a dark
+  // button. Pinning them together is what makes "state and UI agree" a fact.
   const defaults = createDefaultLayerState().options.flights;
   assert.equal(defaults.models3d, true, 'the durable default is 3D ON');
   assert.equal(defaults.models3dMode, 'proximity', 'and proximity, never all');
@@ -360,7 +362,7 @@ test('a fresh boot starts 3D aircraft ON in proximity — codec, both layers, an
   assert.equal(coordinator.getDurableState().options.flights.models3d, true);
   assert.equal(coordinator.getDurableState().options.flights.models3dMode, 'proximity');
   assert.deepEqual(paramsCalls, [],
-    'a fresh boot restores nothing — which is exactly why the module initializers below must match');
+    'a fresh boot pushes NO params into any layer — which is exactly why the module initializers below must match');
   coordinator.destroy();
 
   // The other three surfaces, read from source, because each is the literal a
@@ -387,6 +389,53 @@ test('a fresh boot starts 3D aircraft ON in proximity — codec, both layers, an
     'index.html: and the Proximity/All row paints open with it');
   assert.match(html, /id="models3d-mode-proximity"[^>]*aria-checked="true"/,
     'index.html: Proximity is the selected mode in the markup');
+});
+
+test('the municipality outline is the room floor: lit at every boot, still switchable inside the session', async () => {
+  // Product invariant 2026-09-11: this fork is a "sala de situação · 399
+  // municípios". Every other DataGeo layer is read BY município, and the
+  // municipal ficha only has somewhere to be clicked once the divisas are
+  // drawn — so this layer is not a restored preference, it is the floor.
+  //
+  // The floor is applied ONCE, in start(), and deliberately NOT inside
+  // normalizeLayerState. That is the whole design: durable state stays CAPABLE
+  // of saying "off", so an operator who switches the outlines off mid-session
+  // gets an honest share link and an honest localStorage blob. Only the next
+  // BOOT lights it again.
+  assert.deepEqual(BASELINE_LAYER_IDS, ['datageo-municipios']);
+  assert.deepEqual(createDefaultLayerState().enabledLayerIds, [],
+    'the codec zero value stays empty — the floor is boot policy, not a codec default');
+
+  // 1. First visit: nothing stored, nothing shared.
+  const fresh = productionManager();
+  const freshCoordinator = new LayerStateCoordinator(fresh, shareSink(), { storage: memoryStorage() });
+  await freshCoordinator.start();
+  assert.equal(freshCoordinator.source, 'defaults');
+  assert.deepEqual([...fresh.getEnabledLayerIds()], ['datageo-municipios'],
+    'a first-run operator sees the outlines — and ONLY the outlines, because a '
+    + 'fresh boot must still leave every other layer to its own initializer');
+  freshCoordinator.destroy();
+
+  // 2. Returning operator whose saved blob predates the floor (or who switched
+  // the outlines off last session): the saved layers load AND the floor lands.
+  const stored = createDefaultLayerState();
+  stored.enabledLayerIds = ['earthquakes'];
+  const returning = productionManager();
+  const storage = memoryStorage(serializeStoredLayerState(stored));
+  const coordinator = new LayerStateCoordinator(returning, shareSink(), { storage });
+  await coordinator.start();
+  assert.equal(coordinator.source, 'local');
+  assert.equal(returning.isEnabled('earthquakes'), true, 'the saved preference survives untouched');
+  assert.equal(returning.isEnabled('datageo-municipios'), true, 'and the floor is applied over it');
+  assert.deepEqual(storage.writes, [],
+    'completing a saved state is passive restoration — it must not rewrite the operator blob');
+
+  // 3. …and OFF still means off, for the rest of the session and in the link.
+  await returning.setEnabled('datageo-municipios', false, { origin: 'user' });
+  assert.equal(returning.isEnabled('datageo-municipios'), false);
+  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['earthquakes'],
+    'durable state must stay able to say "off", or the toggle would lie in the share link');
+  coordinator.destroy();
 });
 
 test('a v2 link written before the flip still means what its author saw: 3D OFF', () => {
@@ -653,21 +702,23 @@ test('share payload wins over local, passive restore writes nothing, and explici
   await coordinator.start({ shareLayerState: explicitEmpty });
 
   assert.equal(coordinator.source, 'share');
-  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, []);
+  // An explicitly empty share still carries the situation-room baseline: the
+  // municipality outline is the fork's cartography, not a restored preference.
+  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['datageo-municipios']);
   assert.deepEqual(storage.writes, []);
-  assert.equal(share.provider().enabledLayerIds.length, 0);
+  assert.equal(share.provider().enabledLayerIds.length, 1);
 
   await manager.setEnabled('earthquakes', true, { origin: 'user' });
-  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['earthquakes']);
+  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['earthquakes', 'datageo-municipios']);
   assert.equal(storage.writes.length, 1);
 
   await manager.setEnabled('traffic', true, { origin: 'scene' });
   assert.equal(storage.writes.length, 1);
-  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['earthquakes']);
+  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['earthquakes', 'datageo-municipios']);
 
   await manager.setEnabled('traffic', true, { origin: 'tool' });
   assert.equal(storage.writes.length, 2);
-  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['earthquakes', 'traffic']);
+  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['earthquakes', 'traffic', 'datageo-municipios']);
 
   manager.setLayerParams('cctv', { selectedCameraId: 'private-camera' }, { origin: 'user' });
   assert.equal(storage.writes.length, 2);
@@ -718,8 +769,10 @@ test('historical share payload suppresses unrelated local layer preferences', as
   const coordinator = new LayerStateCoordinator(manager, shareSink(), { storage });
   await coordinator.start({ allowLocalState: false });
   assert.equal(coordinator.source, 'legacy-share');
-  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, []);
-  assert.equal(manager.getEnabledLayerIds().size, 0);
+  // Suppressed means the RECIPIENT's traffic/radio preferences never load — not
+  // that the room boots without its own cartography.
+  assert.deepEqual(coordinator.getDurableState().enabledLayerIds, ['datageo-municipios']);
+  assert.deepEqual([...manager.getEnabledLayerIds()], ['datageo-municipios']);
   assert.deepEqual(storage.writes, []);
   coordinator.destroy();
 });

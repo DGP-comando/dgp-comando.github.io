@@ -280,6 +280,92 @@ export function flyToPOI(viewer, cityId, poiIndex, options = {}) {
   });
 }
 
+/**
+ * Camera de um municipio do PR quando o poligono ainda nao carregou: raio
+ * tipico de um municipio paranaense (~1.000 km² ⇒ ~18 km de raio). E fallback,
+ * nao alvo — com o GeoJSON na mao usamos a BoundingSphere real da divisa.
+ */
+export const MUNICIPIO_FALLBACK_RADIUS_M = 18000;
+/**
+ * Folga em volta da divisa. Sem ela o municipio encosta nas bordas da tela e o
+ * contorno cyan — que e o ponto de "aproximar do municipio" — some no corte.
+ */
+export const MUNICIPIO_FRAMING_PADDING = 1.25;
+/**
+ * Inclinacao do enquadramento municipal. Quase de cima: a leitura aqui e
+ * cartografica (divisa + camadas tematicas dentro dela), nao arquitetonica, mas
+ * uma sobra de perspectiva mantem o relevo do Google 3D Tiles legivel.
+ */
+export const MUNICIPIO_VIEW_PITCH_DEG = -68;
+
+/**
+ * Enquadra um municipio inteiro.
+ *
+ * Range ZERO de proposito: com `HeadingPitchRange.range === 0` o Cesium calcula
+ * a distancia que faz a esfera caber no frustum atual, o que respeita a
+ * proporcao da janela — um municipio estreito no celular e um largo no monitor
+ * ficam ambos enquadrados. Fixar um range em metros so acertaria numa tela.
+ *
+ * @param {Cesium.Viewer} viewer
+ * @param {{lat: number, lon: number, boundingSphere?: Cesium.BoundingSphere|null}} target
+ * @param {{duration?: number, beforeFly?: Function, onStart?: Function, onComplete?: Function, onCancel?: Function}} [options]
+ * @returns {{targetPosition: Cesium.Cartesian3, boundingRadius: number, range: null, navigationMode: string}|false|typeof CANCELLED_SEARCH}
+ */
+export function flyToMunicipio(viewer, target, options = {}) {
+  const lat = Number(target?.lat);
+  const lon = Number(target?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  const {
+    duration = 3.0,
+    beforeFly = null,
+    onStart = null,
+    onComplete = null,
+    onCancel = null,
+  } = options;
+
+  const outline = target?.boundingSphere || null;
+  const center = outline
+    ? Cesium.Cartesian3.clone(outline.center, new Cesium.Cartesian3())
+    : Cesium.Cartesian3.fromDegrees(lon, lat, 0);
+  const radius = Math.max(
+    1,
+    (Number.isFinite(outline?.radius) && outline.radius > 0
+      ? outline.radius
+      : MUNICIPIO_FALLBACK_RADIUS_M) * MUNICIPIO_FRAMING_PADDING,
+  );
+
+  if (typeof beforeFly === 'function' && beforeFly() === false) return CANCELLED_SEARCH;
+  if (typeof onStart === 'function') {
+    try { onStart(); } catch { /* no-op */ }
+  }
+
+  viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(center, radius), {
+    offset: new Cesium.HeadingPitchRange(
+      0,
+      Cesium.Math.toRadians(MUNICIPIO_VIEW_PITCH_DEG),
+      0,
+    ),
+    duration: finitePositive(duration) || 3.0,
+    complete: () => {
+      if (typeof onComplete === 'function') {
+        try { onComplete(); } catch { /* no-op */ }
+      }
+    },
+    cancel: () => {
+      if (typeof onCancel === 'function') {
+        try { onCancel(); } catch { /* no-op */ }
+      }
+    },
+  });
+
+  return {
+    targetPosition: center,
+    boundingRadius: radius,
+    range: null,
+    navigationMode: 'municipio-overview',
+  };
+}
+
 const POI_STOPWORDS = new Set(['the', 'a', 'an', 'at', 'of', 'in', 'on', 'to']);
 /** Significant lowercased word set of a name (punctuation stripped, stopwords dropped). */
 function poiNameTokens(s) {

@@ -562,10 +562,11 @@
         <div class="location-city-row">
           <div id="location-pills" class="location-pills"></div>
           <div class="location-search-wrap">
-            <button id="search-toggle" class="search-toggle-btn" title="Search any location">
+            <button id="search-toggle" class="search-toggle-btn" title="Buscar município do Paraná ou qualquer local">
               <span>&#x1F50E;</span>
             </button>
-            <input type="text" id="location-search" placeholder="Search any location..." autocomplete="off" spellcheck="false" />
+            <input type="text" id="location-search" placeholder="Buscar município ou local..." autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="location-search-results" />
+            <ul id="location-search-results" class="location-search-results" role="listbox" aria-label="Municípios do Paraná" hidden></ul>
           </div>
         </div>
       </div>
