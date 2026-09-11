@@ -7,6 +7,18 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- A ficha municipal passa a mostrar o **VBP por hectare** ao lado da tendência
+  de valor: `VBP/ha: R$ 3.399/ha ▲ +14,2% 2024→2025 · 1.510 km²`. O denominador
+  é a **área total do município** (IBGE, Censo 2022), e não a área plantada,
+  porque metade do VBP do Paraná vem de criações que não declaram área nenhuma
+  (avicultura, bovinocultura, suinocultura, pesca) — dividir o VBP total por
+  área plantada poria frango e boi sobre hectare de lavoura. Como a área não
+  muda entre os dois anos, o percentual é por construção igual ao do valor; o
+  que o indicador acrescenta é o **nível**, que é o que permite comparar
+  municípios de tamanhos diferentes (Curitiba fica em R$ 297/ha, municípios
+  agrícolas intensivos passam de R$ 50 mil/ha).
+- `municipios-info.json` ganha `vbpHa` e `areaKm2` para os 399 municípios.
+
 - Nova camada **Precipitação** (classe Clima), irmã da camada de Ventos: as
   duas leem a MESMA grade Open-Meteo (22×15 sobre o Paraná, ~33 km, 30 min) na
   MESMA requisição, então a chuva não custa nenhum acesso a mais que o vento já

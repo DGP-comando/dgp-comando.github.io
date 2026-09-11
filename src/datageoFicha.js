@@ -55,6 +55,24 @@ const SECTIONS = [
           `<span class="fx-dim">(${fmtBRL(valB)})</span></div>`,
       );
     }
+    // Intensidade sobre o TERRITORIO. O denominador e a area total do
+    // municipio (IBGE), nao a area plantada, porque metade do VBP vem de
+    // criacoes que nao declaram area nenhuma. Como a area nao muda entre os
+    // dois anos, esta variacao e por construcao igual a do valor acima — o que
+    // esta linha acrescenta e o NIVEL, que e o que permite comparar
+    // municipios de tamanhos diferentes. Por isso o R$/ha vem primeiro.
+    if (info.vbpHa) {
+      const { anoA, anoB, valB, deltaPct } = info.vbpHa;
+      const up = deltaPct >= 0;
+      const area = Number(info.areaKm2) > 0
+        ? ` <span class="fx-dim">· ${Number(info.areaKm2).toLocaleString('pt-BR', { maximumFractionDigits: 0 })} km²</span>`
+        : '';
+      rows.push(
+        `<div>VBP/ha: <b>${fmtBRL(valB)}/ha</b> ` +
+          `<b class="${up ? 'fx-up' : 'fx-down'}">${up ? '▲ +' : '▼ '}${String(deltaPct).replace('.', ',')}%</b> ` +
+          `<span class="fx-dim">${esc(anoA)}→${esc(anoB)}</span>${area}</div>`,
+      );
+    }
     if (Array.isArray(info.produtos) && info.produtos.length) {
       const maior = info.produtos[0].valor || 1;
       rows.push('<div class="fx-sub">Top 3 produtos (2025)</div>');
