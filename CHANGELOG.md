@@ -7,6 +7,17 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Nova camada **Precipitação** (classe Clima), irmã da camada de Ventos: as
+  duas leem a MESMA grade Open-Meteo (22×15 sobre o Paraná, ~33 km, 30 min) na
+  MESMA requisição, então a chuva não custa nenhum acesso a mais que o vento já
+  pagava. O campo é desenhado como um manto contínuo por baixo dos riscos de
+  vento, com escala violeta→fúcsia escolhida para não colidir com o ciano das
+  partículas — inclusive sob daltonismo, que é onde as escalas claras falham.
+  Grade seca não pinta nada, e a linha do painel diz "sem chuva" para distinguir
+  isso de falha de carregamento. A legenda por classe de intensidade
+  (chuvisco/fraca/moderada/forte/muito forte, convenção horária WMO/INMET) vai
+  na própria linha do painel.
+
 - A busca da barra LOCALIZAÇÃO agora resolve os 399 municípios do Paraná
   localmente, antes de chamar o geocoder. Digitar parte do nome abre uma lista
   de sugestões (setas ↑/↓, Enter, Esc, clique), tolerante a acento, caixa e
