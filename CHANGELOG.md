@@ -7,6 +7,15 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Nova camada **Conectividade** (classe Infraestrutura), com as duas metades
+  que só fazem sentido juntas: **5.803 ERBs** coloridas pela geração mais alta
+  (5G/4G/3G/2G, com legenda e contagem na linha do painel) e o **negativo da
+  cobertura móvel** — os 132.692 km² do Paraná sem 3G ou superior, que é onde o
+  ParanáConectado precisa chegar. A linha do painel carrega a **data do
+  levantamento**, porque mapa de cobertura sem data engana mais do que informa.
+  Dados gerados por `scripts/build_conectividade.py` a partir do acervo do
+  IDR-Paraná sobre o licenciamento ANATEL.
+
 - A ficha municipal passa a mostrar o **VBP por hectare** ao lado da tendência
   de valor: `VBP/ha: R$ 3.399/ha ▲ +14,2% 2024→2025 · 1.510 km²`. O denominador
   é a **área total do município** (IBGE, Censo 2022), e não a área plantada,
