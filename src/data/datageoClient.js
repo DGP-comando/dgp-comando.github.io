@@ -246,16 +246,55 @@ export async function fetchLatestSituationalReport() {
   return rows.length > 0 ? rows[0] : null;
 }
 
+/** Recorte e resolucao da grade meteorologica compartilhada (vento + chuva). */
+export const WEATHER_GRID_BOUNDS = Object.freeze({
+  west: -55.0, south: -27.0, east: -48.0, north: -22.3,
+});
+export const WEATHER_GRID_WIDTH = 22;
+export const WEATHER_GRID_HEIGHT = 15;
 /**
- * Grade de vento a 10 m sobre o PR (Open-Meteo, gratuito e sem chave) no
- * formato do cesium-wind-layer: componentes u/v em Float32Array row-major,
- * linha 0 = SUL (flipY false, convencao default da lib).
- * Grade 22x15 (~0,33 graus) e suficiente para o efeito nullschool estadual.
+ * Janela do cache da grade. Menor que o updateInterval de 30 min das duas
+ * camadas que a consomem, entao cada ciclo de poll busca exatamente uma vez —
+ * e, no mesmo ciclo, a segunda camada reaproveita o resultado da primeira em
+ * vez de dobrar o trafego contra a Open-Meteo.
  */
-export async function fetchWindGrid() {
-  const bounds = { west: -55.0, south: -27.0, east: -48.0, north: -22.3 };
-  const width = 22;
-  const height = 15;
+const WEATHER_GRID_TTL_MS = 25 * 60_000;
+
+let _weatherGridCache = null; // { at, promise }
+
+/**
+ * Grade de vento a 10 m + precipitacao sobre o PR (Open-Meteo, gratuito e sem
+ * chave). Vento sai no formato do cesium-wind-layer: componentes u/v em
+ * Float32Array row-major, linha 0 = SUL (flipY false, convencao default da
+ * lib); `precip` acompanha a MESMA indexacao.
+ *
+ * Grade 22x15 (~0,33 graus, ~33 km) e suficiente para o efeito nullschool
+ * estadual. As duas variaveis viajam na MESMA requisicao — a lista `current=`
+ * da Open-Meteo aceita as tres de uma vez —, entao a chuva nao custa nenhum
+ * round-trip a mais que o vento ja pagava.
+ *
+ * A PROMESSA e memoizada (nao o valor), o que resolve de uma vez o cache por
+ * tempo e a deduplicacao de chamadas concorrentes: as duas camadas subindo
+ * juntas no boot compartilham um unico voo. Falha nunca e cacheada.
+ * @returns {Promise<{u: {array: Float32Array}, v: {array: Float32Array}, precip: Float32Array, width: number, height: number, bounds: object}>}
+ */
+export function fetchWeatherGrid() {
+  const now = Date.now();
+  if (_weatherGridCache && now - _weatherGridCache.at < WEATHER_GRID_TTL_MS) {
+    return _weatherGridCache.promise;
+  }
+  const promise = fetchWeatherGridUncached().catch((err) => {
+    _weatherGridCache = null;
+    throw err;
+  });
+  _weatherGridCache = { at: now, promise };
+  return promise;
+}
+
+async function fetchWeatherGridUncached() {
+  const bounds = { ...WEATHER_GRID_BOUNDS };
+  const width = WEATHER_GRID_WIDTH;
+  const height = WEATHER_GRID_HEIGHT;
   const lats = [];
   const lons = [];
   for (let j = 0; j < height; j++) {
@@ -269,13 +308,15 @@ export async function fetchWindGrid() {
 
   const u = new Float32Array(width * height);
   const v = new Float32Array(width * height);
+  // Precipitacao acumulada na hora anterior, em mm (Open-Meteo `precipitation`).
+  const precip = new Float32Array(width * height);
   const chunk = 110;
   for (let start = 0; start < lats.length; start += chunk) {
     const la = lats.slice(start, start + chunk).join(',');
     const lo = lons.slice(start, start + chunk).join(',');
     const resp = await fetch(
       `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}` +
-        '&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms',
+        '&current=wind_speed_10m,wind_direction_10m,precipitation&wind_speed_unit=ms',
       { signal: AbortSignal.timeout(20_000) },
     );
     if (!resp.ok) throw new Error(`Open-Meteo HTTP ${resp.status}`);
@@ -288,10 +329,20 @@ export async function fetchWindGrid() {
       // Direcao meteorologica = de onde o vento VEM.
       u[idx] = -speed * Math.sin(dir);
       v[idx] = -speed * Math.cos(dir);
+      const mm = Number(pt?.current?.precipitation);
+      precip[idx] = Number.isFinite(mm) && mm > 0 ? mm : 0;
     });
   }
 
-  return { u: { array: u }, v: { array: v }, width, height, bounds };
+  return { u: { array: u }, v: { array: v }, precip, width, height, bounds };
+}
+
+/**
+ * Nome historico da grade, mantido porque a camada de ventos fala por ele.
+ * @returns {Promise<object>}
+ */
+export function fetchWindGrid() {
+  return fetchWeatherGrid();
 }
 
 /** Embarcacoes AIS das ultimas 24 h (posicao mais recente por MMSI). */
