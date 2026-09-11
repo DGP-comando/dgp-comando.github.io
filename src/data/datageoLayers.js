@@ -31,6 +31,7 @@ import { centroidByIbge, centroidByName } from './prCentroids.js';
 import { datageoMunicipiosLayer } from './datageoMunicipios.js';
 import { datageoVentosLayer } from './datageoVentos.js';
 import { datageoPrecipitacaoLayer } from './datageoPrecipitacao.js';
+import { datageoConectividadeLayer } from './datageoConectividade.js';
 import { datageoRodoviasLayer } from './datageoRodovias.js';
 import { DATAGEO_LOGISTICA_LAYERS } from './datageoLogistica.js';
 import { DATAGEO_ENERGIA_LAYERS } from './datageoEnergia.js';
@@ -753,6 +754,7 @@ export const DATAGEO_LAYERS = [
   datageoRodoviasLayer,
   ...DATAGEO_ENERGIA_LAYERS,
   ...DATAGEO_LOGISTICA_LAYERS,
+  datageoConectividadeLayer,
   // Chuva antes de vento: as duas leem a mesma grade Open-Meteo e o campo de
   // precipitacao e o fundo sobre o qual os riscos de vento sao lidos.
   datageoPrecipitacaoLayer,
