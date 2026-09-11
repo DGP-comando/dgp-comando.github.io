@@ -6,6 +6,128 @@
 
 ---
 
+## Sessão 2026-09-11: municípios como piso, busca por município, precipitação, VBP/ha e conectividade
+
+Quatro entregas, todas commitadas e no ar (`19c208d` → `1d4c263` → `61cdbbe` →
+`355a878`). Cada uma revelou defeito real; o que quebrou está em Pegadinhas.
+
+### 1. Municípios sempre ativos + busca por município (commit `19c208d`)
+- **Piso de camadas** (`BASELINE_LAYER_IDS` em layerState.js): não existia
+  mecanismo de "camada padrão ligada" — num boot limpo `start()` retornava
+  cedo e NENHUMA camada subia. O piso é aplicado uma vez em `start()`, e
+  deliberadamente NÃO dentro de `normalizeLayerState`: o estado durável
+  precisa continuar capaz de dizer "desligada", senão o toggle mentiria no
+  localStorage e no share link. Só o próximo boot religa.
+- `_restoreBaselineLayers()` é estreito de propósito: liga só o piso, sem
+  tocar em nenhuma outra camada nem empurrar params, preservando o contrato
+  de que num boot limpo os inicializadores dos módulos são a verdade (o
+  invariante do `models3d`).
+- **Busca local dos 399** (`src/municipioSearch.js`, módulo puro): resolve o
+  nome contra `prCentroids` ANTES do geocoder. O código IBGE que ela devolve
+  é o que abre a ficha — o geocoder devolvia ponto sem identidade e por isso
+  nunca conseguiu abrir a aba certa. Tolerante a acento, caixa, conectivo
+  ("sao jorge do oeste" acha "São Jorge d'Oeste") e sufixo de UF.
+- Escolher um município enquadra a câmera na **divisa real** do polígono
+  (BoundingSphere unida por CD_MUN, então ilha de Paranaguá entra no
+  enquadramento) e abre a ficha.
+
+### 2. Camada de precipitação irmã da de ventos (commit `1d4c263`)
+- As duas leem a MESMA grade Open-Meteo 22x15 na MESMA requisição: a lista
+  `current=` já aceitava `precipitation` junto com vento. `fetchWindGrid`
+  virou `fetchWeatherGrid` com a PROMESSA memoizada (TTL 25 min contra
+  updateInterval de 30), o que resolve cache e dedup de concorrentes de uma
+  vez. Medido em browser: 3 requisições com as duas ligadas, não 6.
+- Render: retângulo comum a altura fixa (90 m) com textura de canvas, ABAIXO
+  das partículas de vento (120 m); há teste travando essa relação porque as
+  duas constantes moram em arquivos diferentes.
+- Escala violeta→fúcsia que PARA em `#e879f9`. Violetas claros colapsam
+  contra o ciano do vento sob protanopia/deuteranopia (ΔE 3-4), justamente
+  no topo da escala. A magnitude acima do meio é carregada pelo ALPHA, não
+  pelo brilho. O teto também evita o `#c084fc` dos quilombolas.
+
+### 3. VBP por hectare na ficha (commit `61cdbbe`)
+- Denominador = **área total do município** (IBGE agregado 4714, variável
+  6318, Censo 2022), decisão do Avner e correta: metade do VBP do PR vem de
+  criações que não declaram área NENHUMA (avicultura R$ 52 bi,
+  bovinocultura R$ 32 bi, suinocultura R$ 14 bi). Só 47% do VBP tem área.
+- Consequência registrada em teste: área é fixa entre 24 e 25, então a
+  variação do R$/ha é IGUAL à do valor. Os dois +14,2% lado a lado não são
+  bug — o que o indicador acrescenta é o NÍVEL (Curitiba R$ 297/ha,
+  agrícolas intensivos > R$ 50 mil/ha).
+
+### 4. Camada de Conectividade (commit `355a878`)
+- 5.803 ERBs por geração mais alta (5G 816 · 4G 4.5K · 3G 407 · 2G 94) +
+  o NEGATIVO da cobertura: 132.692 km² sem 3G+, 67% do estado.
+- `scripts/build_conectividade.py` converte o acervo do IDR
+  (`H:\IDR-PARANA\renovaPR\Conectividade`). Simplificação roda ANTES da
+  reprojeção para a tolerância estar em metros; 600 m leva 7,3 MB → 2,6 MB
+  mexendo +1,3% na área, e fragmentos < 0,5 km² saem.
+- A DATA do levantamento vai na linha do painel ("levantamento 2024-01"),
+  com teste travando o campo nos dois arquivos.
+
+### Pegadinhas descobertas (economizam horas na próxima sessão)
+- **`overflow` recorta dropdown que abre para CIMA**: `#command-dock
+  .location-city-row` tinha `overflow: hidden`, e a lista de sugestões era
+  montada, marcada visible, respondia às setas — e não pintava um pixel,
+  com o clique atravessando para o globo. **`overflow-x: clip` NÃO resolve**:
+  medido em Chrome real a 1440 e 390 px, a lista continua fora do hit-test.
+  Só `overflow: visible`. Achado por revisão adversarial, não pelo meu
+  smoke test — que passou porque eu dirigia o DOM por script em vez de
+  clicar de verdade.
+- **Popover do dock nasce fora da borda esquerda em tela estreita** (a 390 px
+  a `.location-city-row` começa em x=-36), então qualquer coisa ancorada
+  nela herda o deslocamento. A lista agora é presa ao viewport ao abrir.
+- **Imagery layer está MORTA no stack photoreal**: `globe.show = false` e o
+  `Globe.render()` do Cesium retorna cedo, então `imageryLayers` não desenha
+  nada. Retângulo texturizado grudado no terreno também não serve: o próprio
+  Cesium desaconselha e degrada EM SILÊNCIO para cor chapada sem a extensão
+  WebGL. Retângulo comum a altura fixa é o caminho sem armadilha.
+- **Partículas de vento não renderizam em automação**: nem headless com
+  SwiftShader, nem aba em segundo plano com `viewer.render()` forçado (o
+  rAF estrangulado dá dt≈0 e a advecção não anda). Elas somem MESMO com a
+  precipitação desligada, então some ≠ oclusão. O par vento+chuva continua
+  sem conferência visual.
+- **API do IBGE responde gzip sem pedir** e o `urllib` não desempacota:
+  `json.loads` morre com "can't decode byte 0x8b". `fetch()` do gerador
+  agora trata Content-Encoding.
+- **Falha do TSE APAGAVA o prefeito**, em silêncio: o gerador só acrescenta
+  quem responde. Agora o JSON anterior preenche as lacunas. Já valeu nesta
+  rodada (um 404, zero prefeitos perdidos).
+- **Caminho fixo em `C:`**: o `GH` do build_municipios_info apontava para
+  `C:/Users/avner/...` e o checkout vive em `E:`. Agora é derivado da posição
+  do próprio arquivo.
+- **Área com valor ZERO na base do VBP**: "Pastagens E Forragens" (4,2 mi ha)
+  e "MATA NATIVA" (3,1 mi ha) são inventário de uso do solo, não produção.
+  Entram no denominador se você somar `ar` sem filtrar por `v > 0`.
+- **First-run launcher tapa o dock** numa sessão virgem: em automação,
+  `localStorage['gev:first-run-mission:v1'] = 'suppressed'` ANTES do boot
+  (`evaluateOnNewDocument`), senão `elementFromPoint` devolve o `<aside>`.
+- **Git não está no PATH** desta máquina; o binário utilizável é o do
+  GitHub Desktop (`...\GitHubDesktop\app-*\resources\app\git\cmd\git.exe`).
+  Não havia `user.name`/`user.email` — foram gravados com `--local`.
+- **Interceptação de request no puppeteer precisa devolver CORS**: a resposta
+  sintética sem `Access-Control-Allow-Origin` é bloqueada, e o sintoma
+  ("Failed to fetch") parece bug do produto.
+
+### Estado ao fim da sessão
+- 4 commits, todos com push para `origin/main`. Testes: 2623, 2572 passando.
+  As 51 falhas são as MESMAS de antes da sessão (baseline 2587/2536/51) —
+  nenhuma nova. Build limpo.
+- Tokens de share link usados nesta sessão: `C` (precipitação), `D`
+  (conectividade). Livres a partir de `E`.
+- **Pendências**: (a) conferir vento + precipitação juntos na tela;
+  (b) `particleHeight: 120` do vento é altura absoluta com teste de
+  profundidade e o relevo do PR chega a 1877 m — no keyless/Esri o terreno é
+  plano e não aparece, com tiles 3D o vento provavelmente está enterrado;
+  (c) dado ANATEL mais novo que 2024-01 (dados.gov.br exige chave, Mosaico é
+  UI em JS, caminhos de dados abertos dão 404); (d) `.pyc` commitado por
+  engano em `scripts/__pycache__/build_energia.cpython-312.pyc`;
+  (e) `layerState.test.mjs:158` afirma 16 camadas e o fork tem 39 — corrigir
+  expõe a asserção de ordenação logo abaixo, que mudaria a ordem canônica
+  dos tokens; (f) `docs/CURRENT-STATE.md` segue 100% upstream, sem DataGeo.
+
+---
+
 ## Sessão "gev" (continuação) — 2026-08-26: usinas, TIs e quilombolas
 
 - **Usinas de energia (token 0, Infraestrutura)**: SIGEL/ANEEL do projeto
