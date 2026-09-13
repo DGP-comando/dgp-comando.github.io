@@ -539,6 +539,15 @@ export function fetchWindGrid() {
   return fetchWeatherGrid();
 }
 
+/**
+ * Line-up da APPA (payload do job etl-lineup-appa em data_cache). Devolve o
+ * payload bruto; validacao de versao/idade em portLineup.validLineup.
+ */
+export async function fetchPortLineup() {
+  const row = await dgCache('appa_lineup_pr', { ttlMs: DATAGEO_TTL.layer });
+  return row?.data ?? null;
+}
+
 /** Embarcacoes AIS das ultimas 24 h (posicao mais recente por MMSI). */
 export async function fetchVessels() {
   const since = isoZ(new Date(Date.now() - 24 * 3600_000));

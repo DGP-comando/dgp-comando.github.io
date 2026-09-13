@@ -26,7 +26,9 @@ import {
   fetchActiveIncidents,
   fetchInfohidroStations,
   fetchVessels,
+  fetchPortLineup,
 } from './datageoClient.js';
+import { lineupEntityRows, validLineup } from './portLineup.js';
 import { centroidByIbge, centroidByName } from './prCentroids.js';
 import { applyIdRefresh } from './entityDiff.js';
 import { highlightNewArrivals } from './newArrivalHighlight.js';
@@ -741,29 +743,71 @@ export const datageoInfohidroLayer = createDatageoLayer({
 });
 
 // --------------------------------------------------------------------------
-// Maritimo — AIS das ultimas 24 h (maritime_traffic do c2)
+// Maritimo — line-up da APPA + AIS das ultimas 24 h
 // --------------------------------------------------------------------------
 //
-// FONTE HOJE INATIVA: a conta AISStream do c2 esta cortada desde 2026-08-02
-// (o etl-maritimo coleta zero com subscription aceita — diagnostico no plano
-// de migracao do c2). A camada le maritime_traffic com janela ESTRITA de
-// 24 h — plotar navio de dias atras como se fosse posicao atual seria
-// desinformacao — entao ela mostra 0 ate a conta ser reativada
-// (aisstream.io -> supabase secrets set AISSTREAM_API_KEY -> reagendar o
-// cron do etl-maritimo). Quando a fonte voltar, os navios aparecem aqui
-// sem mudanca de codigo.
+// FONTE PRINCIPAL: line-up oficial dos Portos de Paranagua e Antonina
+// (etl-lineup-appa no c2, data_cache appa_lineup_pr). Navio atracado vai no
+// berco (coordenada aproximada do OSM) e navio ao largo numa area de fundeio
+// (posicao ILUSTRATIVA, o rotulo diz). Ver src/data/portLineup.js.
+//
+// AIS (maritime_traffic): a AISStream nao tem cobertura de receptores na
+// costa do PR (diagnostico 2026-09-13: ~1 mensagem em 120 s na bbox). A
+// camada continua lendo a janela ESTRITA de 24 h e soma os navios AIS se a
+// cobertura voltar; navio de dias atras nunca e plotado como posicao atual.
+
+const LINEUP_BERTH_COLOR = Cesium.Color.fromCssColorString('#fbbf24').withAlpha(0.95);
+const LINEUP_ANCHOR_COLOR = Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.9);
+// Berços a ~180 m: acima de ~3,5 km os rótulos viram uma faixa ilegível.
+const LINEUP_LABEL_MAX_DISTANCE = 3_500;
+
+async function fetchMaritimo() {
+  const [lineup, ais] = await Promise.allSettled([fetchPortLineup(), fetchVessels()]);
+  const payload = lineup.status === 'fulfilled' ? validLineup(lineup.value) : null;
+  const vessels = ais.status === 'fulfilled' ? ais.value : [];
+  // Sem nenhuma das duas fontes o erro aparece no painel em vez de "0" mudo.
+  if (!payload && vessels.length === 0) {
+    if (lineup.status === 'rejected') throw lineup.reason;
+    if (ais.status === 'rejected') throw ais.reason;
+  }
+  return { lineup: payload, vessels };
+}
 
 export const datageoMaritimoLayer = createDatageoLayer({
   id: 'datageo-maritimo',
-  name: 'Embarcações (AIS)',
+  name: 'Navios (Porto de Paranaguá)',
   category: 'Infraestrutura',
   icon: '🚢',
-  source: 'AISStream · DataGeo PR',
+  source: 'APPA line-up · AISStream',
   updateInterval: 600_000,
-  fetcher: fetchVessels,
-  build(rows, entities) {
+  fetcher: fetchMaritimo,
+  build({ lineup, vessels }, entities) {
     let count = 0;
-    for (const row of rows) {
+    for (const row of lineupEntityRows(lineup)) {
+      const atracado = row.kind === 'berco';
+      entities.add({
+        id: `datageo-maritimo:${row.id}`,
+        position: Cesium.Cartesian3.fromDegrees(row.lon, row.lat),
+        point: {
+          pixelSize: atracado ? 9 : 7,
+          color: atracado ? LINEUP_BERTH_COLOR : LINEUP_ANCHOR_COLOR,
+          outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
+          outlineWidth: 1,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          ...labelGraphics(row.label, {
+            maxDistance: LINEUP_LABEL_MAX_DISTANCE,
+            pixelOffsetY: row.labelAbove ? -22 : 26,
+          }),
+          font: '11px "JetBrains Mono", monospace',
+        },
+        properties: row.props,
+      });
+      count++;
+    }
+    for (const row of vessels) {
       const lat = Number(row.latitude);
       const lon = Number(row.longitude);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
