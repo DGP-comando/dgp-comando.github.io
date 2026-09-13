@@ -65,6 +65,7 @@ Static datasets shipped in the repo for an out-of-the-box experience. **None are
 | **TeleGeography Submarine Cable Map** (712 cables + 1,917 landing points) | `telegeography_submarine_cables/` | **CC BY-NC-SA 3.0** | ❌ **NonCommercial — remove for commercial use** | "© TeleGeography — submarinecablemap.com" |
 | **Natural Earth physical regions** (1,046 land + 292 marine named polygons) | `natural_earth/` | **Public domain** | ✅ (no restrictions) | "Made with Natural Earth" (courtesy credit — not legally required) |
 | **DataSF Analysis Neighborhoods** (41 SF neighborhood polygons) | `neighborhoods/` | **PDDL 1.0** (public domain) | ✅ (no restrictions) | "City & County of San Francisco — DataSF" (courtesy — not legally required) |
+| **BR-DWGD clima histórico PR** (normal 1990–2019, indicadores e séries 1961–2022, 399 municípios + grade 0,1°) | `public/data/clima-historico-*.json` (gerado por `scripts/build_clima_brdwgd.py`; contrato em `docs/CLIMA_BRDWGD.md`) | **CC BY 4.0** | ✅ (attribution) | Xavier, Scanlon, King & Alves (2022), *Int. J. Climatol.* 42(16), doi:10.1002/joc.7731 — registrado em `dataCredits.js` (`br-dwgd`) |
 
 ### ⚠️ TeleGeography is bundled but NonCommercial
 

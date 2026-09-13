@@ -95,6 +95,13 @@ export const DATA_CREDITS = [
       '(CC BY 4.0)',
   },
   {
+    key: 'br-dwgd',
+    html:
+      'Clima histórico 1961–2022 (camada e ficha municipal): BR-DWGD, Xavier, Scanlon, King &amp; Alves (2022), ' +
+      '<a href="https://doi.org/10.1002/joc.7731" target="_blank" rel="noopener">Int. J. Climatol. 42(16)</a> ' +
+      '(CC BY 4.0), via <a href="https://gee-community-catalog.org/projects/br_dwgd/" target="_blank" rel="noopener">awesome-gee-community-catalog</a>',
+  },
+  {
     key: 'google-news-rss',
     html:
       'Cockpit regional headlines: ' +
