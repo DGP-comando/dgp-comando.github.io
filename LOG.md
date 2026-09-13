@@ -6,6 +6,54 @@
 
 ---
 
+## Sessão 2026-09-13 (noite): camada de navios passa a usar o line-up da APPA
+
+Sintoma: a camada marítima nunca mostrava navios. `maritime_traffic` tinha 52
+linhas, a última de 2026-08-02.
+
+### Diagnóstico (via `supabase db query` + modo dry run do etl-maritimo)
+- Conta AISStream OK: bbox mundial deu 2.794 mensagens em 30 s.
+- Bbox do Paraná: ~1 mensagem em 120 s. Falta cobertura de receptores AIS na
+  costa do PR; as linhas antigas eram da costa de SP (lon −45).
+- Bug extra na Edge Function (não afetava a produção, que roda o Python): a
+  AISStream manda quadros binários e o `binaryType` padrão do Deno é `blob`;
+  100% das mensagens viravam parse_error. Corrigido no c2 (`af2bb1b`).
+
+### Solução
+- **c2-parana `c0610a4`:** Edge Function `etl-lineup-appa` + migration 043
+  (pg_cron `12,42 * * * *`). Lê o relatório público
+  `appaweb.appa.pr.gov.br/...relLineUpRetroativo` (tabelas com rowspan; navio
+  com vários operadores é agrupado pela programação) e grava
+  `data_cache.appa_lineup_pr` (~37 KB): atracados com posição no berço,
+  ao largo em área de fundeio, resumos de programados e próximos esperados.
+- **Posições:** o relatório não tem coordenadas. Berços 201-219 distribuídos
+  na face do cais comercial (OSM relation 7714317), 141-144 no píer de
+  inflamáveis, 200/200A na FOSPAR, 113/114 na Ponta do Félix; fundeadouros
+  pelos centróides das áreas `seamark:type=anchorage`. Navio ao largo é
+  rotulado "posição ilustrativa".
+- **DGP:** `src/data/portLineup.js` (puro, testado) + camada
+  `datageo-maritimo` renomeada "Navios (Porto de Paranaguá)": atracados em
+  âmbar no berço, ao largo em cinza; rótulos de 2 linhas só abaixo de 3,5 km,
+  alternando acima/abaixo (berços a ~180 m). AIS de 24 h continua somando se
+  a cobertura voltar. Payload com mais de 3 h não é desenhado.
+
+### Resultado
+- Primeiro run agendado (23:42 UTC): success, 16 atracados + 31 ao largo
+  posicionados, nenhum berço sem coordenada. E2E local: 47 navios, pontos
+  sobre os navios visíveis na imagem de satélite do cais.
+- Testes DGP: 2739, mesmas 51 falhas pré-existentes.
+
+### Pegadinhas
+- `npx tsc` no c2 resolve para um shim que chama `deno`; usar
+  `node node_modules/typescript/bin/tsc`.
+- O deploy do front do c2 falha em "Unit tests" desde 2026-08-26
+  (`tests/types/index.test.ts`, PLAN_FEATURES): nada do front do c2 publica
+  até corrigir. Edge Functions não dependem disso (deploy via CLI).
+- A emissão do line-up está em horário de Brasília (conferido contra o
+  header `Date`).
+
+---
+
 ## Sessão 2026-09-13 (tarde): ventos e precipitação param por cota da Open-Meteo
 
 Sintoma: as duas camadas ficaram "INDISPONÍVEL · Open-Meteo HTTP 503".

@@ -49,6 +49,14 @@ export const DATA_CREDITS = [
       '<a href="https://aisstream.io" target="_blank" rel="noopener">AISStream.io</a>',
   },
   {
+    key: 'appa-lineup',
+    html:
+      'Navios em Paranaguá e Antonina: line-up da ' +
+      '<a href="https://www.portosdoparana.pr.gov.br/Pagina/Tempo-Real" target="_blank" rel="noopener">Portos do Paraná (APPA)</a>; ' +
+      'posição aproximada dos berços e fundeadouros: © colaboradores do ' +
+      '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> (ODbL)',
+  },
+  {
     key: 'celestrak',
     html:
       'Satellites (TLEs): CelesTrak ' +

@@ -21,6 +21,7 @@ How to read this:
 | **adsb.lol point API** | Bounded live-flight fallback when OpenSky has no usable snapshot | ODbL 1.0 | adsb.lol contributors; `api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{radius}` |
 | **adsb.lol** | Military flights + aircraft traces | ODbL 1.0 | "adsb.lol" (ODbL) |
 | **AISStream.io** | Live vessels (AIS) | Free, beta, no formal ToS; AIS is a public broadcast | "AISStream.io" (courtesy) |
+| **Portos do Paraná (APPA) · line-up** | Navios atracados, ao largo, programados e esperados em Paranaguá/Antonina (via etl-lineup-appa → data_cache `appa_lineup_pr`) | Relatório público do governo do PR | "Portos do Paraná (APPA)"; posições de berços e fundeadouros derivadas do OpenStreetMap (ODbL) |
 | **CelesTrak** | Satellite TLEs (SGP4) | US-government-origin data, no license; citation requested | "CelesTrak (celestrak.org), Dr. T.S. Kelso" |
 | **The Space Devs — Launch Library 2 v2.3** | Recent launch, payload, stage, and recovery metadata for Space Missions (30d) | [The Space Devs terms of use](https://github.com/TheSpaceDevs/Tutorials/blob/main/faqs/faq_TSD.md#terms-of-use): data may be used and shared in any form; avoid forwarding it without added value; attribution is encouraged (not mandatory). [Official API limits](https://ll.thespacedevs.com/docs/): 15 unauthenticated calls/hour; optional token | "Launch Library 2 — The Space Devs" (courtesy attribution) |
 | **USGS** | Earthquakes | U.S. public domain | "Data courtesy of the U.S. Geological Survey" |
