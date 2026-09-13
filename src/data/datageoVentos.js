@@ -74,7 +74,8 @@ export const datageoVentosLayer = (() => {
       try {
         _data = await fetchWindGrid();
         ensureLayer();
-        _lastUpdate = Date.now();
+        // Hora do DADO, nao do poll: a grade pode vir do localStorage.
+        _lastUpdate = Number.isFinite(_data.fetchedAt) ? _data.fetchedAt : Date.now();
         _lastError = null;
         console.log(
           `[Data:datageo-ventos] grade ${_data.width}x${_data.height} atualizada`,
@@ -101,6 +102,7 @@ export const datageoVentosLayer = (() => {
         count: _data ? _data.width * _data.height : 0,
         lastUpdate: _lastUpdate,
         error: _lastError,
+        source: _data?.stale ? 'Open-Meteo · grade salva (API indisponível)' : 'Open-Meteo',
       };
     },
   };

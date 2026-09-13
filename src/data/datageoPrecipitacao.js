@@ -114,6 +114,7 @@ export const datageoPrecipitacaoLayer = (() => {
   let _enabled = false;
   let _lastUpdate = null;
   let _lastError = null;
+  let _stale = false;
   let _tally = { counts: {}, wet: 0, maxMm: 0 };
   // A linha do painel se repinta a cada segundo; a legenda tem que ser O(1).
   let _legend = [];
@@ -179,7 +180,9 @@ export const datageoPrecipitacaoLayer = (() => {
       try {
         const grid = await fetchWeatherGrid();
         renderField(grid);
-        _lastUpdate = Date.now();
+        // Hora do DADO, nao do poll: a grade pode vir do localStorage.
+        _lastUpdate = Number.isFinite(grid.fetchedAt) ? grid.fetchedAt : Date.now();
+        _stale = grid.stale === true;
         _lastError = null;
         governorRequestRender('datageo-precipitacao');
         console.log(
@@ -214,9 +217,13 @@ export const datageoPrecipitacaoLayer = (() => {
         lastUpdate: _lastUpdate,
         error: _lastError,
         // Distingue "nao choveu" de "nao carregou" na propria linha do painel.
-        source: _lastUpdate && _tally.wet === 0
-          ? `Open-Meteo · sem chuva ≥ ${String(PRECIP_FLOOR_MM).replace('.', ',')} mm/h`
-          : 'Open-Meteo',
+        source: [
+          'Open-Meteo',
+          _stale ? 'grade salva (API indisponível)' : null,
+          _lastUpdate && _tally.wet === 0
+            ? `sem chuva ≥ ${String(PRECIP_FLOOR_MM).replace('.', ',')} mm/h`
+            : null,
+        ].filter(Boolean).join(' · '),
       };
     },
   };
