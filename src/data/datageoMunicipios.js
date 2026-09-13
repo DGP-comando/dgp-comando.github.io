@@ -12,11 +12,22 @@
 // Interacao: poligonos clamped no terreno com fill quase invisivel (so para
 // picking); MOUSE_MOVE com throttle destaca o municipio sob o cursor e
 // posiciona um tooltip DOM junto ao mouse. O handler e proprio da camada e
-// ignora entidades de outras fontes, entao nao conflita com o picking
+// ignora picks de outras fontes, entao nao conflita com o picking
 // nativo do GEV (avioes, focos etc.).
+//
+// Performance (camada sempre ligada): os 399 poligonos sao UM GroundPrimitive
+// com um GeometryInstance por municipio (id `datageo-muni:<n>`), e as bordas
+// sao UM GroundPolylinePrimitive sem picking. O hover troca so o atributo de
+// cor da instancia (getGeometryInstanceAttributes), em vez de trocar o
+// material de uma entidade, o que forcava o Cesium a refazer o lote inteiro
+// de poligonos clamped a cada municipio sobrevoado. O pick do hover nao roda
+// com a camera em movimento nem sem o mouse ter mudado de posicao. Sem suporte
+// a ground primitives, cai no caminho antigo de entidades (visual identico).
 
 import * as Cesium from 'cesium';
 import { openFicha } from '../datageoFicha.js';
+import { governorRequestRender } from '../renderGovernor.js';
+import { createReadyPump } from './entityDiff.js';
 
 const GEOJSON_URL = '/data/municipios-pr.geojson';
 const INFO_URL = '/data/municipios-info.json';
@@ -110,7 +121,45 @@ function tooltipHtml(nome, info) {
   return lines.join('<br/>').replace('<br/><div class="mt-fontes">', '<div class="mt-fontes">');
 }
 
+/**
+ * Poligonos (anel externo + buracos) de uma geometria GeoJSON Polygon ou
+ * MultiPolygon, descartando aneis externos inutilizaveis. Puro.
+ * @param {object|null|undefined} geometry
+ * @returns {Array<Array<Array<[number, number]>>>}
+ */
+export function municipioPolygons(geometry) {
+  if (!geometry) return [];
+  const polys = geometry.type === 'Polygon'
+    ? [geometry.coordinates]
+    : geometry.type === 'MultiPolygon' ? geometry.coordinates : [];
+  return (polys ?? []).filter((rings) => Array.isArray(rings?.[0]) && rings[0].length >= 3);
+}
+
+const INSTANCE_PREFIX = 'datageo-muni:';
+
+function ringToCartesians(ring) {
+  const flat = new Array(ring.length * 2);
+  for (let i = 0; i < ring.length; i++) {
+    flat[i * 2] = ring[i][0];
+    flat[i * 2 + 1] = ring[i][1];
+  }
+  return Cesium.Cartesian3.fromDegreesArray(flat);
+}
+
 export function createDatageoMunicipiosLayer() {
+  // 'primitives' (padrao) ou 'entities' (fallback sem ground primitives).
+  let _mode = null;
+  let _viewer = null;
+  // Incrementa a cada destroy; cargas assincronas comparam para abortar.
+  let _generation = 0;
+  // Caminho em lote.
+  let _collection = null;
+  let _fillPrimitive = null;
+  let _borderPrimitive = null;
+  let _pump = null;
+  // instance id -> { ibge, nome }
+  let _instances = new Map();
+  // Caminho de entidades.
   let _dataSource = null;
   let _info = null;
   let _infoPromise = null;
@@ -121,8 +170,15 @@ export function createDatageoMunicipiosLayer() {
   let _handler = null;
   let _tooltip = null;
   let _enabled = false;
+  // Hover corrente: { key, ibge, nome, entity? } ou null.
   let _hovered = null;
   let _lastMove = 0;
+  let _pointer = null; // ultima posicao do mouse (Cartesian2)
+  let _pickedPointer = null; // posicao do ultimo pick efetivo
+  let _trailingPick = null;
+  let _cameraMoving = false;
+  let _removeMoveStart = null;
+  let _removeMoveEnd = null;
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
@@ -152,47 +208,309 @@ export function createDatageoMunicipiosLayer() {
     return _infoPromise;
   }
 
+  function isLoaded() {
+    return _mode === 'primitives' ? Boolean(_fillPrimitive) : Boolean(_dataSource);
+  }
+
+  function requestFrame(reason) {
+    governorRequestRender(`datageo-municipios:${reason}`);
+  }
+
+  function setShow(show) {
+    if (_dataSource) _dataSource.show = show;
+    if (_collection && !_collection.isDestroyed?.()) _collection.show = show;
+    if (show && _mode === 'primitives') _pump?.start();
+    else _pump?.stop();
+  }
+
+  /**
+   * Municipio sob um resultado de scene.pick, independente do caminho.
+   * @returns {{key: *, ibge: string, nome: string, entity?: object}|'border'|null}
+   */
+  function municipioFromPick(picked) {
+    if (!picked) return null;
+    if (_mode === 'primitives') {
+      const key = picked.id;
+      if (picked.primitive !== _fillPrimitive || typeof key !== 'string') return null;
+      const meta = _instances.get(key);
+      return meta ? { key, ibge: meta.ibge, nome: meta.nome } : null;
+    }
+    const entity = picked.id;
+    const fromThisSource = entity && _dataSource && entity.entityCollection?.owner === _dataSource;
+    if (!fromThisSource) return null;
+    // Sobre a linha da divisa o pick devolve a borda, nao o poligono.
+    if (!entity.polygon) return 'border';
+    const nowJ = Cesium.JulianDate.now();
+    return {
+      key: entity,
+      entity,
+      ibge: String(entity.properties?.CD_MUN?.getValue(nowJ) ?? ''),
+      nome: entity.properties?.NM_MUN?.getValue(nowJ) ?? '',
+    };
+  }
+
+  function paintHover(target, on) {
+    if (!target) return;
+    const color = on ? HOVER_COLOR : IDLE_COLOR;
+    if (target.entity) {
+      if (target.entity.polygon) target.entity.polygon.material = new Cesium.ColorMaterialProperty(color);
+      return;
+    }
+    if (!_fillPrimitive || _fillPrimitive.isDestroyed?.() || !_fillPrimitive.ready) return;
+    try {
+      const attributes = _fillPrimitive.getGeometryInstanceAttributes(target.key);
+      if (attributes) {
+        attributes.color = Cesium.ColorGeometryInstanceAttribute.toValue(color, attributes.color);
+      }
+    } catch (err) {
+      console.warn('[Data:datageo-municipios] hover:', err);
+    }
+  }
+
   function clearHover() {
     if (_hovered) {
-      _hovered.polygon.material = new Cesium.ColorMaterialProperty(IDLE_COLOR);
+      paintHover(_hovered, false);
       _hovered = null;
+      requestFrame('hover');
     }
     if (_tooltip) _tooltip.style.display = 'none';
   }
 
-  function onMouseMove(viewer, movement) {
-    if (!_enabled || !_dataSource) return;
-    const now = performance.now();
-    if (now - _lastMove < HOVER_THROTTLE_MS) return;
-    _lastMove = now;
+  function positionTooltip(position) {
+    if (!_tooltip || !position) return;
+    _tooltip.style.display = 'block';
+    _tooltip.style.left = `${position.x + 16}px`;
+    _tooltip.style.top = `${position.y + 12}px`;
+  }
 
-    const picked = viewer.scene.pick(movement.endPosition);
-    const entity = picked?.id;
-    const fromThisSource = entity && entity.entityCollection?.owner === _dataSource;
-    // Sobre a linha da divisa o pick devolve a borda, nao o poligono:
-    // manter o hover corrente em vez de piscar o tooltip.
-    if (fromThisSource && !entity.polygon) return;
-    const isOurs = fromThisSource && entity.polygon;
+  function runHoverPick(viewer) {
+    if (!_enabled || !isLoaded() || !_pointer || _cameraMoving) return;
+    // Mouse parado e camera parada: o que esta sob o cursor nao mudou.
+    if (_pickedPointer && Cesium.Cartesian2.equals(_pickedPointer, _pointer)) return;
+    _lastMove = performance.now();
+    _pickedPointer = Cesium.Cartesian2.clone(_pointer, _pickedPointer ?? new Cesium.Cartesian2());
 
-    if (!isOurs) {
+    const target = municipioFromPick(viewer.scene.pick(_pointer));
+    // Sobre a divisa (so no caminho de entidades): manter o hover corrente em
+    // vez de piscar o tooltip.
+    if (target === 'border') return;
+    if (!target) {
       clearHover();
       return;
     }
-
-    if (entity !== _hovered) {
+    if (!_hovered || target.key !== _hovered.key) {
       clearHover();
-      _hovered = entity;
-      entity.polygon.material = new Cesium.ColorMaterialProperty(HOVER_COLOR);
-      const nowJ = Cesium.JulianDate.now();
-      const ibge = entity.properties?.CD_MUN?.getValue(nowJ) ?? '';
-      const nome = entity.properties?.NM_MUN?.getValue(nowJ) ?? '';
-      _tooltip.innerHTML = tooltipHtml(nome, _info?.municipios?.[String(ibge)]);
-      viewer.scene.requestRender();
+      _hovered = target;
+      paintHover(target, true);
+      _tooltip.innerHTML = tooltipHtml(target.nome, _info?.municipios?.[String(target.ibge)]);
+      requestFrame('hover');
+    }
+    positionTooltip(_pointer);
+  }
+
+  function scheduleHoverPick(viewer) {
+    if (_cameraMoving) return; // moveEnd refaz o pick
+    const wait = HOVER_THROTTLE_MS - (performance.now() - _lastMove);
+    if (wait <= 0) {
+      runHoverPick(viewer);
+      return;
+    }
+    // Pick "de cauda": o ultimo movimento dentro da janela de throttle tambem
+    // e resolvido, senao o hover ficaria preso na posicao anterior.
+    if (!_trailingPick) {
+      _trailingPick = setTimeout(() => {
+        _trailingPick = null;
+        runHoverPick(viewer);
+      }, wait);
+    }
+  }
+
+  function onMouseMove(viewer, movement) {
+    if (!_enabled || !isLoaded()) return;
+    const position = movement?.endPosition;
+    if (!position) return;
+    _pointer = Cesium.Cartesian2.clone(position, _pointer ?? new Cesium.Cartesian2());
+    // Tooltip acompanha o mouse sem esperar o pick (so DOM, barato).
+    if (_hovered) positionTooltip(_pointer);
+    scheduleHoverPick(viewer);
+  }
+
+  function watchCamera(viewer) {
+    const camera = viewer?.camera;
+    if (!camera?.moveStart || !camera?.moveEnd) return;
+    _removeMoveStart = camera.moveStart.addEventListener(() => {
+      _cameraMoving = true;
+    });
+    _removeMoveEnd = camera.moveEnd.addEventListener(() => {
+      _cameraMoving = false;
+      // O mundo sob o cursor mudou: o proximo pick nao pode ser pulado.
+      _pickedPointer = null;
+      if (_pointer) scheduleHoverPick(viewer);
+    });
+  }
+
+  function unwatchCamera() {
+    _removeMoveStart?.();
+    _removeMoveEnd?.();
+    _removeMoveStart = null;
+    _removeMoveEnd = null;
+    _cameraMoving = false;
+  }
+
+  function groundPrimitivesSupported(viewer) {
+    try {
+      return Boolean(viewer?.scene?.groundPrimitives)
+        && Cesium.GroundPrimitive.isSupported(viewer.scene)
+        && Cesium.GroundPolylinePrimitive.isSupported(viewer.scene);
+    } catch {
+      return false;
+    }
+  }
+
+  function addFocus(focus, ibge, nome, positions) {
+    // Indice de enquadramento. Um municipio com ilhas (Paranagua,
+    // Guaraquecuba) chega como varias entidades com o MESMO CD_MUN:
+    // unir as esferas e o que faz "ir para o municipio" enquadrar o
+    // municipio inteiro, e nao so o primeiro anel do arquivo.
+    if (!ibge) return;
+    const sphere = Cesium.BoundingSphere.fromPoints(positions);
+    const previous = focus.get(ibge);
+    focus.set(ibge, previous
+      ? {
+        nome: previous.nome,
+        boundingSphere: Cesium.BoundingSphere.union(
+          previous.boundingSphere,
+          sphere,
+          new Cesium.BoundingSphere(),
+        ),
+      }
+      : { nome, boundingSphere: sphere });
+  }
+
+  async function loadAsPrimitives(viewer) {
+    const generation = _generation;
+    const resp = await fetch(GEOJSON_URL);
+    if (!resp.ok) throw new Error(`municipios HTTP ${resp.status}`);
+    const geojson = await resp.json();
+    // destroy() durante o fetch: nao pendurar primitive orfa na cena.
+    if (generation !== _generation || isLoaded()) return;
+    if (!viewer?.scene?.groundPrimitives) throw new Error('viewer indisponivel');
+
+    const fills = [];
+    const borders = [];
+    const instances = new Map();
+    const focus = new Map();
+    for (const feature of geojson.features ?? []) {
+      const props = feature?.properties ?? {};
+      const ibge = String(props.CD_MUN ?? '');
+      const nome = String(props.NM_MUN ?? '');
+      for (const rings of municipioPolygons(feature?.geometry)) {
+        const outer = ringToCartesians(rings[0]);
+        const holes = rings.slice(1)
+          .filter((hole) => Array.isArray(hole) && hole.length >= 3)
+          .map((hole) => new Cesium.PolygonHierarchy(ringToCartesians(hole)));
+        const key = `${INSTANCE_PREFIX}${fills.length}`;
+        instances.set(key, { ibge, nome });
+        // Mesmo poligono do GeoJsonDataSource: arcos RHUMB, fill plano.
+        fills.push(new Cesium.GeometryInstance({
+          id: key,
+          geometry: new Cesium.PolygonGeometry({
+            polygonHierarchy: new Cesium.PolygonHierarchy(outer, holes),
+            arcType: Cesium.ArcType.RHUMB,
+            vertexFormat: Cesium.PerInstanceColorAppearance.FLAT_VERTEX_FORMAT,
+          }),
+          attributes: {
+            color: Cesium.ColorGeometryInstanceAttribute.fromColor(IDLE_COLOR),
+          },
+        }));
+        // Borda permanente do anel externo, fechada (como a polyline de
+        // entidade anterior, arco padrao GEODESIC).
+        borders.push(new Cesium.GeometryInstance({
+          geometry: new Cesium.GroundPolylineGeometry({
+            positions: [...outer, outer[0]],
+            width: BORDER_WIDTH,
+          }),
+        }));
+        addFocus(focus, ibge, nome, outer);
+      }
     }
 
-    _tooltip.style.display = 'block';
-    _tooltip.style.left = `${movement.endPosition.x + 16}px`;
-    _tooltip.style.top = `${movement.endPosition.y + 12}px`;
+    const collection = new Cesium.PrimitiveCollection();
+    collection.show = _enabled;
+    const fill = fills.length
+      ? new Cesium.GroundPrimitive({
+        geometryInstances: fills,
+        appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true }),
+        classificationType: Cesium.ClassificationType.BOTH,
+        asynchronous: true,
+      })
+      : null;
+    const border = borders.length
+      ? new Cesium.GroundPolylinePrimitive({
+        geometryInstances: borders,
+        appearance: new Cesium.PolylineMaterialAppearance({
+          material: Cesium.Material.fromType('Color', { color: BORDER_COLOR }),
+        }),
+        classificationType: Cesium.ClassificationType.BOTH,
+        // Sem pick na borda: o cursor sobre a divisa enxerga o poligono.
+        allowPicking: false,
+        asynchronous: true,
+      })
+      : null;
+    if (!fill) throw new Error('municipios-pr.geojson sem poligonos');
+    collection.add(fill);
+    if (border) collection.add(border);
+    viewer.scene.groundPrimitives.add(collection);
+
+    _collection = collection;
+    _fillPrimitive = fill;
+    _borderPrimitive = border;
+    _instances = instances;
+    _focus = focus;
+    _count = fills.length;
+    _pump = createReadyPump({
+      isReady: () => [_fillPrimitive, _borderPrimitive]
+        .every((p) => !p || p.isDestroyed?.() || p.ready),
+      requestRender: () => requestFrame('ground-ready'),
+    });
+  }
+
+  async function loadAsEntities(viewer) {
+    const dataSource = await Cesium.GeoJsonDataSource.load(GEOJSON_URL, {
+      clampToGround: true,
+      fill: IDLE_COLOR,
+      stroke: Cesium.Color.CYAN.withAlpha(0.12),
+      strokeWidth: 1,
+    });
+    // Bordas permanentes: uma polyline clamped por anel externo. O id
+    // com prefixo "muni-border:" e o que o hover usa para ignora-las.
+    const nowJ = Cesium.JulianDate.now();
+    const polygons = dataSource.entities.values.filter((e) => e.polygon);
+    const focus = new Map();
+    for (const entity of polygons) {
+      const hierarchy = entity.polygon.hierarchy?.getValue(nowJ);
+      if (!hierarchy?.positions?.length) continue;
+      dataSource.entities.add({
+        id: `muni-border:${entity.id}`,
+        polyline: {
+          positions: [...hierarchy.positions, hierarchy.positions[0]],
+          clampToGround: true,
+          width: BORDER_WIDTH,
+          material: new Cesium.ColorMaterialProperty(BORDER_COLOR),
+        },
+      });
+      addFocus(
+        focus,
+        String(entity.properties?.CD_MUN?.getValue(nowJ) ?? ''),
+        String(entity.properties?.NM_MUN?.getValue(nowJ) ?? ''),
+        hierarchy.positions,
+      );
+    }
+    _focus = focus;
+    dataSource.show = _enabled;
+    await viewer.dataSources.add(dataSource);
+    _dataSource = dataSource;
+    _count = polygons.length;
   }
 
   return {
@@ -204,6 +522,7 @@ export function createDatageoMunicipiosLayer() {
     updateInterval: 6 * 3600_000,
 
     init(viewer) {
+      _viewer = viewer;
       injectStyles();
       _tooltip = document.createElement('div');
       _tooltip.id = 'datageo-muni-tooltip';
@@ -216,28 +535,29 @@ export function createDatageoMunicipiosLayer() {
       );
       // Clique no poligono abre a ficha municipal detalhada (datageoFicha).
       _handler.setInputAction((click) => {
-        if (!_enabled || !_dataSource) return;
-        const picked = viewer.scene.pick(click.position);
-        const entity = picked?.id;
-        if (!entity || entity.entityCollection?.owner !== _dataSource || !entity.polygon) return;
-        const nowJ = Cesium.JulianDate.now();
-        const ibge = String(entity.properties?.CD_MUN?.getValue(nowJ) ?? '');
-        const nome = entity.properties?.NM_MUN?.getValue(nowJ) ?? '';
-        if (!ibge) return;
-        openFicha({ ibge, nome, info: _info?.municipios?.[ibge] });
+        if (!_enabled || !isLoaded()) return;
+        const target = municipioFromPick(viewer.scene.pick(click.position));
+        if (!target || target === 'border' || !target.ibge) return;
+        openFicha({ ibge: target.ibge, nome: target.nome, info: _info?.municipios?.[target.ibge] });
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+      watchCamera(viewer);
       console.log('[Data:datageo-municipios] Initialized');
     },
 
     enable() {
       _enabled = true;
-      if (_dataSource) _dataSource.show = true;
+      setShow(true);
     },
 
     disable() {
       _enabled = false;
-      if (_dataSource) _dataSource.show = false;
+      setShow(false);
       clearHover();
+      if (_trailingPick) {
+        clearTimeout(_trailingPick);
+        _trailingPick = null;
+      }
+      _pickedPointer = null;
     },
 
     /**
@@ -283,60 +603,17 @@ export function createDatageoMunicipiosLayer() {
     async update(viewer) {
       try {
         await loadInfo();
-        if (!_dataSource) {
-          _dataSource = await Cesium.GeoJsonDataSource.load(GEOJSON_URL, {
-            clampToGround: true,
-            fill: IDLE_COLOR,
-            stroke: Cesium.Color.CYAN.withAlpha(0.12),
-            strokeWidth: 1,
-          });
-          // Bordas permanentes: uma polyline clamped por anel externo. O id
-          // com prefixo "muni-border:" e o que o hover usa para ignora-las.
-          const nowJ = Cesium.JulianDate.now();
-          const polygons = _dataSource.entities.values.filter((e) => e.polygon);
-          const focus = new Map();
-          for (const entity of polygons) {
-            const hierarchy = entity.polygon.hierarchy?.getValue(nowJ);
-            if (!hierarchy?.positions?.length) continue;
-            _dataSource.entities.add({
-              id: `muni-border:${entity.id}`,
-              polyline: {
-                positions: [...hierarchy.positions, hierarchy.positions[0]],
-                clampToGround: true,
-                width: BORDER_WIDTH,
-                material: new Cesium.ColorMaterialProperty(BORDER_COLOR),
-              },
-            });
-            // Indice de enquadramento. Um municipio com ilhas (Paranagua,
-            // Guaraquecuba) chega como varias entidades com o MESMO CD_MUN:
-            // unir as esferas e o que faz "ir para o municipio" enquadrar o
-            // municipio inteiro, e nao so o primeiro anel do arquivo.
-            const ibge = String(entity.properties?.CD_MUN?.getValue(nowJ) ?? '');
-            if (!ibge) continue;
-            const sphere = Cesium.BoundingSphere.fromPoints(hierarchy.positions);
-            const previous = focus.get(ibge);
-            focus.set(ibge, previous
-              ? {
-                nome: previous.nome,
-                boundingSphere: Cesium.BoundingSphere.union(
-                  previous.boundingSphere,
-                  sphere,
-                  new Cesium.BoundingSphere(),
-                ),
-              }
-              : {
-                nome: String(entity.properties?.NM_MUN?.getValue(nowJ) ?? ''),
-                boundingSphere: sphere,
-              });
-          }
-          _focus = focus;
-          _dataSource.show = _enabled;
-          await viewer.dataSources.add(_dataSource);
+        if (!isLoaded()) {
+          const mode = groundPrimitivesSupported(viewer) ? 'primitives' : 'entities';
+          _mode = mode;
+          if (mode === 'primitives') await loadAsPrimitives(viewer);
+          else await loadAsEntities(viewer);
+          setShow(_enabled);
         }
-        _count = _dataSource.entities.values.filter((e) => e.polygon).length;
         _lastUpdate = Date.now();
         _lastError = null;
-        console.log(`[Data:datageo-municipios] ${_count} poligonos prontos`);
+        requestFrame('update');
+        console.log(`[Data:datageo-municipios] ${_count} poligonos prontos (${_mode})`);
         return true;
       } catch (err) {
         _lastError = err?.message || String(err);
@@ -346,8 +623,18 @@ export function createDatageoMunicipiosLayer() {
     },
 
     destroy(viewer) {
+      _generation += 1;
       _enabled = false;
       clearHover();
+      _pump?.stop();
+      _pump = null;
+      if (_trailingPick) {
+        clearTimeout(_trailingPick);
+        _trailingPick = null;
+      }
+      unwatchCamera();
+      _pointer = null;
+      _pickedPointer = null;
       if (_handler) {
         _handler.destroy();
         _handler = null;
@@ -356,10 +643,25 @@ export function createDatageoMunicipiosLayer() {
         _tooltip.remove();
         _tooltip = null;
       }
+      if (_collection && !_collection.isDestroyed?.()) {
+        const ground = (viewer ?? _viewer)?.scene?.groundPrimitives;
+        try {
+          if (ground?.contains?.(_collection)) ground.remove(_collection);
+          else _collection.destroy();
+        } catch (err) {
+          console.warn('[Data:datageo-municipios] remover primitives:', err);
+        }
+      }
+      _collection = null;
+      _fillPrimitive = null;
+      _borderPrimitive = null;
+      _instances = new Map();
       if (_dataSource) {
         viewer.dataSources.remove(_dataSource, true);
         _dataSource = null;
       }
+      _mode = null;
+      _viewer = null;
       _focus = new Map();
     },
 

@@ -12,31 +12,45 @@
 // EPE). Estático, contrato earthquakes (sem CallbackProperty).
 
 import * as Cesium from 'cesium';
-import { makePointsLayer } from './datageoLogistica.js';
+import { makePointsLayer, cssColor } from './datageoLogistica.js';
 
 const LT_URL = '/data/linhas-transmissao-pr.geojson';
 
 const cores = {
-  kv525: Cesium.Color.fromCssColorString('#c084fc').withAlpha(0.9),
-  kv230: Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.75),
-  baixa: Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.55),
-  planejada: Cesium.Color.fromCssColorString('#fbbf24').withAlpha(0.9),
+  kv525: cssColor('#c084fc', 0.9),
+  kv230: cssColor('#38bdf8', 0.75),
+  baixa: cssColor('#94a3b8', 0.55),
+  planejada: cssColor('#fbbf24', 0.9),
 };
 
-function ltStyle(props) {
-  if (props.planejada) {
-    return {
-      width: 2.2,
-      material: new Cesium.PolylineDashMaterialProperty({
-        color: cores.planejada,
-        dashLength: 16,
-      }),
+// Estilos por classe criados uma vez: as ~300 linhas compartilham o mesmo
+// material, o que tambem deixa o batch de polylines clamped do Cesium agrupa-las.
+let _ltStyles = null;
+function ltStyles() {
+  if (!_ltStyles) {
+    _ltStyles = {
+      planejada: {
+        width: 2.2,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: cores.planejada,
+          dashLength: 16,
+        }),
+      },
+      kv525: { width: 2.6, material: new Cesium.ColorMaterialProperty(cores.kv525) },
+      kv230: { width: 1.8, material: new Cesium.ColorMaterialProperty(cores.kv230) },
+      baixa: { width: 1.2, material: new Cesium.ColorMaterialProperty(cores.baixa) },
     };
   }
+  return _ltStyles;
+}
+
+function ltStyle(props) {
+  const styles = ltStyles();
+  if (props.planejada) return styles.planejada;
   const kv = Number(props.tensao) || 0;
-  if (kv >= 500) return { width: 2.6, material: new Cesium.ColorMaterialProperty(cores.kv525) };
-  if (kv >= 230) return { width: 1.8, material: new Cesium.ColorMaterialProperty(cores.kv230) };
-  return { width: 1.2, material: new Cesium.ColorMaterialProperty(cores.baixa) };
+  if (kv >= 500) return styles.kv525;
+  if (kv >= 230) return styles.kv230;
+  return styles.baixa;
 }
 
 export const datageoLinhasTransmissaoLayer = (() => {
@@ -131,7 +145,7 @@ export const datageoSubestacoesLayer = makePointsLayer({
   url: '/data/subestacoes-pr.geojson',
   styleFor: (p) => ({
     size: p.planejada ? 9 : 7,
-    color: p.planejada ? cores.planejada : cores.kv230.withAlpha(1),
+    color: p.planejada ? cores.planejada : cssColor('#38bdf8', 1),
     label: p.planejada
       ? `${p.nome} (prevista ${p.ano ?? '?'}) · ${p.tensao ?? ''} kV`
       : `${p.nome} · ${p.tensao ?? ''} kV`,
@@ -165,7 +179,7 @@ export const datageoGeracaoLayer = makePointsLayer({
     if (p.tipo === 'aerogerador') {
       return {
         size: 3.5,
-        color: Cesium.Color.WHITE.withAlpha(0.85),
+        color: cssColor('#ffffff', 0.85),
         label: `Aerogerador ${p.nome}${p.alt ? ` · ${p.alt} m` : ''}`,
         labelMaxDist: 60_000,
       };
@@ -175,7 +189,7 @@ export const datageoGeracaoLayer = makePointsLayer({
     const mw = (Number(p.pot_kw) || 0) / 1000;
     return {
       size: mw >= 500 ? s.base + 5 : mw >= 50 ? s.base + 2 : s.base,
-      color: Cesium.Color.fromCssColorString(s.cor).withAlpha(0.9),
+      color: cssColor(s.cor, 0.9),
       label: `${s.rotulo} ${p.nome}${p.pot_kw ? ` · ${fmtMw(p.pot_kw)}` : ''}`,
       labelMaxDist: mw >= 500 ? 1_500_000 : mw >= 50 ? 400_000 : 130_000,
     };

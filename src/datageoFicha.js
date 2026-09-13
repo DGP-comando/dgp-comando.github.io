@@ -7,11 +7,13 @@
 // CEMADEN, qualidade do ar, anomalias, incidentes e mencoes no noticiario.
 //
 // EXTENSIVEL POR DESENHO: cada bloco e um builder em SECTIONS que recebe
-// {ficha, info} e devolve HTML (ou null para omitir a secao). Integrar uma
-// base nova = uma chave nova em fetchMunicipioFicha (datageoClient) + um
-// builder aqui. Nada mais.
+// {ficha, info, climaHist} e devolve HTML (ou null para omitir a secao).
+// Integrar uma base nova = uma chave nova em fetchMunicipioFicha (datageoClient)
+// + um builder aqui. Nada mais. Base ESTATICA (JSON em public/data, como o
+// clima historico BR-DWGD) entra no Promise.all de openFicha.
 
 import { fetchMunicipioFicha } from './data/datageoClient.js';
+import { getClimaMunicipio } from './data/climaHistorico.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -214,6 +216,69 @@ const SECTIONS = [
     );
   },
 
+  function climaHistorico({ climaHist }) {
+    const c = climaHist?.resumo;
+    if (!c) return null;
+    const { normal: periodo = [1990, 2019] } = climaHist.meta || {};
+    const n = (v, casas = 0) => (v === null || v === undefined
+      ? '—'
+      : Number(v).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas }));
+    const sinal = (v, casas) => (v > 0 ? `+${n(v, casas)}` : n(v, casas));
+    const rows = [
+      `<div class="fx-sub">Normal ${periodo[0]}–${periodo[1]}</div>`,
+      `<div>Chuva <b>${n(c.pr)} mm/ano</b> · Tméd <b>${n(c.tmed, 1)} °C</b> · ETo ${n(c.eto)} mm</div>`,
+      `<div>Balanço P−ETo: <b class="${c.balanco >= 0 ? 'fx-up' : 'fx-down'}">${sinal(c.balanco, 0)} mm/ano</b>` +
+        (c.mesesDeficit ? ` <span class="fx-dim">· ${c.mesesDeficit} ${c.mesesDeficit === 1 ? 'mês' : 'meses'} com déficit</span>` : '') +
+        '</div>',
+      `<div>Geada (Tmín ≤ 3 °C): <b>${n(c.geada3)} dias/ano</b> <span class="fx-dim">· ≤ 0 °C: ${n(c.geada0)}</span></div>`,
+      `<div>Tmáx ≥ 35 °C: <b>${n(c.calor35)} dias/ano</b> <span class="fx-dim">· chuva ≥ 50 mm: ${n(c.chuva50)} dias/ano</span></div>`,
+    ];
+
+    // Chuva mensal normal; mes em que a chuva nao cobre a ETo fica ambar.
+    const pr = c.normal?.pr || [];
+    const eto = c.normal?.eto || [];
+    if (pr.length === 12) {
+      const max = Math.max(1, ...pr.map((v) => Number(v) || 0), ...eto.map((v) => Number(v) || 0));
+      const meses = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+      const barras = pr.map((v, i) => {
+        const h = Math.max(2, Math.round(((Number(v) || 0) / max) * 26));
+        const deficit = eto[i] !== null && eto[i] !== undefined && v < eto[i];
+        return `<span class="fx-spark-bar" style="height:${h}px;background:${deficit ? '#f59e0b' : '#7da2d6'}" ` +
+          `title="${meses[i]}: chuva ${n(v)} mm · ETo ${n(eto[i])} mm"></span>`;
+      }).join('');
+      rows.push(`<div class="fx-spark">${barras}</div>`);
+    }
+
+    if (c.tendTmed !== null && c.tendTmed !== undefined) {
+      const sig = (s) => (s ? '' : ' <span class="fx-dim">(n.s.)</span>');
+      const anos = climaHist.meta?.serieTemperatura || [1961, 2019];
+      rows.push(
+        `<div>Tendência ${anos[0]}–${anos[1]}: <b class="${c.tendTmed > 0 ? 'fx-warn' : ''}">${sinal(c.tendTmed, 2)} °C/década</b>${sig(c.tendTmedSig)}` +
+          (c.tendPrPct !== null && c.tendPrPct !== undefined
+            ? ` · chuva ${sinal(c.tendPrPct, 1)}%/década${sig(c.tendPrSig)}`
+            : '') +
+          '</div>',
+      );
+    }
+
+    const serie = climaHist.serie?.tmed;
+    if (Array.isArray(serie) && serie.some((v) => v !== null)) {
+      const validos = serie.filter((v) => v !== null);
+      const lo = Math.min(...validos);
+      const hi = Math.max(...validos);
+      const ano0 = climaHist.serie.anos?.tmed?.[0] ?? 1961;
+      const barras = serie.map((v, i) => {
+        if (v === null) return '<span class="fx-spark-bar fx-spark-thin" style="height:0"></span>';
+        const h = Math.max(2, Math.round(((v - lo) / Math.max(0.1, hi - lo)) * 26));
+        return `<span class="fx-spark-bar fx-spark-thin" style="height:${h}px;background:#a39875" title="${ano0 + i}: ${n(v, 1)} °C"></span>`;
+      }).join('');
+      rows.push(`<div class="fx-sub">Tméd anual ${ano0}–${ano0 + serie.length - 1}</div><div class="fx-spark fx-spark-dense">${barras}</div>`);
+    }
+
+    rows.push('<div class="fx-dim">BR-DWGD · grade 0,1° (~11 km) · Xavier et al. 2022</div>');
+    return section('Clima histórico · BR-DWGD', rows.join(''));
+  },
+
   function hidro({ ficha }) {
     const rios = Array.isArray(ficha.rios) ? ficha.rios : [];
     const cemaden = Array.isArray(ficha.cemaden) ? ficha.cemaden : [];
@@ -313,6 +378,16 @@ function injectStyles() {
       background: none; border: none; color: #64748b; font-size: 16px; cursor: pointer;
     }
     #datageo-ficha .fx-close:hover { color: #22d3ee; }
+    #datageo-ficha .fx-header { padding-right: 116px; }
+    #datageo-ficha .fx-watch {
+      position: absolute; top: 10px; right: 36px;
+      background: rgba(3, 10, 18, 0.85); border: 1px solid rgba(34, 211, 238, 0.3); border-radius: 6px;
+      color: #22d3ee; font-family: inherit; font-size: 9px; letter-spacing: 0.12em;
+      padding: 3px 8px; cursor: pointer;
+    }
+    #datageo-ficha .fx-watch:hover { border-color: rgba(34, 211, 238, 0.6); }
+    #datageo-ficha .fx-watch[aria-pressed="true"] { color: #f59e0b; border-color: rgba(245, 158, 11, 0.55); }
+    #datageo-ficha .fx-watch[hidden] { display: none; }
     #datageo-ficha .fx-body { flex: 1; overflow-y: auto; padding: 4px 14px 12px; font-size: 11px; line-height: 1.55; }
     #datageo-ficha .fx-section { margin-top: 12px; }
     #datageo-ficha .fx-section h3 {
@@ -337,6 +412,8 @@ function injectStyles() {
     #datageo-ficha .fx-irtc-nivel { font-size: 12px; letter-spacing: 0.15em; }
     #datageo-ficha .fx-spark { display: flex; align-items: flex-end; gap: 3px; height: 28px; margin: 6px 0; }
     #datageo-ficha .fx-spark-bar { width: 12px; background: #f472b6; border-radius: 2px 2px 0 0; opacity: 0.85; }
+    #datageo-ficha .fx-spark-dense { gap: 1px; }
+    #datageo-ficha .fx-spark-thin { width: auto; flex: 1; border-radius: 1px 1px 0 0; }
     #datageo-ficha .fx-fontes { padding: 8px 14px; border-top: 1px solid rgba(34,211,238,0.2); color: #475569; font-size: 9px; letter-spacing: 0.04em; }
     #datageo-ficha .fx-loading { padding: 20px 14px; color: #64748b; }
     /* Celular: ficha em tela quase cheia (o cartao de 360px estourava). */
@@ -351,6 +428,7 @@ function injectStyles() {
       }
       #datageo-ficha .fx-body { font-size: 12px; }
       #datageo-ficha .fx-close { font-size: 20px; padding: 6px; }
+      #datageo-ficha .fx-watch { right: 50px; top: 12px; }
     }
   `;
   document.head.appendChild(style);
@@ -366,16 +444,54 @@ function ensurePanel() {
   _panel.id = 'datageo-ficha';
   _panel.innerHTML = `
     <button class="fx-close" title="Fechar (Esc)">✕</button>
+    <button class="fx-watch" type="button" aria-pressed="false" hidden>VIGIAR</button>
     <div class="fx-header"><div class="fx-nome"></div><div class="fx-meta"></div></div>
     <div class="fx-body"></div>
-    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · ANA · CEMADEN · AQICN · DataGeo PR</div>
+    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · DataGeo PR</div>
   `;
   document.body.appendChild(_panel);
   _panel.querySelector('.fx-close').addEventListener('click', closeFicha);
+  _panel.querySelector('.fx-watch').addEventListener('click', toggleWatch);
+  // A lista de vigiados pode mudar pelo painel VIGILÂNCIA (botão ✕).
+  window.addEventListener('dgp:area-watch-changed', syncWatchButton);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeFicha();
   });
   return _panel;
+}
+
+// --- VIGIAR / VIGIANDO (window.__dgpAreaWatch, montado pelo orquestrador) ---
+
+let _current = null;
+
+function syncWatchButton() {
+  const btn = _panel?.querySelector('.fx-watch');
+  if (!btn) return;
+  const watcher = window.__dgpAreaWatch;
+  btn.hidden = !watcher || !_current;
+  if (btn.hidden) return;
+  const watching = Boolean(watcher.isWatched?.(_current.ibge));
+  btn.textContent = watching ? 'VIGIANDO' : 'VIGIAR';
+  btn.setAttribute('aria-pressed', String(watching));
+  btn.title = watching
+    ? 'Parar de vigiar este município'
+    : 'Vigiar focos, alertas CEMADEN e incidentes deste município';
+}
+
+function toggleWatch() {
+  const watcher = window.__dgpAreaWatch;
+  if (!watcher || !_current) return;
+  const { ibge, nome } = _current;
+  if (watcher.isWatched?.(ibge)) {
+    watcher.unwatch?.(ibge);
+  } else {
+    const result = watcher.watchMunicipio?.(ibge, nome);
+    if (result && !result.ok && result.reason === 'limit') {
+      const btn = _panel.querySelector('.fx-watch');
+      btn.title = 'Limite de 10 municípios vigiados; remova um no painel VIGILÂNCIA';
+    }
+  }
+  syncWatchButton();
 }
 
 export function closeFicha() {
@@ -390,6 +506,8 @@ export async function openFicha({ ibge, nome, info }) {
   const panel = ensurePanel();
   const seq = ++_requestSeq;
   panel.classList.add('open');
+  _current = { ibge: String(ibge), nome };
+  syncWatchButton();
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent =
     `IBGE ${ibge}` + (info?.prefeito ? ` · Prefeito: ${info.prefeito} (${info.partido})` : '');
@@ -397,11 +515,16 @@ export async function openFicha({ ibge, nome, info }) {
     '<div class="fx-loading">Consultando as bases do DataGeo…</div>';
 
   try {
-    const ficha = await fetchMunicipioFicha(ibge, nome);
+    // Clima historico e arquivo estatico: em paralelo com o Supabase, e sem
+    // poder derrubar a ficha (getClimaMunicipio nunca lanca).
+    const [ficha, climaHist] = await Promise.all([
+      fetchMunicipioFicha(ibge, nome),
+      getClimaMunicipio(ibge),
+    ]);
     if (seq !== _requestSeq) return; // outro municipio foi clicado no meio
     const html = SECTIONS.map((build) => {
       try {
-        return build({ ficha, info });
+        return build({ ficha, info, climaHist });
       } catch (err) {
         console.warn('[DataGeo:ficha] secao falhou:', err);
         return null;

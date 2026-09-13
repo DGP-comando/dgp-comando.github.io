@@ -9,6 +9,9 @@
 // via VITE_DATAGEO_SUPABASE_URL / VITE_DATAGEO_ANON_KEY quando o projeto
 // Supabase mudar.
 
+import { cachedSource } from './sourceCache.js';
+import { createPool } from './fetchPool.js';
+
 // `import.meta.env` so existe sob Vite; no node:test (imports transitivos,
 // ex. flights.test.mjs) e undefined — dai o optional chaining.
 const SUPABASE_URL = (
@@ -20,12 +23,50 @@ const ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpYWx4amNzZ3l3dnZ1eGp4Y2x5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNjczNTMsImV4cCI6MjA4Nzk0MzM1M30.e3X-LSPVUbxl-P9KLB9TuGB0nkmZ4OrNyHL9SuxaRgM';
 
 /**
+ * TTLs de cache client-side (sourceCache: TTL + dedup de voos concorrentes).
+ * - Ficha municipal: reabrir o mesmo municipio e instantaneo.
+ * - Chrome do HUD (ticker/briefing): janela curta, so para quem divide dado.
+ * - Camadas: bem abaixo do menor updateInterval (5 min), so dedup de
+ *   toggles/boot concorrentes; cada ciclo de poll continua buscando.
+ */
+export const DATAGEO_TTL = Object.freeze({
+  ficha: 2 * 60_000,
+  hud: 60_000,
+  layer: 60_000,
+});
+
+/**
  * GET numa tabela/view via PostgREST. `query` e a query string PostgREST
  * (sem o '?'), ja montada pelo chamador. Paginacao via Range quando `range`
  * e passado como [from, to].
+ *
+ * Com `ttlMs > 0` a chamada passa pelo sourceCache, chaveada por
+ * `table?query|range` (ou por `cacheKey`, obrigatorio na pratica quando a
+ * query carrega um timestamp que muda a cada segundo). `staleOnError`
+ * (default false) devolve o ultimo valor bom se o refetch falhar. Sem ttl,
+ * comportamento original: `cache: 'no-store'`, um fetch por chamada.
+ * O array devolvido pode ser compartilhado entre chamadores: nao mutar.
  * @returns {Promise<Array<Object>>} linhas (nunca null; erro lanca).
  */
-export async function dgSelect(table, query, { range = null, timeoutMs = 20_000 } = {}) {
+export function dgSelect(table, query, {
+  range = null,
+  timeoutMs = 20_000,
+  ttlMs = 0,
+  cacheKey = null,
+  staleOnError = false,
+} = {}) {
+  if (!(Number(ttlMs) > 0)) return dgSelectUncached(table, query, { range, timeoutMs });
+  const key = cacheKey
+    ? `dg:${cacheKey}`
+    : `${table}?${query}|${range ? `${range[0]}-${range[1]}` : ''}`;
+  return cachedSource(
+    key,
+    () => dgSelectUncached(table, query, { range, timeoutMs }),
+    { ttlMs: Number(ttlMs), staleOnError },
+  );
+}
+
+async function dgSelectUncached(table, query, { range, timeoutMs }) {
   const headers = {
     apikey: ANON_KEY,
     Authorization: `Bearer ${ANON_KEY}`,
@@ -48,15 +89,58 @@ export async function dgSelect(table, query, { range = null, timeoutMs = 20_000 
 }
 
 /** Le o payload `data` de um cache_key do data_cache (null se ausente). */
-export async function dgCache(cacheKey) {
+export async function dgCache(cacheKey, options = {}) {
   const rows = await dgSelect(
     'data_cache',
     `select=data,fetched_at&cache_key=eq.${encodeURIComponent(cacheKey)}&limit=1`,
+    options,
   );
   return rows.length > 0 ? rows[0] : null;
 }
 
 const isoZ = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+const FIRE_PAGE_SIZE = 1000;
+const FIRE_MAX_ROWS = 20_000;
+const FIRE_PAGE_CONCURRENCY = 4;
+
+/**
+ * Paginacao Range em paralelo, preservando a ordem. A primeira pagina vai
+ * sozinha (a maioria das janelas cabe nela); se veio cheia, as seguintes
+ * saem em ondas de `concurrency` requisicoes simultaneas. Para na primeira
+ * pagina curta (as posteriores a ela sao descartadas, mesmo contrato do laco
+ * sequencial) e nunca passa de `maxRows`. Qualquer pagina com erro rejeita.
+ * @param {(from: number, to: number) => Promise<Array>} fetchPage
+ * @returns {Promise<Array>}
+ */
+export async function fetchPagesParallel(fetchPage, {
+  pageSize = FIRE_PAGE_SIZE,
+  maxRows = FIRE_MAX_ROWS,
+  concurrency = FIRE_PAGE_CONCURRENCY,
+} = {}) {
+  const rows = [];
+  const first = await fetchPage(0, pageSize - 1);
+  rows.push(...first);
+  if (first.length < pageSize) return rows;
+
+  const pool = createPool(concurrency);
+  for (let waveStart = pageSize; waveStart < maxRows; waveStart += pageSize * concurrency) {
+    const offsets = [];
+    for (let k = 0; k < concurrency; k++) {
+      const from = waveStart + k * pageSize;
+      if (from >= maxRows) break;
+      offsets.push(from);
+    }
+    const batches = await Promise.all(
+      offsets.map((from) => pool.run(() => fetchPage(from, from + pageSize - 1))),
+    );
+    for (const batch of batches) {
+      rows.push(...batch);
+      if (batch.length < pageSize) return rows;
+    }
+  }
+  return rows;
+}
 
 /**
  * Focos de calor das ultimas `windowHours` no shape que o firmsHeatmap
@@ -69,24 +153,29 @@ const isoZ = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
  * fire_spots nao persiste frp nem daynight — frp vai 0 (heat/tamanho
  * minimos) ate o ETL do c2 gravar o campo.
  */
-export async function fetchFiresPayload({ windowHours = 48 } = {}) {
+export function fetchFiresPayload({ windowHours = 48 } = {}) {
+  // Camada de focos, briefing heuristico e vigilancia pedem o mesmo payload
+  // (ate 20 paginas): um voo compartilhado e 2 min de TTL, sem stale-on-error
+  // para a falha continuar visivel na camada.
+  return cachedSource(
+    `fires:${windowHours}`,
+    () => fetchFiresPayloadUncached(windowHours),
+    { ttlMs: 2 * 60_000, staleOnError: false },
+  );
+}
+
+async function fetchFiresPayloadUncached(windowHours) {
   const sinceDate = new Date(Date.now() - windowHours * 3600_000)
     .toISOString()
     .slice(0, 10);
   const select =
     'latitude,longitude,brightness,acq_date,acq_time,satellite,instrument,confidence,municipality';
 
-  const rows = [];
-  const page = 1000;
-  for (let from = 0; from < 20_000; from += page) {
-    const batch = await dgSelect(
-      'fire_spots',
-      `select=${select}&acq_date=gte.${sinceDate}&order=acq_date.desc,acq_time.desc`,
-      { range: [from, from + page - 1] },
-    );
-    rows.push(...batch);
-    if (batch.length < page) break;
-  }
+  const query = `select=${select}&acq_date=gte.${sinceDate}&order=acq_date.desc,acq_time.desc`;
+  const rows = await fetchPagesParallel(
+    (from, to) => dgSelect('fire_spots', query, { range: [from, to] }),
+    { pageSize: FIRE_PAGE_SIZE, maxRows: FIRE_MAX_ROWS, concurrency: FIRE_PAGE_CONCURRENCY },
+  );
 
   const now = Date.now();
   const windowMs = windowHours * 3600_000;
@@ -135,6 +224,7 @@ export async function fetchClimateStations() {
     'select=station_code,station_name,municipality,ibge_code,latitude,longitude,' +
       'temperature,humidity,precipitation,wind_speed,observed_at' +
       `&observed_at=gte.${since}&order=observed_at.desc&limit=2000`,
+    { ttlMs: DATAGEO_TTL.layer, cacheKey: 'layer:climate' },
   );
   const byStation = new Map();
   for (const row of rows) {
@@ -152,6 +242,7 @@ export async function fetchRiverStations() {
     'river_levels',
     'select=station_code,station_name,river_name,municipality,latitude,longitude,' +
       'level_cm,flow_m3s,alert_level,observed_at&order=observed_at.desc&limit=200',
+    { ttlMs: DATAGEO_TTL.layer },
   );
   const byStation = new Map();
   for (const row of rows) {
@@ -171,6 +262,7 @@ export async function fetchCemadenAlerts() {
     'select=alert_code,alert_type,severity,municipality,ibge_code,description,' +
       `issued_at,expires_at&issued_at=gte.${cutoff}` +
       `&or=(expires_at.is.null,expires_at.gt.${nowIso})&order=issued_at.desc&limit=500`,
+    { ttlMs: DATAGEO_TTL.layer, cacheKey: 'layer:cemaden' },
   );
 }
 
@@ -181,6 +273,7 @@ export async function fetchIrtcScores() {
     'select=ibge_code,municipality,irtc_score,risk_level,dominant_domain,' +
       'data_coverage,risk_clima,risk_saude,risk_ambiente,risk_hidro,risk_ar,calculated_at' +
       '&order=irtc_score.desc&limit=500',
+    { ttlMs: DATAGEO_TTL.layer },
   );
 }
 
@@ -190,6 +283,7 @@ export async function fetchAirQuality() {
     'air_quality',
     'select=city,station_name,aqi,dominant_pollutant,pm25,pm10,o3,no2,observed_at' +
       '&order=observed_at.desc&limit=200',
+    { ttlMs: DATAGEO_TTL.layer },
   );
   const byCity = new Map();
   for (const row of rows) {
@@ -207,6 +301,7 @@ export async function fetchAnomalies() {
     'anomalies',
     'select=domain,indicator,station_code,municipality,observed_value,z_score,' +
       `window_mean,detected_at&detected_at=gte.${cutoff}&order=detected_at.desc&limit=200`,
+    { ttlMs: DATAGEO_TTL.layer, cacheKey: 'layer:anomalies' },
   );
 }
 
@@ -216,12 +311,13 @@ export async function fetchActiveIncidents() {
     'incidents',
     'select=id,title,type,severity,status,detected_at,affected_municipalities' +
       '&status=not.in.(resolved,closed)&order=detected_at.desc&limit=200',
+    { ttlMs: DATAGEO_TTL.layer },
   );
 }
 
 /** Estacoes de telemetria InfoHidro/SIMEPAR (cache do scrape-infohidro). */
 export async function fetchInfohidroStations() {
-  const cached = await dgCache('infohidro_estacoes_pr');
+  const cached = await dgCache('infohidro_estacoes_pr', { ttlMs: DATAGEO_TTL.layer });
   if (!cached) return [];
   const payload = cached.data;
   const items = Array.isArray(payload) ? payload : (payload?.items ?? []);
@@ -233,6 +329,7 @@ export async function fetchNews(limit = 30) {
   return dgSelect(
     'news_items',
     `select=title,source,url,urgency,published_at&order=published_at.desc&limit=${limit}`,
+    { ttlMs: DATAGEO_TTL.hud },
   );
 }
 
@@ -242,6 +339,7 @@ export async function fetchLatestSituationalReport() {
     'situational_reports',
     'select=report_date,executive_summary,recommendations,active_alerts_count,' +
       'top_risks,generated_at&order=report_date.desc&limit=1',
+    { ttlMs: DATAGEO_TTL.hud },
   );
   return rows.length > 0 ? rows[0] : null;
 }
@@ -353,6 +451,7 @@ export async function fetchVessels() {
     'select=mmsi,vessel_name,ship_type_label,latitude,longitude,sog_knots,' +
       `cog_deg,nav_status_label,destination,observed_at&observed_at=gte.${since}` +
       '&order=observed_at.desc&limit=2000',
+    { ttlMs: DATAGEO_TTL.layer, cacheKey: 'layer:vessels' },
   );
   const byMmsi = new Map();
   for (const row of rows) {
@@ -434,52 +533,69 @@ export async function fetchMunicipioFicha(ibge, nome) {
   const d30 = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
   const nowIso = isoZ(new Date());
 
+  // Cache de 2 min por secao: reabrir a ficha e instantaneo; stale-on-error
+  // porque uma secao antiga e melhor que uma secao em erro.
+  const fichaOpts = (cacheKey = null) => ({
+    ttlMs: DATAGEO_TTL.ficha,
+    staleOnError: true,
+    ...(cacheKey ? { cacheKey } : {}),
+  });
+
   const tasks = {
     irtc: dgSelect(
       'irtc_scores',
       'select=irtc_score,risk_level,dominant_domain,data_coverage,risk_clima,' +
         `risk_saude,risk_ambiente,risk_hidro,risk_ar,calculated_at&ibge_code=eq.${code}&limit=1`,
+      fichaOpts(),
     ),
     dengueSerie: dgSelect(
       'dengue_data',
       'select=year,epidemiological_week,cases,cases_est,alert_level,incidence_rate' +
         `&ibge_code=eq.${code}&order=year.desc,epidemiological_week.desc&limit=8`,
+      fichaOpts(),
     ),
     dengueProj: dgSelect(
       'dengue_projections',
       'select=projected_week,projected_year,projected_cases,trend,r_squared' +
         `&ibge_code=eq.${code}&order=projected_year.asc,projected_week.asc&limit=4`,
+      fichaOpts(),
     ),
     focos: dgSelect(
       'fire_spots',
       `select=acq_date&municipality=eq.${encodeURIComponent(nome)}&acq_date=gte.${d30}&limit=1000`,
+      fichaOpts(),
     ),
     clima: dgSelect(
       'climate_data',
       'select=station_name,temperature,humidity,precipitation,wind_speed,observed_at' +
         `&ibge_code=eq.${code}&order=observed_at.desc&limit=1`,
+      fichaOpts(),
     ),
     rios: dgSelect(
       'river_levels',
       'select=station_name,river_name,level_cm,alert_level,observed_at' +
         `&municipality=eq.${encodeURIComponent(nome)}&order=observed_at.desc&limit=5`,
+      fichaOpts(),
     ),
     cemaden: dgSelect(
       'cemaden_alerts',
       `select=alert_type,severity,issued_at,expires_at&ibge_code=eq.${code}` +
         `&issued_at=gte.${isoZ(new Date(Date.now() - 3 * 86_400_000))}` +
         `&or=(expires_at.is.null,expires_at.gt.${nowIso})&order=issued_at.desc&limit=5`,
+      fichaOpts(`ficha:cemaden:${code}`),
     ),
     anomalias: dgSelect(
       'anomalies',
       'select=indicator,z_score,observed_value,municipality,detected_at' +
         `&detected_at=gte.${iso7}&order=detected_at.desc&limit=200`,
+      fichaOpts('ficha:anomalias'),
     ),
     ar: AQICN_IBGE_TO_CITY[code]
       ? dgSelect(
           'air_quality',
           'select=aqi,dominant_pollutant,pm25,observed_at' +
             `&city=eq.${AQICN_IBGE_TO_CITY[code]}&order=observed_at.desc&limit=1`,
+          fichaOpts(),
         )
       : Promise.resolve([]),
     incidentes: dgSelect(
@@ -488,12 +604,14 @@ export async function fetchMunicipioFicha(ibge, nome) {
         `&affected_municipalities=cs.${encodeURIComponent(
           JSON.stringify([{ ibge_code: code }]),
         )}&status=not.in.(resolved,closed)&order=detected_at.desc&limit=5`,
+      fichaOpts(),
     ),
     noticias: dgSelect(
       'news_items',
       `select=title,source,url,urgency,published_at&title=ilike.${encodeURIComponent(
         `*${nome}*`,
       )}&order=published_at.desc&limit=3`,
+      fichaOpts(),
     ),
   };
 
@@ -529,6 +647,7 @@ export async function fetchDengueLatestWeek() {
   const latest = await dgSelect(
     'dengue_data',
     'select=year,epidemiological_week&order=year.desc,epidemiological_week.desc&limit=1',
+    { ttlMs: DATAGEO_TTL.layer },
   );
   if (latest.length === 0) return { year: null, week: null, rows: [] };
   const { year, epidemiological_week: week } = latest[0];
@@ -536,6 +655,7 @@ export async function fetchDengueLatestWeek() {
     'dengue_data',
     'select=ibge_code,municipality_name,cases,cases_est,alert_level,incidence_rate' +
       `&year=eq.${year}&epidemiological_week=eq.${week}&limit=500`,
+    { ttlMs: DATAGEO_TTL.layer },
   );
   return { year, week, rows };
 }

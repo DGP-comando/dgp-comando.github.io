@@ -1,5 +1,7 @@
 import { governorRequestRender } from '../renderGovernor.js';
 import { markDetectionSourcesChanged } from './detection.js';
+import { isDocumentHidden, nextPollDelay } from './pollPolicy.js';
+import { countWithArrivals } from './newArrivalHighlight.js';
 function cloneLayerParams(value) {
   if (Array.isArray(value)) return value.map(cloneLayerParams);
   if (value && typeof value === 'object') {
@@ -378,6 +380,7 @@ export class DataLayerManager {
 
     entry.refreshing = false;
     entry.managerRefreshError = failure ? String(failure.message || failure) : null;
+    this._recordRefreshOutcome(entry, !failure);
     this._refreshTogglePanel();
     if (failure) {
       console.warn(`[Data] ${layerId} refresh error:`, failure);
@@ -541,16 +544,83 @@ export class DataLayerManager {
     }
   }
 
+  /**
+   * Backoff bookkeeping of the periodic loop. A failed refresh doubles the
+   * effective poll period (nextPollDelay, capped at 30 min) by making the
+   * interval skip ticks until `backoffUntil`; a success resets it. Half an
+   * interval of slack keeps timer jitter from skipping one extra tick.
+   */
+  _recordRefreshOutcome(entry, succeeded) {
+    const now = Date.now();
+    if (succeeded) {
+      entry.consecutiveFailures = 0;
+      entry.backoffUntil = 0;
+      entry.lastRefreshAt = now;
+      return;
+    }
+    entry.consecutiveFailures = (entry.consecutiveFailures || 0) + 1;
+    const baseMs = Number(entry.refreshIntervalMs) || 0;
+    if (baseMs <= 0) {
+      entry.backoffUntil = 0;
+      return;
+    }
+    const delay = nextPollDelay({ baseMs, consecutiveFailures: entry.consecutiveFailures });
+    entry.backoffUntil = now + delay - baseMs / 2;
+  }
+
+  /**
+   * One document-level visibilitychange listener (browser only): when the
+   * tab becomes visible again, enabled polling layers whose last successful
+   * refresh is older than their interval catch up immediately instead of
+   * waiting for the next tick (ticks are skipped while hidden).
+   */
+  _ensureVisibilityCatchUp() {
+    if (this._visibilityCatchUp) return;
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (!doc || typeof doc.addEventListener !== 'function') return;
+    const handler = () => {
+      if (isDocumentHidden()) return;
+      const now = Date.now();
+      for (const [layerId, entry] of this.layers) {
+        const baseMs = Number(entry.refreshIntervalMs) || 0;
+        if (!entry.enabled || !entry.intervalId || baseMs <= 0) continue;
+        if (entry.backoffUntil && now < entry.backoffUntil) continue;
+        if (now - (entry.lastRefreshAt || 0) < baseMs) continue;
+        void this._runPeriodicUpdate(layerId, entry);
+      }
+    };
+    doc.addEventListener('visibilitychange', handler);
+    this._visibilityCatchUp = { doc, handler };
+  }
+
+  _detachVisibilityCatchUp() {
+    const catchUp = this._visibilityCatchUp;
+    if (!catchUp) return;
+    this._visibilityCatchUp = null;
+    if (typeof catchUp.doc.removeEventListener === 'function') {
+      catchUp.doc.removeEventListener('visibilitychange', catchUp.handler);
+    }
+  }
+
   _armUpdateLoop(layerId, entry) {
     const configuredRefreshInterval = Number(entry.module.refreshInterval);
     const updateInterval = Number(entry.module.updateInterval);
     const refreshInterval = configuredRefreshInterval > 0
       ? configuredRefreshInterval
       : (updateInterval > 0 ? updateInterval : 0);
+    // Arming follows a successful enable update: that counts as fresh data.
+    entry.refreshIntervalMs = refreshInterval;
+    entry.consecutiveFailures = 0;
+    entry.backoffUntil = 0;
+    entry.lastRefreshAt = Date.now();
     if (refreshInterval > 0) {
       entry.intervalId = setInterval(() => {
+        // Hidden tab: skip (visibilitychange catches up). Backoff: skip until due.
+        if (isDocumentHidden()) return;
+        if (entry.backoffUntil && Date.now() < entry.backoffUntil) return;
         void this._runPeriodicUpdate(layerId, entry);
       }, refreshInterval);
+      this._ensureVisibilityCatchUp();
     } else if (updateInterval === 0) {
       entry.intervalId = setInterval(() => {
         if (!entry.enabled) return;
@@ -1915,6 +1985,7 @@ export class DataLayerManager {
    * Should be called when the viewer is being torn down.
    */
   async destroyAll() {
+    this._detachVisibilityCatchUp();
     for (const layerId of [...this.layers.keys()]) {
       await this.destroyLayer(layerId);
     }
@@ -2089,7 +2160,7 @@ export class DataLayerManager {
 
       const count = document.createElement('span');
       count.className = 'data-count';
-      count.textContent = layer.stats.count ? this._formatCount(layer.stats.count) : '—';
+      this._syncCountBadge(count, layer);
 
       const toggle = document.createElement('button');
       toggle.className = `data-toggle-btn${layer.enabled ? ' active' : ''}`;
@@ -2243,9 +2314,7 @@ export class DataLayerManager {
       }
 
       const count = row.querySelector('.data-count');
-      if (count) {
-        count.textContent = layer.stats.count ? this._formatCount(layer.stats.count) : '—';
-      }
+      if (count) this._syncCountBadge(count, layer);
 
       const meta = row.querySelector('.data-toggle-meta');
       if (meta) {
@@ -2254,6 +2323,17 @@ export class DataLayerManager {
 
       this._syncRowControls(row.querySelector('.data-toggle-controls'), layer);
     }
+  }
+
+  /**
+   * Contador da linha: total e, quando o ultimo poll trouxe itens novos,
+   * "+N" em destaque (padrao new-arrival do osiris).
+   */
+  _syncCountBadge(node, layer) {
+    const { text, fresh } = countWithArrivals(layer.stats, (n) => this._formatCount(n));
+    if (node.textContent !== text) node.textContent = text;
+    node.classList?.toggle?.('data-count-fresh', fresh > 0);
+    node.title = fresh > 0 ? `${fresh} novo(s) no último poll` : '';
   }
 
   _buildMetaText(layer) {

@@ -18,10 +18,16 @@ import localDataLayers from './data/localLayers.js';
 import { DATAGEO_LAYERS } from './data/datageoLayers.js';
 import { initDatageoTicker } from './datageoTicker.js';
 import { initDatageoBriefing } from './datageoBriefing.js';
+import { initDatageoAreaWatch } from './datageoAreaWatch.js';
+import { initDatageoShortcuts } from './datageoShortcuts.js';
+import {
+  fetchActiveIncidents,
+  fetchCemadenAlerts,
+  fetchFiresPayload,
+} from './data/datageoClient.js';
 import { LAYER_STATE_REGISTRY } from './data/layerState.js';
 import { registerDataCredits } from './data/dataCredits.js';
 import { SceneDirector } from './scenes/director.js';
-import { initGevVoiceCommands } from './voice/gevRealtime.js';
 import { MapStackController } from './mapStackController.js';
 import { initAnnotations } from './annotations/index.js';
 import { initLogoGaze } from './logoGaze.js';
@@ -122,7 +128,10 @@ async function init() {
       msaaSamples: 4,
       contextOptions: {
         webgl: {
-          preserveDrawingBuffer: true,
+          // Only the dev-only voice viewport capture (src/voice/gevRealtime.js,
+          // drawImage of the Cesium canvas) reads the WebGL back buffer.
+          // Production has no reader, so skip the extra buffer copy there.
+          preserveDrawingBuffer: import.meta.env.DEV,
         },
       },
     });
@@ -268,6 +277,22 @@ async function init() {
     // Chrome DataGeo: ticker de noticias + briefing situacional diario
     initDatageoTicker();
     initDatageoBriefing();
+    // Vigilancia de municipios (tripwire: focos/CEMADEN/incidentes novos) e
+    // atalhos de teclado DataGeo; o botao VIGIAR da ficha fala por window.
+    const areaWatch = initDatageoAreaWatch({
+      fetchers: {
+        fires: () => fetchFiresPayload().then((payload) => payload.fires),
+        cemaden: fetchCemadenAlerts,
+        incidents: fetchActiveIncidents,
+      },
+    });
+    window.__dgpAreaWatch = areaWatch;
+    initDatageoShortcuts({
+      actions: {
+        resetCamera: () => flyToParana(viewer),
+        toggleWatch: () => areaWatch.toggle(),
+      },
+    });
     // Restoration starts only after the complete production registry is sealed.
     // O registry filtrado espelha exatamente as camadas registradas acima
     // (finalizeRegistrations exige correspondencia 1:1).
@@ -375,7 +400,11 @@ async function init() {
     };
     // Voz depende do proxy OpenAI do dev-server; no deploy estatico o dock
     // ficaria morto (era o widget "VOICE STANDBY" que aparecia no celular).
+    // Import dinamico dentro do ramo DEV: no build de producao o Rollup
+    // descarta o ramo inteiro e o modulo de voz (gevRealtime + gevActions)
+    // nao entra no bundle.
     if (import.meta.env.DEV) {
+      const { initGevVoiceCommands } = await import('./voice/gevRealtime.js');
       window.__godsEyeView.voiceCommands = initGevVoiceCommands({ viewer, styleManager, dataManager, sceneDirector, annotations });
     }
 
