@@ -10,6 +10,14 @@
 // Supabase mudar.
 
 import { cachedSource } from './sourceCache.js';
+import {
+  SERVER_GRID_MAX_AGE_MS,
+  classifyStoredGrid,
+  isRetryableWeatherStatus,
+  parseServerGrid,
+  readStoredGrid,
+  writeStoredGrid,
+} from './weatherGridStore.js';
 import { createPool } from './fetchPool.js';
 
 // `import.meta.env` so existe sob Vite; no node:test (imports transitivos,
@@ -381,12 +389,92 @@ export function fetchWeatherGrid() {
   if (_weatherGridCache && now - _weatherGridCache.at < WEATHER_GRID_TTL_MS) {
     return _weatherGridCache.promise;
   }
-  const promise = fetchWeatherGridUncached().catch((err) => {
+  const promise = fetchWeatherGridPersisted(now).catch((err) => {
     _weatherGridCache = null;
     throw err;
   });
   _weatherGridCache = { at: now, promise };
   return promise;
+}
+
+/** Zera a memoizacao em memoria da grade (testes e troca de sessao). */
+export function resetWeatherGridMemo() {
+  _weatherGridCache = null;
+}
+
+const WEATHER_GRID_EXPECTED = {
+  width: WEATHER_GRID_WIDTH,
+  height: WEATHER_GRID_HEIGHT,
+  bounds: WEATHER_GRID_BOUNDS,
+};
+const WEATHER_RETRY_DELAY_MS = 20_000;
+const SERVER_WEATHER_GRID_KEY = 'meteo_grade_pr';
+
+function browserStorage() {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Grade com persistencia (weatherGridStore): copia fresca no localStorage nao
+ * gasta cota da Open-Meteo; falha da API (429/503/timeout) devolve a ultima
+ * grade boa de ate 6 h, marcada `stale`. Uma nova tentativa em 429/503 quando
+ * nao ha copia nenhuma. O resultado sempre traz `fetchedAt` (hora do dado).
+ */
+async function fetchWeatherGridPersisted(now) {
+  const storage = browserStorage();
+  const stored = readStoredGrid(storage, WEATHER_GRID_EXPECTED);
+  const state = classifyStoredGrid(stored?.fetchedAt, now, WEATHER_GRID_TTL_MS);
+  if (state === 'fresh') return { ...stored.grid, fetchedAt: stored.fetchedAt, stale: false };
+
+  // Caminho normal: a grade que o job etl-meteo-grade (pg_cron, 30 min) grava
+  // no data_cache. Uma leitura pequena no Supabase, nenhuma chamada da cota da
+  // Open-Meteo por visitante.
+  const server = await fetchServerWeatherGrid(now);
+  if (server) {
+    writeStoredGrid(storage, server.grid, server.fetchedAt);
+    return { ...server.grid, fetchedAt: server.fetchedAt, stale: false };
+  }
+
+  const fallback = state === 'stale' ? stored : null;
+  try {
+    const grid = await fetchWeatherGridWithRetry({ retry: !fallback });
+    const fetchedAt = Date.now();
+    writeStoredGrid(storage, grid, fetchedAt);
+    return { ...grid, fetchedAt, stale: false };
+  } catch (err) {
+    if (fallback) {
+      console.warn('[DataGeo:open-meteo] usando grade salva após falha:', err?.message || err);
+      return { ...fallback.grid, fetchedAt: fallback.fetchedAt, stale: true };
+    }
+    throw err;
+  }
+}
+
+/** Grade do data_cache, ou null se ausente, invalida, velha ou com erro. */
+async function fetchServerWeatherGrid(now) {
+  try {
+    const row = await dgCache(SERVER_WEATHER_GRID_KEY);
+    const parsed = parseServerGrid(row?.data, WEATHER_GRID_EXPECTED);
+    if (!parsed || now - parsed.fetchedAt > SERVER_GRID_MAX_AGE_MS) return null;
+    return parsed;
+  } catch (err) {
+    console.warn('[DataGeo:open-meteo] grade do servidor indisponível:', err?.message || err);
+    return null;
+  }
+}
+
+async function fetchWeatherGridWithRetry({ retry }) {
+  try {
+    return await fetchWeatherGridUncached();
+  } catch (err) {
+    if (!retry || !isRetryableWeatherStatus(err?.status)) throw err;
+    await new Promise((resolve) => setTimeout(resolve, WEATHER_RETRY_DELAY_MS));
+    return fetchWeatherGridUncached();
+  }
 }
 
 async function fetchWeatherGridUncached() {
@@ -417,7 +505,15 @@ async function fetchWeatherGridUncached() {
         '&current=wind_speed_10m,wind_direction_10m,precipitation&wind_speed_unit=ms',
       { signal: AbortSignal.timeout(20_000) },
     );
-    if (!resp.ok) throw new Error(`Open-Meteo HTTP ${resp.status}`);
+    if (!resp.ok) {
+      const error = new Error(
+        resp.status === 429
+          ? 'Open-Meteo HTTP 429 (limite de chamadas por IP)'
+          : `Open-Meteo HTTP ${resp.status}`,
+      );
+      error.status = resp.status;
+      throw error;
+    }
     const data = await resp.json();
     const points = Array.isArray(data) ? data : [data];
     points.forEach((pt, k) => {

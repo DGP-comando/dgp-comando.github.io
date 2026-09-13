@@ -6,6 +6,35 @@
 
 ---
 
+## Sessão 2026-09-13 (tarde): ventos e precipitação param por cota da Open-Meteo
+
+Sintoma: as duas camadas ficaram "INDISPONÍVEL · Open-Meteo HTTP 503".
+Causa: a grade 22x15 custava 330 chamadas por carregamento e o plano gratuito
+da Open-Meteo limita por IP (600/min, 5.000/h, 10.000/dia); na prática cada
+coordenada conta como chamada (429 depois de ~660 pontos). As recargas dos
+testes do dia estouraram a cota; IP compartilhado (rede do IDR) faria o mesmo.
+
+- **Servidor (c2-parana `31d31fd`):** Edge Function `etl-meteo-grade` +
+  migration 042 (pg_cron `2,32 * * * *`). Busca slots `minutely_15` (3 h) só
+  quando a previsão guardada não cobre a próxima meia hora ou passou de
+  110 min (~3.960 chamadas/dia) e grava o slot vigente em
+  `data_cache.meteo_grade_pr` (~4 KB). Slot vigente == `current` da API
+  (conferido ao vivo).
+- **Cliente:** `fetchWeatherGrid` tenta, nesta ordem, grade fresca no
+  localStorage (< 25 min), `meteo_grade_pr` (< 75 min), Open-Meteo direta
+  (uma nova tentativa em 429/503) e, por fim, a última grade salva de até 6 h,
+  rotulada "grade salva (API indisponível)". O painel mostra a hora do dado.
+
+### Pegadinhas
+- Supabase CLI e npx no PowerShell: a execution policy bloqueia `npx.ps1`;
+  usar `npx.cmd`. `supabase login` não roda via `!` (sem TTY): fazer num
+  terminal separado. `db push` continua com o usuário.
+- `supabase secrets list` imprime hashes SHA-256, não os valores.
+- O repo c2-parana acusa "dubious ownership" neste Windows: usar
+  `git -c safe.directory=...` por comando em vez de mexer na config global.
+
+---
+
 ## Sessão 2026-09-13: velocidade e features inspiradas no osiris
 
 Origem: estudo do simplifaisoul/osiris (Next + MapLibre). Nada de código ou
