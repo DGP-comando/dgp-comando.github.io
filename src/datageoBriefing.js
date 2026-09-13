@@ -5,7 +5,16 @@
 // resumo executivo e as recomendacoes do relatorio das 06:00 BRT gerado
 // pelo etl-situational. Fase 2 da fusao (PLANO_FUSAO.md §3).
 
-import { fetchLatestSituationalReport } from './data/datageoClient.js';
+import {
+  fetchActiveIncidents,
+  fetchCemadenAlerts,
+  fetchDengueLatestWeek,
+  fetchFiresPayload,
+  fetchIrtcScores,
+  fetchLatestSituationalReport,
+} from './data/datageoClient.js';
+import { buildHeuristicBriefing } from './data/briefingHeuristic.js';
+import { startPollLoop } from './data/pollPolicy.js';
 
 const POLL_MS = 30 * 60_000;
 
@@ -57,6 +66,40 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
+/** Data corrente em America/Sao_Paulo no formato YYYY-MM-DD. */
+function todayBrt(now = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
+}
+
+async function renderHeuristic(container, staleReport) {
+  const settle = (p) => p.then((v) => v, () => null);
+  const [irtc, cemaden, fires, incidents, dengue] = await Promise.all([
+    settle(fetchIrtcScores()),
+    settle(fetchCemadenAlerts()),
+    settle(fetchFiresPayload()),
+    settle(fetchActiveIncidents()),
+    settle(fetchDengueLatestWeek()),
+  ]);
+  const brief = buildHeuristicBriefing({ irtc, cemaden, fires, incidents, dengue, now: new Date() });
+  if (brief.level === 'indisponivel' && staleReport) {
+    // Nada ao vivo respondeu: melhor o ultimo relatorio, rotulado como antigo.
+    container.querySelector('.brief-date').textContent =
+      `ÚLTIMO RELATÓRIO ${staleReport.report_date} · ${staleReport.active_alerts_count ?? 0} ALERTAS`;
+    container.querySelector('.brief-summary').textContent = staleReport.executive_summary ?? '';
+    container.querySelector('.brief-recs-title').textContent = 'RECOMENDAÇÕES';
+    container.querySelector('.brief-recs-body').textContent = staleReport.recommendations ?? '';
+    return;
+  }
+  container.querySelector('.brief-date').textContent = brief.title;
+  container.querySelector('.brief-summary').textContent = brief.summary;
+  container.querySelector('.brief-recs-title').textContent = 'DESTAQUES';
+  container.querySelector('.brief-recs-body').textContent = brief.bullets.map((b) => `• ${b}`).join('\n');
+}
+
 export function initDatageoBriefing() {
   injectStyles();
   const container = document.createElement('div');
@@ -78,24 +121,29 @@ export function initDatageoBriefing() {
     container.classList.toggle('open');
   });
 
-  async function poll() {
-    try {
-      const report = await fetchLatestSituationalReport();
-      if (!report) return;
-      container.querySelector('.brief-date').textContent =
-        `RELATÓRIO ${report.report_date} · ${report.active_alerts_count ?? 0} ALERTAS 24H`;
-      container.querySelector('.brief-summary').textContent = report.executive_summary ?? '';
-      container.querySelector('.brief-recs-body').textContent = report.recommendations ?? '';
-    } catch (err) {
-      console.warn('[DataGeo:briefing]', err);
+  // Loop com skip quando a aba esta oculta, backoff em erro e catch-up no
+  // visibilitychange (pollPolicy). Erro lanca para o loop contar a falha.
+  const loop = startPollLoop(async () => {
+    const report = await fetchLatestSituationalReport();
+    // Sem relatorio de hoje (BRT): sintese heuristica a partir dos dados ao
+    // vivo, em vez de card vazio ou relatorio de dias atras sem aviso.
+    if (!report || String(report.report_date ?? '').slice(0, 10) !== todayBrt()) {
+      await renderHeuristic(container, report);
+      return;
     }
-  }
-  poll();
-  const interval = setInterval(poll, POLL_MS);
+    container.querySelector('.brief-date').textContent =
+      `RELATÓRIO ${report.report_date} · ${report.active_alerts_count ?? 0} ALERTAS 24H`;
+    container.querySelector('.brief-summary').textContent = report.executive_summary ?? '';
+    container.querySelector('.brief-recs-title').textContent = 'RECOMENDAÇÕES';
+    container.querySelector('.brief-recs-body').textContent = report.recommendations ?? '';
+  }, {
+    baseMs: POLL_MS,
+    onError: (err) => console.warn('[DataGeo:briefing]', err),
+  });
 
   return {
     destroy() {
-      clearInterval(interval);
+      loop.stop();
       container.remove();
     },
   };

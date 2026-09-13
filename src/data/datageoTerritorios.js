@@ -34,6 +34,9 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
 
   const fill = Cesium.Color.fromCssColorString(cssColor).withAlpha(0.25);
   const border = Cesium.Color.fromCssColorString(cssColor).withAlpha(0.75);
+  // Imutaveis e iguais para todos os poligonos da camada: uma instancia so.
+  const labelFill = Cesium.Color.fromCssColorString(cssColor);
+  const labelCondition = new Cesium.DistanceDisplayCondition(0, labelMaxDist);
 
   return {
     id,
@@ -64,6 +67,10 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const gj = await resp.json();
           _dataSource = new Cesium.CustomDataSource(id);
+          // Materiais compartilhados: o batch de geometria clamped do Cesium
+          // agrupa por material, e nada aqui os altera depois do load.
+          const fillMaterial = new Cesium.ColorMaterialProperty(fill);
+          const borderMaterial = new Cesium.ColorMaterialProperty(border);
           let n = 0;
           for (const f of gj.features ?? []) {
             const geom = f.geometry;
@@ -86,7 +93,7 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
                         hole.map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat)),
                       )),
                   ),
-                  material: new Cesium.ColorMaterialProperty(fill),
+                  material: fillMaterial,
                   classificationType: Cesium.ClassificationType.TERRAIN,
                 },
               });
@@ -95,7 +102,7 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
                   positions: [...positions, positions[0]],
                   clampToGround: true,
                   width: 1.6,
-                  material: new Cesium.ColorMaterialProperty(border),
+                  material: borderMaterial,
                 },
               });
               if (!labeled) {
@@ -106,14 +113,13 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
                     label: {
                       text: labelOf(props),
                       font: '11px "JetBrains Mono", monospace',
-                      fillColor: Cesium.Color.fromCssColorString(cssColor),
+                      fillColor: labelFill,
                       outlineColor: Cesium.Color.BLACK,
                       outlineWidth: 2,
                       style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                       heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                       disableDepthTestDistance: Number.POSITIVE_INFINITY,
-                      distanceDisplayCondition:
-                        new Cesium.DistanceDisplayCondition(0, labelMaxDist),
+                      distanceDisplayCondition: labelCondition,
                     },
                   });
                   labeled = true;

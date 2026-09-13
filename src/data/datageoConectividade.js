@@ -12,6 +12,7 @@
 
 import * as Cesium from 'cesium';
 import { governorRequestRender } from '../renderGovernor.js';
+import { createCachedFactory, createReadyPump } from './entityDiff.js';
 
 const TORRES_URL = '/data/conectividade-torres.json';
 const COBERTURA_URL = '/data/conectividade-sem-cobertura.geojson';
@@ -39,6 +40,78 @@ const TEC_INDEFINIDA = Object.freeze({ key: 'na', label: 'SEM INFO', color: '#52
  */
 const SEM_COBERTURA_FILL = Cesium.Color.fromCssColorString('#64748b').withAlpha(0.22);
 const SEM_COBERTURA_LINE = Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.45);
+
+// Uma Color por classe de torre (5,8 mil torres, 5 classes), nao uma por torre.
+const corDaClasse = createCachedFactory(
+  (css) => Cesium.Color.fromCssColorString(css).withAlpha(0.9),
+  (css) => css,
+);
+// 5,8 mil pontos viram uma mancha solida na escala estadual; encolher com a
+// distancia preserva a leitura de DENSIDADE, que e a informacao util de longe,
+// e devolve o ponto individual de perto. Imutavel: uma instancia para todas.
+const TORRE_SCALE = new Cesium.NearFarScalar(2.0e4, 1.6, 1.2e6, 0.45);
+
+/**
+ * Aneis de poligono (GeoJSON Polygon/MultiPolygon) com pelo menos um anel
+ * externo utilizavel. Puro: sem Cesium, testavel.
+ * @param {object|null|undefined} geometry
+ * @returns {Array<Array<Array<[number, number]>>>}
+ */
+export function poligonosDaGeometria(geometry) {
+  if (!geometry) return [];
+  const polys = geometry.type === 'Polygon'
+    ? [geometry.coordinates]
+    : geometry.type === 'MultiPolygon' ? geometry.coordinates : [];
+  return (polys ?? []).filter((rings) => Array.isArray(rings?.[0]) && rings[0].length >= 3);
+}
+
+function anelParaCartesianos(ring) {
+  const flat = new Array(ring.length * 2);
+  for (let i = 0; i < ring.length; i++) {
+    flat[i * 2] = ring[i][0];
+    flat[i * 2 + 1] = ring[i][1];
+  }
+  return Cesium.Cartesian3.fromDegreesArray(flat);
+}
+
+/**
+ * Um unico GroundPrimitive com todos os poligonos sem cobertura, no lugar de
+ * ~1.100 entidades clamped. Mesmo visual do GeoJsonDataSource anterior: fill
+ * plano translucido por instancia, arcos RHUMB, classificacao BOTH (o outline
+ * do GeoJSON nunca era desenhado: poligono clamped nao tem outline no Cesium).
+ * @param {object} geojson
+ * @returns {{primitive: Cesium.GroundPrimitive|null, poligonos: number}}
+ */
+function criarPrimitiveCobertura(geojson) {
+  const instances = [];
+  for (const feature of geojson.features ?? []) {
+    for (const rings of poligonosDaGeometria(feature?.geometry)) {
+      const holes = rings.slice(1)
+        .filter((hole) => Array.isArray(hole) && hole.length >= 3)
+        .map((hole) => new Cesium.PolygonHierarchy(anelParaCartesianos(hole)));
+      instances.push(new Cesium.GeometryInstance({
+        geometry: new Cesium.PolygonGeometry({
+          polygonHierarchy: new Cesium.PolygonHierarchy(anelParaCartesianos(rings[0]), holes),
+          arcType: Cesium.ArcType.RHUMB,
+          vertexFormat: Cesium.PerInstanceColorAppearance.FLAT_VERTEX_FORMAT,
+        }),
+        attributes: {
+          color: Cesium.ColorGeometryInstanceAttribute.fromColor(SEM_COBERTURA_FILL),
+        },
+      }));
+    }
+  }
+  if (instances.length === 0) return { primitive: null, poligonos: 0 };
+  const primitive = new Cesium.GroundPrimitive({
+    geometryInstances: instances,
+    appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true }),
+    classificationType: Cesium.ClassificationType.BOTH,
+    // Ninguem faz pick na mancha de cobertura: poupa memoria de GPU.
+    allowPicking: false,
+    asynchronous: true,
+  });
+  return { primitive, poligonos: instances.length };
+}
 
 /**
  * Classe da torre a partir da mascara de bits gravada pelo gerador.
@@ -68,7 +141,11 @@ export function conectividadeLegend(counts) {
 export const datageoConectividadeLayer = (() => {
   let _viewer = null;
   let _torresSource = null;
+  // Cobertura: GroundPrimitive em lote (caminho normal) OU GeoJsonDataSource
+  // (fallback quando o contexto WebGL nao suporta ground primitives).
+  let _coberturaPrimitive = null;
   let _coberturaSource = null;
+  let _coberturaPump = null;
   let _enabled = false;
   let _count = 0;
   let _lastUpdate = null;
@@ -80,6 +157,16 @@ export const datageoConectividadeLayer = (() => {
   function aplicarVisibilidade() {
     if (_torresSource) _torresSource.show = _enabled;
     if (_coberturaSource) _coberturaSource.show = _enabled;
+    if (_coberturaPrimitive) _coberturaPrimitive.show = _enabled;
+    // O GroundPrimitive so progride quando ha frames: no requestRenderMode do
+    // governor alguem precisa pedi-los ate ele ficar pronto.
+    if (_enabled && _coberturaPrimitive && !_coberturaPrimitive.ready) _coberturaPump?.start();
+    else _coberturaPump?.stop();
+  }
+
+  function pararPump() {
+    _coberturaPump?.stop();
+    _coberturaPump = null;
   }
 
   async function carregarTorres() {
@@ -98,12 +185,9 @@ export const datageoConectividadeLayer = (() => {
         position: Cesium.Cartesian3.fromDegrees(lon, lat),
         point: {
           pixelSize: 4,
-          color: Cesium.Color.fromCssColorString(klass.color).withAlpha(0.9),
+          color: corDaClasse(klass.color),
           outlineWidth: 0,
-          // 5,8 mil pontos viram uma mancha solida na escala estadual; encolher
-          // com a distancia preserva a leitura de DENSIDADE, que e a informacao
-          // util de longe, e devolve o ponto individual de perto.
-          scaleByDistance: new Cesium.NearFarScalar(2.0e4, 1.6, 1.2e6, 0.45),
+          scaleByDistance: TORRE_SCALE,
           heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
@@ -116,12 +200,35 @@ export const datageoConectividadeLayer = (() => {
     _torresSource = source;
   }
 
+  function groundPrimitivesSuportados() {
+    try {
+      return Boolean(_viewer?.scene?.groundPrimitives)
+        && Cesium.GroundPrimitive.isSupported(_viewer.scene);
+    } catch {
+      return false;
+    }
+  }
+
   async function carregarCobertura() {
-    if (_coberturaSource) return;
+    if (_coberturaSource || _coberturaPrimitive) return;
     const resp = await fetch(COBERTURA_URL);
     if (!resp.ok) throw new Error(`cobertura HTTP ${resp.status}`);
     const geojson = await resp.json();
     _areaKm2 = Number(geojson.areaKm2) || null;
+    // destroy() ou outro update podem ter rodado durante os awaits.
+    if (!_viewer || _coberturaSource || _coberturaPrimitive) return;
+    if (groundPrimitivesSuportados()) {
+      const { primitive } = criarPrimitiveCobertura(geojson);
+      if (!primitive) return;
+      primitive.show = _enabled;
+      _viewer.scene.groundPrimitives.add(primitive);
+      _coberturaPrimitive = primitive;
+      _coberturaPump = createReadyPump({
+        isReady: () => !_coberturaPrimitive || _coberturaPrimitive.isDestroyed?.() || _coberturaPrimitive.ready,
+        requestRender: () => governorRequestRender('datageo-conectividade:cobertura'),
+      });
+      return;
+    }
     const source = await Cesium.GeoJsonDataSource.load(geojson, {
       clampToGround: true,
       fill: SEM_COBERTURA_FILL,
@@ -181,11 +288,22 @@ export const datageoConectividadeLayer = (() => {
 
     destroy(viewer) {
       _enabled = false;
+      pararPump();
       for (const source of [_torresSource, _coberturaSource]) {
         if (source) viewer?.dataSources?.remove(source, true);
       }
+      if (_coberturaPrimitive) {
+        const ground = (viewer ?? _viewer)?.scene?.groundPrimitives;
+        try {
+          if (ground?.contains?.(_coberturaPrimitive)) ground.remove(_coberturaPrimitive);
+          else if (!_coberturaPrimitive.isDestroyed?.()) _coberturaPrimitive.destroy?.();
+        } catch (err) {
+          console.warn('[Data:datageo-conectividade] remover cobertura:', err);
+        }
+      }
       _torresSource = null;
       _coberturaSource = null;
+      _coberturaPrimitive = null;
       _viewer = null;
       _legend = [];
     },

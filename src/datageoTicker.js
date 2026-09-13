@@ -7,6 +7,7 @@
 // espacial; vive no chrome do HUD.
 
 import { fetchNews } from './data/datageoClient.js';
+import { startPollLoop } from './data/pollPolicy.js';
 
 const POLL_MS = 5 * 60_000;
 
@@ -102,20 +103,19 @@ export function initDatageoTicker() {
   `;
   document.body.appendChild(container);
 
-  async function poll() {
-    try {
-      const items = await fetchNews(30);
-      if (items.length > 0) render(container, items);
-    } catch (err) {
-      console.warn('[DataGeo:ticker]', err);
-    }
-  }
-  poll();
-  const interval = setInterval(poll, POLL_MS);
+  // Loop com skip quando a aba esta oculta, backoff em erro e catch-up no
+  // visibilitychange (pollPolicy). Erro lanca para o loop contar a falha.
+  const loop = startPollLoop(async () => {
+    const items = await fetchNews(30);
+    if (items.length > 0) render(container, items);
+  }, {
+    baseMs: POLL_MS,
+    onError: (err) => console.warn('[DataGeo:ticker]', err),
+  });
 
   return {
     destroy() {
-      clearInterval(interval);
+      loop.stop();
       container.remove();
     },
   };

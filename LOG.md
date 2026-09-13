@@ -6,6 +6,52 @@
 
 ---
 
+## Sessão 2026-09-13: velocidade e features inspiradas no osiris
+
+Origem: estudo do simplifaisoul/osiris (Next + MapLibre). Nada de código ou
+stack copiado; só padrões (cache, lazy, polling, render em lote), mantendo a
+identidade visual. Três fases, todas testadas.
+
+- **Bundle:** plugin só de `vite build` troca os 10 módulos GEV que produção
+  nunca registra por stubs em `src/prodStubs/`. Index 1.362 → 1.021 kB
+  (gzip 422 → 306). Voz via import dinâmico em DEV; `preserveDrawingBuffer`
+  só em DEV. `GEV_FULL_BUILD=1` desliga os stubs.
+- **Rede:** `sourceCache.js` (TTL + voo único + stale-on-error) no
+  `dgSelect`; focos em páginas paralelas (`fetchPool.js`) e com cache de 2 min;
+  `pollPolicy.js`: poll pula aba oculta, backoff em erro, catch-up no
+  `visibilitychange` (manager, ticker, briefing).
+- **Dados estáticos:** `scripts/optimize_geojson.py` (simplificação ~5 m +
+  5 casas decimais) 12,3 → 8,2 MB, mesmas feições, acentos ok.
+  Ver `docs/OTIMIZACAO_GEOJSON.md`; rodar depois de qualquer `build_*.py`.
+- **Render:** camadas DataGeo com diff por id (`entityDiff.js`); rodovias
+  16 mil entidades → 2 `GroundPolylinePrimitive`; municípios e cobertura em
+  `GroundPrimitive` com hover por atributo de instância; rótulos densos só
+  com zoom (`LABEL_MAX_DISTANCE`).
+- **Features:** vigilância de municípios (VIGIAR na ficha, focos/CEMADEN/
+  incidentes novos, CSV/GeoJSON); briefing heurístico quando não há
+  relatório do dia; "+N" e contorno ciano por 60 s em itens novos; atalhos
+  L/B/P/M/A/? (F, R e V já eram do GEV).
+
+### Resultado
+- Testes 2631 → 2725, mesmas 51 falhas pré-existentes, nenhuma nova.
+- Benchmark headless (swiftshader, 2 rodadas): 5 camadas pesadas ligam em
+  2,2 s vs 2,7 s; frame p95 1,5 s vs 2,1 s; heap 370 vs 675 MB.
+- Revisão independente: CSV aceitava DDE com "-1+", vigilância varria sem
+  município vigiado; ambos corrigidos, mais 5 latentes.
+
+### Pegadinhas
+- A lista de stubs em `vite.config.js` precisa acompanhar
+  `PROXY_DEPENDENT_LAYER_IDS` do `main.js`. Import novo de export nomeado de
+  um desses módulos quebra o build até o stub exportar também.
+- A aba do Chrome controlada por extensão fica `document.hidden`: o app
+  suspende o render e o globo sai preto. Validar com puppeteer headless.
+- Ligar só a conectividade custa ~0,4 s a mais no 1º frame (empacotamento do
+  GroundPrimitive); o saldo com várias camadas é positivo.
+- Cache de 60 s nas camadas pode segurar um refresh manual dentro da janela.
+- O painel de vigilância fica atrás da ficha aberta (z-index).
+
+---
+
 ## Sessão 2026-09-13: clima histórico BR-DWGD (camada + ficha)
 
 Origem: revisão do awesome-gee-community-catalog; o BR-DWGD (Xavier et al.

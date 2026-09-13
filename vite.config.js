@@ -7478,6 +7478,66 @@ function normalizeAisTimestamp(value) {
 }
 
 /**
+ * Source modules (src/data/<name>.js) whose layers are never registered in a
+ * production build: they depend on dev-server proxies (see
+ * PROXY_DEPENDENT_LAYER_IDS in src/main.js). Keep this list in sync with that
+ * set; each name needs a matching inert stub in src/prodStubs/<name>.js.
+ */
+const PROD_STUBBED_LAYER_MODULES = Object.freeze([
+  'militaryFlights',
+  'satellites',
+  'rocketLaunches',
+  'traffic',
+  'cctv',
+  'radio',
+  'bikeshare',
+  'aisLiveVessels',
+  'militaryInstallations',
+  'militaryAwareness',
+]);
+
+/**
+ * Build-only resolver that swaps proxy-dependent layer modules for inert
+ * stubs, keeping thousands of lines of unreachable layer code out of the
+ * production entry chunk. It never runs for `vite` (dev server), for node
+ * tests, for non-production builds (e.g. NODE_ENV=development, where
+ * import.meta.env.DEV would register the layers), or when GEV_FULL_BUILD=1.
+ */
+function prodProxyLayerStubs() {
+  const srcDir = path.resolve(__dirname, 'src');
+  const targets = new Map(PROD_STUBBED_LAYER_MODULES.map((name) => [
+    path.normalize(path.join(srcDir, 'data', `${name}.js`)).toLowerCase(),
+    path.join(srcDir, 'prodStubs', `${name}.js`),
+  ]));
+  const basenames = new Set(PROD_STUBBED_LAYER_MODULES.map((name) => `${name}.js`));
+  let active = false;
+  return {
+    name: 'gev-prod-proxy-layer-stubs',
+    apply: 'build',
+    enforce: 'pre',
+    configResolved(config) {
+      active = config.isProduction && process.env.GEV_FULL_BUILD !== '1';
+      if (active) {
+        config.logger.info(
+          `[prod-stubs] ${PROD_STUBBED_LAYER_MODULES.length} proxy-dependent layers replaced by inert stubs (GEV_FULL_BUILD=1 disables)`,
+        );
+      }
+    },
+    resolveId(source, importer) {
+      if (!active || !importer || typeof source !== 'string') return null;
+      if (!basenames.has(path.basename(source))) return null;
+      if (!source.startsWith('.')) return null;
+      const importerPath = importer.split('?')[0];
+      if (/\.test\.m?js$/.test(importerPath)) return null;
+      const normalizedImporter = path.normalize(importerPath);
+      if (normalizedImporter.toLowerCase().startsWith(path.join(srcDir, 'prodStubs').toLowerCase())) return null;
+      const resolved = path.normalize(path.resolve(path.dirname(normalizedImporter), source)).toLowerCase();
+      return targets.get(resolved) || null;
+    },
+  };
+}
+
+/**
  * Main Vite configuration factory.
  *
  * Loads .env files via Vite's loadEnv, registers Cesium + local proxy
@@ -7494,6 +7554,7 @@ export default defineConfig(({ mode }) => {
   const env = { ...process.env };
   return {
     plugins: [
+      prodProxyLayerStubs(),
       cesium(),
       openSkyProxy(),
       celestrakProxy(),

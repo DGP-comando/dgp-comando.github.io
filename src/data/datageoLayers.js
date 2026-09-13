@@ -28,9 +28,15 @@ import {
   fetchVessels,
 } from './datageoClient.js';
 import { centroidByIbge, centroidByName } from './prCentroids.js';
+import { applyIdRefresh } from './entityDiff.js';
+import { highlightNewArrivals } from './newArrivalHighlight.js';
+import { governorRequestRender } from '../renderGovernor.js';
+
+const NEW_ARRIVAL_COLOR = Cesium.Color.fromCssColorString('#22d3ee');
 import { datageoMunicipiosLayer } from './datageoMunicipios.js';
 import { datageoVentosLayer } from './datageoVentos.js';
 import { datageoPrecipitacaoLayer } from './datageoPrecipitacao.js';
+import { datageoClimaHistoricoLayer } from './datageoClimaHistorico.js';
 import { datageoConectividadeLayer } from './datageoConectividade.js';
 import { datageoRodoviasLayer } from './datageoRodovias.js';
 import { DATAGEO_LOGISTICA_LAYERS } from './datageoLogistica.js';
@@ -53,16 +59,68 @@ function labelGraphics(text, { maxDistance = 2_500_000, pixelOffsetY = -14 } = {
   };
 }
 
+// Distancia de camera (m) abaixo da qual o label aparece, por camada. Os
+// pontos continuam visiveis a qualquer distancia; so o texto e condicionado.
+// Camadas densas ficam com teto baixo (InfoHidro: 1.300 labels), camadas de
+// alerta raras mantem o alcance estadual porque o texto e a informacao.
+export const LABEL_MAX_DISTANCE = Object.freeze({
+  clima: 250_000,
+  rios: 250_000,
+  cemaden: 3_000_000,
+  irtc: 1_800_000,
+  dengue: 600_000,
+  ar: 1_200_000,
+  anomalias: 2_500_000,
+  incidentes: 4_000_000,
+  infohidro: 80_000,
+  maritimo: 250_000,
+});
+
+/**
+ * Sink com a mesma forma de `EntityCollection.add` para os builders: eles
+ * continuam chamando `entities.add({...})`, mas as opcoes sao coletadas e
+ * aplicadas depois com diff por id (entityDiff.applyIdRefresh).
+ * @returns {{items: object[], add: (options: object) => object}}
+ */
+function createEntitySink() {
+  const items = [];
+  return {
+    items,
+    add(options) {
+      items.push(options);
+      return options;
+    },
+  };
+}
+
 /**
  * Factory generica: uma camada DataGeo = fetcher + construtor de entidades.
- * `build(rows, entities)` popula o CustomDataSource e retorna a contagem
- * exibida em getStats/painel.
+ * `build(rows, entities)` descreve as entidades (via `entities.add`) e retorna
+ * a contagem exibida em getStats/painel.
+ *
+ * Refresh incremental: cada entidade tem id estavel (station_code, alert_code,
+ * ibge_code, id...). A cada poll so as entidades novas sao criadas, as que
+ * sairam sao removidas e as que ficaram sao atualizadas no lugar, apenas nos
+ * campos que mudaram (labels iguais mantem os glifos, elipses clamped iguais
+ * nao sao re-tesseladas). Fonte sem id estavel cai no comportamento antigo
+ * (removeAll + add). `getLastRefreshNewIds()` expoe os ids que entraram no
+ * ultimo refresh bem-sucedido.
  */
 function createDatageoLayer({ id, name, category, icon, source, updateInterval, fetcher, build }) {
   let _dataSource = null;
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
+  let _entityById = new Map();
+  let _lastNewIds = new Set();
+  let _lastRefreshMode = null;
+  let _refreshes = 0;
+  let _highlight = null;
+
+  const clearHighlight = () => {
+    _highlight?.cancel();
+    _highlight = null;
+  };
 
   return {
     id,
@@ -79,6 +137,10 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _entityById = new Map();
+      _lastNewIds = new Set();
+      _lastRefreshMode = null;
+      _refreshes = 0;
       console.log(`[Data:${id}] Initialized`);
     },
 
@@ -92,15 +154,62 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
 
     async update() {
       if (!_dataSource) return false;
+      let rows;
       try {
-        const rows = await fetcher();
-        _dataSource.entities.removeAll();
-        _count = build(rows, _dataSource.entities);
+        rows = await fetcher();
+      } catch (err) {
+        _lastError = err?.message || String(err);
+        console.warn(`[Data:${id}]`, err);
+        return false;
+      }
+      // destroy() pode ter rodado durante o await.
+      if (!_dataSource) return false;
+      const entities = _dataSource.entities;
+      try {
+        const sink = createEntitySink();
+        build(rows, sink);
+        // Restaura contornos ANTES do diff: restaurar depois desfaria o patch
+        // deste refresh e contaria o contorno ciano como mudanca.
+        clearHighlight();
+        const result = applyIdRefresh({
+          collection: entities,
+          entityById: _entityById,
+          nextOptions: sink.items,
+          time: Cesium.JulianDate.now(),
+        });
+        _count = result.count;
+        _lastNewIds = result.newIds;
+        _lastRefreshMode = result.mode;
+        _refreshes += 1;
         _lastUpdate = Date.now();
         _lastError = null;
-        console.log(`[Data:${id}] Updated: ${_count} registros`);
+        // Itens que chegaram neste poll ganham contorno ciano por 60 s. No
+        // primeiro refresh tudo e "novo", entao nao ha destaque.
+        if (_refreshes > 1 && result.newIds.size > 0) {
+          _highlight = highlightNewArrivals(
+            [...result.newIds].map((newId) => _entityById.get(newId)),
+            {
+              outlineColor: NEW_ARRIVAL_COLOR,
+              onChange: (reason) => governorRequestRender(`${id}:${reason}`),
+            },
+          );
+        }
+        console.log(
+          `[Data:${id}] Updated: ${_count} registros (${result.mode}: +${result.added} ~${result.updated} -${result.removed})`,
+        );
         return true;
       } catch (err) {
+        // Estado parcial de um diff que falhou nao e confiavel: limpa tudo e o
+        // proximo poll reconstroi do zero.
+        clearHighlight();
+        try {
+          entities.removeAll();
+        } catch {
+          // colecao ja destruida
+        }
+        _entityById = new Map();
+        _lastNewIds = new Set();
+        _count = 0;
         _lastError = err?.message || String(err);
         console.warn(`[Data:${id}]`, err);
         return false;
@@ -108,6 +217,7 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
     },
 
     destroy(viewer) {
+      clearHighlight();
       if (_dataSource) {
         viewer.dataSources.remove(_dataSource, true);
         _dataSource = null;
@@ -115,10 +225,31 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
       _count = 0;
       _lastUpdate = null;
       _lastError = null;
+      _entityById = new Map();
+      _lastNewIds = new Set();
+      _lastRefreshMode = null;
+      _refreshes = 0;
+    },
+
+    /**
+     * Ids de entidade que entraram no ultimo refresh bem-sucedido. No primeiro
+     * refresh todos sao novos (ver `initialRefresh` em getStats); fonte sem id
+     * estavel devolve um Set vazio. Copia defensiva.
+     * @returns {Set<string>}
+     */
+    getLastRefreshNewIds() {
+      return new Set(_lastNewIds);
     },
 
     getStats() {
-      return { count: _count, lastUpdate: _lastUpdate, error: _lastError };
+      return {
+        count: _count,
+        lastUpdate: _lastUpdate,
+        error: _lastError,
+        newCount: _lastNewIds.size,
+        initialRefresh: _refreshes === 1,
+        refreshMode: _lastRefreshMode,
+      };
     },
   };
 }
@@ -166,7 +297,7 @@ export const datageoClimaLayer = createDatageoLayer({
         },
         label: labelGraphics(
           `${row.municipality ?? row.station_name ?? row.station_code}\n${parts.join(' · ')}`,
-          { maxDistance: 1_200_000 },
+          { maxDistance: LABEL_MAX_DISTANCE.clima },
         ),
         properties: {
           municipality: row.municipality,
@@ -224,7 +355,7 @@ export const datageoRiosLayer = createDatageoLayer({
         label: labelGraphics(
           `${row.river_name ?? ''} · ${row.station_name ?? row.station_code}` +
             `\n${cm !== null && Number.isFinite(cm) ? `${cm.toFixed(0)} cm · ` : ''}${level.toUpperCase()}`,
-          { maxDistance: 1_500_000 },
+          { maxDistance: LABEL_MAX_DISTANCE.rios },
         ),
         properties: { alertLevel: level, levelCm: cm, municipality: row.municipality },
       });
@@ -273,7 +404,7 @@ export const datageoCemadenLayer = createDatageoLayer({
         },
         label: labelGraphics(
           `CEMADEN · ${(row.alert_type ?? '').toUpperCase()}\n${anchor.name} · ${severity.replace('_', ' ').toUpperCase()}`,
-          { maxDistance: 3_000_000 },
+          { maxDistance: LABEL_MAX_DISTANCE.cemaden },
         ),
         properties: {
           alertType: row.alert_type,
@@ -338,7 +469,7 @@ export const datageoIrtcLayer = createDatageoLayer({
         label: emphasized
           ? labelGraphics(
               `${anchor.name}\nIRTC ${score.toFixed(0)} · ${String(level).toUpperCase()} · ${row.dominant_domain ?? ''}`,
-              { maxDistance: 1_800_000 },
+              { maxDistance: LABEL_MAX_DISTANCE.irtc },
             )
           : undefined,
         properties: {
@@ -397,7 +528,7 @@ export const datageoDengueLayer = createDatageoLayer({
         label: emphasized
           ? labelGraphics(
               `${anchor.name}\nDengue nivel ${level} · ${cases} casos · SE ${week}/${year}`,
-              { maxDistance: 2_000_000 },
+              { maxDistance: LABEL_MAX_DISTANCE.dengue },
             )
           : undefined,
         properties: { alertLevel: level, cases, week, year },
@@ -466,7 +597,7 @@ export const datageoArLayer = createDatageoLayer({
         },
         label: labelGraphics(
           `${geo.nome}\nAQI ${aqi ?? '?'}${row.dominant_pollutant ? ` · ${row.dominant_pollutant}` : ''}`,
-          { maxDistance: 1_200_000 },
+          { maxDistance: LABEL_MAX_DISTANCE.ar },
         ),
         properties: { aqi, pollutant: row.dominant_pollutant, observedAt: row.observed_at },
       });
@@ -509,7 +640,7 @@ export const datageoAnomaliasLayer = createDatageoLayer({
         },
         label: labelGraphics(
           `ANOMALIA · ${row.indicator}\n${anchor.name} · z=${z.toFixed(1)} · obs ${Number(row.observed_value ?? 0).toFixed(1)}`,
-          { maxDistance: 2_500_000 },
+          { maxDistance: LABEL_MAX_DISTANCE.anomalias },
         ),
         properties: { domain: row.domain, indicator: row.indicator, zScore: z },
       });
@@ -559,7 +690,7 @@ export const datageoIncidentesLayer = createDatageoLayer({
         },
         label: labelGraphics(
           `INCIDENTE · ${(row.type ?? 'outro').toUpperCase()}\n${row.title ?? ''} · ${(row.status ?? '').toUpperCase()}`,
-          { maxDistance: 4_000_000 },
+          { maxDistance: LABEL_MAX_DISTANCE.incidentes },
         ),
         properties: { severity: row.severity, status: row.status, type: row.type },
       });
@@ -598,7 +729,7 @@ export const datageoInfohidroLayer = createDatageoLayer({
         },
         // Label so bem de perto: 1.300 pontos sao contexto, nao leitura.
         label: labelGraphics(`${row.nome ?? row.codigo}`, {
-          maxDistance: 120_000,
+          maxDistance: LABEL_MAX_DISTANCE.infohidro,
           pixelOffsetY: -10,
         }),
         properties: { codigo: row.codigo, tipoId: row.tipo_id },
@@ -655,7 +786,7 @@ export const datageoMaritimoLayer = createDatageoLayer({
             `
 ${sog !== null ? `${sog.toFixed(1)} kn · ` : ''}` +
             `${row.nav_status_label ?? ''} · ${ageMin}min`,
-          { maxDistance: 1_500_000 },
+          { maxDistance: LABEL_MAX_DISTANCE.maritimo },
         ),
         properties: {
           mmsi: row.mmsi,
@@ -755,6 +886,9 @@ export const DATAGEO_LAYERS = [
   ...DATAGEO_ENERGIA_LAYERS,
   ...DATAGEO_LOGISTICA_LAYERS,
   datageoConectividadeLayer,
+  // O normal historico (BR-DWGD) e o fundo sobre o qual chuva e vento ao vivo
+  // sao lidos: vem antes dos dois.
+  datageoClimaHistoricoLayer,
   // Chuva antes de vento: as duas leem a mesma grade Open-Meteo e o campo de
   // precipitacao e o fundo sobre o qual os riscos de vento sao lidos.
   datageoPrecipitacaoLayer,
