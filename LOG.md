@@ -6,6 +6,49 @@
 
 ---
 
+## Sessão 2026-09-13: clima histórico BR-DWGD (camada + ficha)
+
+Origem: revisão do awesome-gee-community-catalog; o BR-DWGD (Xavier et al.
+2022, grade diária 0,1°, 1961–2022, CC BY 4.0) foi o dataset de maior encaixe
+com o ecossistema. Contrato dos dados em `docs/CLIMA_BRDWGD.md`.
+
+- `scripts/build_clima_brdwgd.py`: GEE → 3 JSONs em `public/data/` (resumo
+  municipal, séries anuais, grade estadual). Normal **1990–2019** (Tmax/Tmin/ETo
+  acabam em 2020-07). Sonda escala/offset dos assets antes de tudo e aborta se
+  a média de jan/2000 cair fora da faixa física; confere Curitiba, Foz e Maringá
+  contra climatologia conhecida antes de gravar.
+- `src/data/datageoClimaHistorico.js` (token `E`): campo estático de 0,1°,
+  retângulo texturizado a 60 m (abaixo de precipitação 90 m e ventos 120 m),
+  seis chips de indicador (CHUVA, TEMP, GEADA, BALANÇO, CALOR, ΔT/DÉC).
+  Escala cividis (`climaHistoricoRamp.js`), fora das famílias ciano, violeta,
+  verde e fogo; quebras por quantil vêm do JSON.
+- Ficha municipal: seção "Clima histórico · BR-DWGD" (normal, balanço, geada,
+  calor, barras mensais chuva × ETo, tendência e série de Tméd). Carga em
+  paralelo com o Supabase, nunca derruba a ficha.
+- Hub `datageoparana.github.io`: referência 18 em `referencias.html`.
+
+### Resultado (gerado e verificado em 2026-09-13)
+- `EE_PROJECT=i-freedom-358120`. JSONs: 198 KB + 381 KB + 151 KB. 8/8 testes.
+- Conferência: Curitiba 1.555 mm/ano, Tméd 18,7 °C, geada 5,3 d/ano,
+  +0,30 °C/década (sig.); Foz 1.815 mm, 22,5 °C; Maringá 1.607 mm, 23,4 °C.
+- Browser (:4176): campo alinhado às divisas; chuva máxima no sudoeste/
+  Guarapuava, geada máxima no Centro-Sul; token `E` no share link; ficha de
+  Curitiba com a seção entre "Clima local" e "Hidrologia".
+
+### Pegadinhas
+- **Os assets do BR-DWGD no GEE estão EMPACOTADOS** (banda `b1`, int16):
+  chuva bruta de jan/2000 = −32.004. Valor = bruto × escala + offset do
+  catálogo. A sonda do script decide sozinha; não remover.
+- (Tmax+Tmin)/2 fica ~0,5–1 °C acima da média compensada do INMET: a primeira
+  faixa de conferência (Curitiba ≤ 18,5 °C) barrou um dado correto.
+- `sampleRectangle` com `defaultValue` exige tipo único: `toFloat()` antes.
+- Cache das agregações municipais em `.gev-cache/brdwgd/` (gitignored):
+  apagar para recalcular.
+- `layerState.test.mjs` já falhava antes desta sessão: espera 16 ids no
+  registro e há 40 (agora 41).
+
+---
+
 ## Sessão 2026-09-11: municípios como piso, busca por município, precipitação, VBP/ha e conectividade
 
 Quatro entregas, todas commitadas e no ar (`19c208d` → `1d4c263` → `61cdbbe` →
