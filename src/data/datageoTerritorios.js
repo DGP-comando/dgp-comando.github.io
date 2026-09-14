@@ -1,5 +1,11 @@
 // src/data/datageoTerritorios.js
 //
+// Áreas protegidas e territórios em polígono.
+//
+// Classe Limites: assentamentos da reforma agrária (INCRA/SIPRA, 311 no PR).
+// Classe Ambiente: unidades de conservação federais e estaduais (MMA/CNUC).
+// GeoJSONs de scripts/build_limites_ambientais.py.
+//
 // Territórios tradicionais (classe Limites):
 //   - Terras indígenas: FUNAI/CMR via seed do valor-de-terras (57
 //     polígonos, todas as etapas de regularização).
@@ -25,7 +31,7 @@ function centroidOf(rings) {
   return ring.length ? [sx / ring.length, sy / ring.length] : null;
 }
 
-function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, labelMaxDist }) {
+function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, labelMaxDist, category = 'Limites' }) {
   let _dataSource = null;
   let _enabled = false;
   let _count = 0;
@@ -41,7 +47,7 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
   return {
     id,
     name,
-    category: 'Limites',
+    category,
     icon,
     source,
     updateInterval: 24 * 3600_000,
@@ -181,7 +187,61 @@ export const datageoQuilombolasLayer = makeTerritorioLayer({
   labelMaxDist: 1_600_000,
 });
 
+const fmtFamilias = (n) => (Number(n) > 0 ? ` · ${Math.round(n).toLocaleString('pt-BR')} famílias` : '');
+
+export const datageoAssentamentosLayer = makeTerritorioLayer({
+  id: 'datageo-assentamentos',
+  name: 'Assentamentos (INCRA)',
+  icon: '🌾',
+  source: 'INCRA/SIPRA',
+  url: '/data/assentamentos-incra-pr.geojson',
+  cssColor: '#a3e635',
+  // 311 projetos no PR: rótulo só perto para não virar tapete de texto.
+  labelOf: (p) => `${p.nome}${fmtFamilias(p.familias)}`,
+  labelMaxDist: 80_000,
+});
+
+/**
+ * "RESERVA BIOLÓGICA DAS PEROBAS" -> "Reserva Biológica das Perobas": o CNUC
+ * grava em caixa alta, e rótulo em caixa alta no globo pesa demais.
+ */
+export function tituloUc(nome) {
+  const minusculas = new Set(['da', 'das', 'de', 'do', 'dos', 'e']);
+  return String(nome ?? '')
+    .toLocaleLowerCase('pt-BR')
+    .split(/\s+/)
+    .map((w, i) => (i > 0 && minusculas.has(w) ? w : w.charAt(0).toLocaleUpperCase('pt-BR') + w.slice(1)))
+    .join(' ');
+}
+
+export const datageoUcsFederaisLayer = makeTerritorioLayer({
+  id: 'datageo-ucs-federais',
+  name: 'Unidades de conservação federais',
+  icon: '🌳',
+  source: 'MMA/CNUC · ICMBio',
+  url: '/data/ucs-federais-pr.geojson',
+  cssColor: '#34d399',
+  category: 'Ambiente',
+  labelOf: (p) => `${tituloUc(p.nome)}${fmtHa(p.area_ha)}`,
+  labelMaxDist: 400_000,
+});
+
+export const datageoUcsEstaduaisLayer = makeTerritorioLayer({
+  id: 'datageo-ucs-estaduais',
+  name: 'Unidades de conservação estaduais',
+  icon: '🌲',
+  source: 'MMA/CNUC · IAT',
+  url: '/data/ucs-estaduais-pr.geojson',
+  cssColor: '#2dd4bf',
+  category: 'Ambiente',
+  labelOf: (p) => `${tituloUc(p.nome)}${fmtHa(p.area_ha)}`,
+  labelMaxDist: 400_000,
+});
+
 export const DATAGEO_TERRITORIOS_LAYERS = [
   datageoTerrasIndigenasLayer,
   datageoQuilombolasLayer,
+  datageoAssentamentosLayer,
+  datageoUcsFederaisLayer,
+  datageoUcsEstaduaisLayer,
 ];

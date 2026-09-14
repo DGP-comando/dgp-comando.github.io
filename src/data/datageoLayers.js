@@ -29,6 +29,15 @@ import {
   fetchPortLineup,
 } from './datageoClient.js';
 import { lineupEntityRows, validLineup } from './portLineup.js';
+import {
+  SHIP_ICON_URI,
+  VESSEL_METERS_MAX_DISTANCE,
+  farIconPixels,
+  headingToRotation,
+  shipDimensions,
+} from './vesselIcon.js';
+import { vesselTooltipHtml } from './vesselTooltip.js';
+import { createEntityHoverTooltip } from './entityHoverTooltip.js';
 import { centroidByIbge, centroidByName } from './prCentroids.js';
 import { applyIdRefresh } from './entityDiff.js';
 import { highlightNewArrivals } from './newArrivalHighlight.js';
@@ -108,8 +117,9 @@ function createEntitySink() {
  * (removeAll + add). `getLastRefreshNewIds()` expoe os ids que entraram no
  * ultimo refresh bem-sucedido.
  */
-function createDatageoLayer({ id, name, category, icon, source, updateInterval, fetcher, build }) {
+function createDatageoLayer({ id, name, category, icon, source, updateInterval, fetcher, build, tooltip = null }) {
   let _dataSource = null;
+  let _tooltip = null;
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
@@ -143,6 +153,14 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
       _lastNewIds = new Set();
       _lastRefreshMode = null;
       _refreshes = 0;
+      if (tooltip && typeof document !== 'undefined') {
+        _tooltip = createEntityHoverTooltip({
+          viewer,
+          idPrefix: `${id}:`,
+          render: tooltip,
+          isActive: () => Boolean(_dataSource?.show),
+        });
+      }
       console.log(`[Data:${id}] Initialized`);
     },
 
@@ -152,6 +170,7 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
 
     disable() {
       if (_dataSource) _dataSource.show = false;
+      _tooltip?.hide();
     },
 
     async update() {
@@ -169,7 +188,7 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
       const entities = _dataSource.entities;
       try {
         const sink = createEntitySink();
-        build(rows, sink);
+        const built = build(rows, sink);
         // Restaura contornos ANTES do diff: restaurar depois desfaria o patch
         // deste refresh e contaria o contorno ciano como mudanca.
         clearHighlight();
@@ -179,8 +198,12 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
           nextOptions: sink.items,
           time: Cesium.JulianDate.now(),
         });
-        _count = result.count;
-        _lastNewIds = result.newIds;
+        // Camadas com mais de uma entidade por registro (navio: ícone em metros
+        // + ícone em pixels) devolvem a contagem real de registros no build, e
+        // marcam as entidades companheiras com '#' no id para não contarem
+        // como chegada nova em dobro.
+        _count = typeof built === 'number' ? built : result.count;
+        _lastNewIds = new Set([...result.newIds].filter((newId) => !newId.includes('#')));
         _lastRefreshMode = result.mode;
         _refreshes += 1;
         _lastUpdate = Date.now();
@@ -220,6 +243,8 @@ function createDatageoLayer({ id, name, category, icon, source, updateInterval, 
 
     destroy(viewer) {
       clearHighlight();
+      _tooltip?.destroy();
+      _tooltip = null;
       if (_dataSource) {
         viewer.dataSources.remove(_dataSource, true);
         _dataSource = null;
@@ -760,6 +785,49 @@ const LINEUP_BERTH_COLOR = Cesium.Color.fromCssColorString('#fbbf24').withAlpha(
 const LINEUP_ANCHOR_COLOR = Cesium.Color.fromCssColorString('#94a3b8').withAlpha(0.9);
 // Berços a ~180 m: acima de ~3,5 km os rótulos viram uma faixa ilegível.
 const LINEUP_LABEL_MAX_DISTANCE = 3_500;
+const AIS_MOVING_COLOR = Cesium.Color.AQUA.withAlpha(0.95);
+const AIS_STOPPED_COLOR = Cesium.Color.LIGHTSTEELBLUE.withAlpha(0.95);
+const SHIP_NEAR_CONDITION = new Cesium.DistanceDisplayCondition(0, VESSEL_METERS_MAX_DISTANCE);
+const SHIP_FAR_CONDITION = new Cesium.DistanceDisplayCondition(VESSEL_METERS_MAX_DISTANCE, Number.POSITIVE_INFINITY);
+
+/**
+ * Um navio = duas entidades trocadas pela distância da câmera (vesselIcon.js):
+ * `baseId` com ícone em pixels (longe) e rótulo, e `baseId#m` com ícone em
+ * metros no tamanho real (perto). As duas carregam as properties do tooltip.
+ */
+function addShipEntities(entities, { baseId, lon, lat, color, loaM, headingDeg, label, properties }) {
+  const position = Cesium.Cartesian3.fromDegrees(lon, lat);
+  const rotation = headingToRotation(headingDeg);
+  const { lengthM, beamM } = shipDimensions(loaM);
+  const far = farIconPixels(loaM);
+  const common = {
+    image: SHIP_ICON_URI,
+    color,
+    rotation,
+    alignedAxis: Cesium.Cartesian3.UNIT_Z,
+    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+    disableDepthTestDistance: Number.POSITIVE_INFINITY,
+  };
+  entities.add({
+    id: baseId,
+    position,
+    billboard: { ...common, width: far.width, height: far.height, distanceDisplayCondition: SHIP_FAR_CONDITION },
+    label,
+    properties,
+  });
+  entities.add({
+    id: `${baseId}#m`,
+    position,
+    billboard: {
+      ...common,
+      width: beamM,
+      height: lengthM,
+      sizeInMeters: true,
+      distanceDisplayCondition: SHIP_NEAR_CONDITION,
+    },
+    properties,
+  });
+}
 
 async function fetchMaritimo() {
   const [lineup, ais] = await Promise.allSettled([fetchPortLineup(), fetchVessels()]);
@@ -781,21 +849,18 @@ export const datageoMaritimoLayer = createDatageoLayer({
   source: 'APPA line-up · AISStream',
   updateInterval: 600_000,
   fetcher: fetchMaritimo,
+  tooltip: vesselTooltipHtml,
   build({ lineup, vessels }, entities) {
     let count = 0;
     for (const row of lineupEntityRows(lineup)) {
       const atracado = row.kind === 'berco';
-      entities.add({
-        id: `datageo-maritimo:${row.id}`,
-        position: Cesium.Cartesian3.fromDegrees(row.lon, row.lat),
-        point: {
-          pixelSize: atracado ? 9 : 7,
-          color: atracado ? LINEUP_BERTH_COLOR : LINEUP_ANCHOR_COLOR,
-          outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
-          outlineWidth: 1,
-          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
+      addShipEntities(entities, {
+        baseId: `datageo-maritimo:${row.id}`,
+        lon: row.lon,
+        lat: row.lat,
+        color: atracado ? LINEUP_BERTH_COLOR : LINEUP_ANCHOR_COLOR,
+        loaM: row.loaM,
+        headingDeg: row.rumo,
         label: {
           ...labelGraphics(row.label, {
             maxDistance: LINEUP_LABEL_MAX_DISTANCE,
@@ -814,17 +879,13 @@ export const datageoMaritimoLayer = createDatageoLayer({
       const sog = row.sog_knots === null ? null : Number(row.sog_knots);
       const moving = sog !== null && sog >= 0.5;
       const ageMin = Math.max(0, Math.round((Date.now() - Date.parse(row.observed_at)) / 60_000));
-      entities.add({
-        id: `datageo-maritimo:${row.mmsi}`,
-        position: Cesium.Cartesian3.fromDegrees(lon, lat),
-        point: {
-          pixelSize: moving ? 10 : 8,
-          color: (moving ? Cesium.Color.AQUA : Cesium.Color.LIGHTSTEELBLUE).withAlpha(0.95),
-          outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
-          outlineWidth: 1,
-          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
+      addShipEntities(entities, {
+        baseId: `datageo-maritimo:${row.mmsi}`,
+        lon,
+        lat,
+        color: moving ? AIS_MOVING_COLOR : AIS_STOPPED_COLOR,
+        loaM: null,
+        headingDeg: row.cog_deg,
         label: labelGraphics(
           `${row.vessel_name ?? `MMSI ${row.mmsi}`}` +
             `
@@ -834,7 +895,10 @@ ${sog !== null ? `${sog.toFixed(1)} kn · ` : ''}` +
         ),
         properties: {
           mmsi: row.mmsi,
+          vesselName: row.vessel_name,
           shipType: row.ship_type_label,
+          navStatus: row.nav_status_label,
+          sog,
           destination: row.destination,
           observedAt: row.observed_at,
         },

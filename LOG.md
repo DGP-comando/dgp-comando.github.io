@@ -6,6 +6,50 @@
 
 ---
 
+## Sessão 2026-09-14 (madrugada): navios com ícone e tooltip; assentamentos e UCs
+
+### Navios
+- **Tooltip de hover** (`src/data/entityHoverTooltip.js`, genérico, opção
+  `tooltip` no `createDatageoLayer`): mesmo desenho do tooltip dos municípios
+  (pick com throttle de 40 ms, nada com câmera em movimento). HTML em
+  `vesselTooltip.js`, com todo texto externo escapado: nome, berço, IMO, LOA,
+  DWT, carga, sentido, operador, agência, atracação, previsão de término e
+  andamento da operação (realizado/previsto); ao largo mostra chegada/ETA e o
+  aviso de posição ilustrativa.
+- **Ícone SVG de navio** (`vesselIcon.js`) no lugar dos pontos. Escala: até
+  12 km de câmera o billboard é em METROS (LOA real do line-up, boca ≈ LOA/6,5),
+  do tamanho do navio na imagem de satélite; acima disso, em PIXELS (12-22 px,
+  leve proporção ao LOA), casando com o tamanho em metros na troca. Cada navio
+  vira duas entidades (`id` e `id#m`); o factory ignora `#` na contagem de
+  chegadas novas.
+- **Rumo**: atracado fica paralelo ao cais/píer (c2-parana: `rumo` por berço em
+  `berths.ts`); AIS usa `cog_deg`; fundeio sem rumo usa 45°.
+
+### Assentamentos (Limites) e UCs federais/estaduais (Ambiente)
+- `scripts/build_limites_ambientais.py`: INCRA `Assentamento Brasil_PR.zip`
+  (certificacao.incra.gov.br, 311 projetos) e MMA/CNUC polígonos 2025-08
+  (39 federais + 42 estaduais com UF Paraná; municipais fora). Simplificação
+  + 5 casas + validação/reparo depois do arredondamento.
+- Camadas `datageo-assentamentos` (token F), `datageo-ucs-federais` (G),
+  `datageo-ucs-estaduais` (H) na factory de territórios, agora com categoria
+  parametrizável; rótulos das UCs em título (`tituloUc`).
+- Testes de integridade dos GeoJSONs (contagens, UF, esfera, coordenadas,
+  acentos) em `limitesAmbientais.test.mjs`.
+
+### Pegadinhas
+- INCRA: o acervo pede login e `i3geo/geodados` dá 403, mas
+  `certificacao.incra.gov.br/csv_shp/zip/Assentamento Brasil_<UF>.zip` segue
+  público.
+- CNUC: o DBF corta UTF-8 no meio de caractere acentuado. Ler como latin-1 e
+  recodificar. No pandas 3 as colunas de texto são StringDtype: não filtrar
+  por `dtype == object`, senão nada é recodificado e o filtro por "PARANÁ"
+  devolve zero.
+- O CNUC 2026-07 existe, mas num SharePoint; o último shapefile com download
+  direto é o de 2025-08.
+- Não nomear script Python como `inspect.py` (sombra o módulo da stdlib).
+
+---
+
 ## Sessão 2026-09-13 (noite): camada de navios passa a usar o line-up da APPA
 
 Sintoma: a camada marítima nunca mostrava navios. `maritime_traffic` tinha 52
