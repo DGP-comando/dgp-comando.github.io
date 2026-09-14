@@ -57,6 +57,18 @@ export const DATA_CREDITS = [
       '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> (ODbL)',
   },
   {
+    key: 'incra-assentamentos',
+    html:
+      'Assentamentos da reforma agrária: ' +
+      '<a href="https://acervofundiario.incra.gov.br/acervo/" target="_blank" rel="noopener">INCRA · Acervo Fundiário (SIPRA)</a>',
+  },
+  {
+    key: 'mma-cnuc',
+    html:
+      'Unidades de conservação federais e estaduais: ' +
+      '<a href="https://dados.mma.gov.br/dataset/unidadesdeconservacao" target="_blank" rel="noopener">MMA · Cadastro Nacional de Unidades de Conservação (CNUC)</a>, polígonos 2025-08',
+  },
+  {
     key: 'celestrak',
     html:
       'Satellites (TLEs): CelesTrak ' +

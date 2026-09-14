@@ -64,9 +64,13 @@ export function lineupEntityRows(payload) {
       // do ponto para vizinhos não se sobreporem.
       label: [navio.embarcacao, linha2].filter(Boolean).join('\n'),
       labelAbove: rows.length % 2 === 0,
+      // Rumo do eixo do cais/píer (atracado); null no fundeio.
+      rumo: typeof navio.posicao.rumo === 'number' ? navio.posicao.rumo : null,
+      loaM: typeof navio.loa_m === 'number' ? navio.loa_m : null,
       props: {
         quando,
         fonte: 'APPA line-up',
+        kind,
         secao: navio.secao,
         embarcacao: navio.embarcacao,
         imo: navio.imo ?? null,
@@ -75,7 +79,17 @@ export function lineupEntityRows(payload) {
         operadores: (navio.operadores ?? []).join(' + '),
         mercadorias: (navio.mercadorias ?? []).join(' + '),
         sentido: navio.sentido ?? null,
+        agencia: navio.agencia ?? null,
         loaM: navio.loa_m ?? null,
+        dwtT: navio.dwt_t ?? null,
+        atracacao: navio.atracacao ?? null,
+        chegada: navio.chegada ?? null,
+        eta: navio.eta ?? null,
+        janelaFim: navio.janela_fim ?? null,
+        previsto: navio.previsto ?? null,
+        realizado: navio.realizado ?? null,
+        unidade: navio.unidade ?? null,
+        emitidoEm: payload.emitted_at ?? null,
       },
     });
   }
