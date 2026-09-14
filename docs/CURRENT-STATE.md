@@ -2,115 +2,43 @@
 
 Updated: August 24, 2026
 
-> **2026-08-23 — first-run mission launcher** (`src/firstRunExperience.js`,
-> `#first-run-launcher`, styles at the tail of `style.css`). After startup
-> settles, a fresh session gets one card offering **Live Contacts · Space
-> Missions · Environmental · Explore manually**. No layer and no optional API
-> call happens until a tile is clicked. The right-hand DISPLAY rail
-> (`pp-toggles`) now starts **collapsed** on a first run rather than expanded —
-> a stored collapse state still wins, as before.
+> **2026-09-14 — tutorial de entrada substitui o card de missões**
+> (`src/firstRunExperience.js`, `#first-run-launcher`, estilos no fim de
+> `style.css`). O card "Escolha a sua missão" (Defesa Civil / Epidemiológico /
+> Agroambiental / Explorar) saiu. No lugar, um tutorial não modal em 4 passos:
+> **Início → Camadas de dados → Pesquisa de localização → Ajustes da tela**
+> (este último com menor ênfase). Cada passo realça o painel real
+> (`.tour-highlight` em `#data-panel`, `#location-bar`, `#control-panel` e
+> `#pp-toggles`); os botões "Abrir o painel de camadas" e "Experimentar a
+> busca" chamam `openLayersPanel`/`openLocationSearch` de
+> `src/datageoShortcuts.js`, os mesmos caminhos das teclas L e B. O tutorial
+> **não liga camada nem grava preferência**; os atalhos continuam valendo com
+> ele aberto.
 >
-> **The ENVIRONMENTAL tile is quakes AND fires** — live USGS earthquakes plus
-> NASA FIRMS active fires (`layerIds: ['earthquakes', 'local-firms']`), with the
-> tile subcopy naming both. **The launcher optimizes for the fully configured
-> experience:** it does not trim what it offers down
-> to the lowest-configured install. The mission does not branch on whether a key
-> is present — everyone gets the same tile.
+> **Show policy — não é one-shot.** Precedência: link compartilhado nunca vê →
+> `?welcome=0` suprime → `?welcome=1` reapresenta (vence as duas supressões) →
+> `localStorage['gev:first-run-tour:v1'] === 'suppressed'`, escrito **só** pela
+> caixa "Não mostrar de novo" → `sessionStorage['gev:first-run-tour-session:v1']
+> === 'dismissed'`, escrito por todo fechamento (Concluir, Pular, ESC). As chaves
+> mudaram de `first-run-mission` para `first-run-tour`, então quem suprimiu o
+> card antigo vê o tutorial uma vez. Os dois stores falham abertos; escrita
+> recusada desmarca a caixa e avisa.
 >
-> Keyless, the honest surface is the **layer row**, which reads
-> `UNAVAILABLE · NASA FIRMS · LIVE · KEY REQUIRED`, and the earthquakes half
-> still delivers in full. The shared loading reducer now treats an explicitly
-> declared missing optional key as a configured terminal state rather than a
-> failed multi-layer mission, so the global chip completes without showing
-> `LOAD FAILED`. A genuine lifecycle or fetch failure still retains failure
-> priority.
+> **Teclado.** ESC fecha e ← → navegam **só** com o foco no card (ou livre no
+> body): com o foco na busca que o próprio tutorial abriu, ESC é da busca.
+> Arbitragem mantida: o tutorial cede às superfícies de `EXCLUSIVE_SURFACE_CLASSES`
+> (`cockpit-mode`, `scene-playback-mode`, `recording-mode`, `ui-clean-view`, em
+> sincronia com a regra CSS), `isTopmost()` faz hit-test no centro do card contra
+> overlays sem classe (lightbox de atribuição, ajuda de atalhos) e eventos com
+> `defaultPrevented` são ignorados. **Aceito:** uma classe de superfície que
+> nunca sai significa nenhum tutorial naquele carregamento, sem timeout.
 >
-> **Acceptance changed with that ruling (2026-08-23).** `qa-firstrun` no longer
-> asserts "a keyless Environmental never shows a failure chip" — that stopped
-> being a launch requirement when the tile went back to promising both feeds.
-> The Environmental section now **branches on the observed key state** and says
-> which branch it took: KEYED asserts both datasets actually arrive and that no
-> LOAD FAILED banner appears while the mission runs; KEYLESS asserts the
-> layer-row honesty (`KEY REQUIRED`), the quakes half loading, and that the
-> deliberate missing-key state never becomes a global failure.
+> A abertura da busca agora tenta o foco a cada frame por até 600 ms: a gaveta
+> do dock abre com transição e o `focus()` no mesmo tick falhava em silêncio
+> (valia também para a tecla B).
 >
-> **An INFRASTRUCTURE tile is deliberately absent.** It was built, playtested,
-> and cut: one click enabling `local-datacenters` + `local-dams` +
-> `telegeography-submarine-cables` puts ~5,700 entities on a full-earth view and
-> the frame rate goes with them. The layers are unchanged and still reachable by
-> hand and by voice ("infrastructure mode" is still mapped). Do not re-add the
-> tile before the bundled-infra globe-LOD declutter lands — that is the real
-> fix, and it is post-launch work.
->
-> **Show policy — it is NOT one-shot.** Precedence, highest first: a share link
-> never sees it → `?welcome=0` suppresses → `?welcome=1` replays (past both
-> suppressions, for demos/support) → the durable
-> `localStorage['gev:first-run-mission:v1'] === 'suppressed'`, written **only**
-> by the "Don't show this again" checkbox → the per-session
-> `sessionStorage['gev:first-run-mission-session:v1'] === 'dismissed'`, written
-> by **every** close path (mission, Explore, ESC). So it returns each fresh
-> browser session until the visitor ticks the box; clearing storage un-ticks it,
-> which is accepted. Both stores fail open — an unreadable store still shows the
-> launcher rather than silently swallowing first launch.
->
-> **What a mission may persist (do not "simplify" this).** Layer enablement is
-> durable in this app (`gev:layer-state:v2`, written by
-> `LayerStateCoordinator._commitExplicit` only for origin `user`/`voice`/`tool`).
-> A mission enables **its own** layers at `origin: 'user'` — durable, exactly as
-> clicking those rows is, because picking the mission *is* that choice. The two
-> Context missions also expand the Context panel, as the visible tabs do; the
-> globe missions open no panel. Everything else is off limits: detection
-> mode/density, `gev:detection-allocation:v1`, 3D models, feather, and above all
-> `_detectionUserOverridden` — setting that flag means "the operator hand-edited
-> detection" and would silently disable the CRT/NVG/FLIR auto-preset contract for
-> the session. The full table is a comment block in the module and is pinned by
-> `src/firstRunExperience.test.mjs`.
->
-> **Voice is instruction-only.** Both globe missions are expressible with
-> shipped tools (`set_layer_visibility`'s enum already carries
-> `local-datacenters`, `local-dams`, `telegeography-submarine-cables`,
-> `local-firms`, `earthquakes`; `zoom_to_globe` supplies the camera), so
-> `GEV_REALTIME_TOOLS` is **byte-identical to `main`** and pinned by sha256 in
-> the unit suite. One instruction paragraph in `vite.config.js` teaches the
-> phrase mapping; deleting it is the complete rollback.
->
-> **ESC arbitration — three rules, do not collapse them into one.** (1) The
-> launcher **yields**: a MutationObserver watches `body` for the surfaces that
-> take the screen (`cockpit-mode`, `scene-playback-mode`, `recording-mode`,
-> `ui-clean-view` — `EXCLUSIVE_SURFACE_CLASSES`, kept in step with the CSS hide
-> rule by a unit pin), and session-dismisses rather than contesting the key; if
-> one is already up at init it **waits** instead of appearing over it. (2) A
-> surface can take the screen with **no class to watch** — the Cesium attribution
-> lightbox is full-screen at `z-index: 200` against the card's `175`, which left
-> the launcher measurable (`getClientRects()` non-empty) and buried, so ESC
-> dismissed a card nobody could see and burned the session flag. `isTopmost()`
-> therefore also **hit-tests the card's own centre** with `elementFromPoint`; any
-> overlay, classed or not, disarms the handler. Every inconclusive answer counts
-> as uncovered, so the guard can never be why ESC stops working. (3) A small
-> control that claims only the **key** (a disclosure, a popover) is not something
-> to yield to: whoever handles ESC first calls `preventDefault()` **and**
-> `stopImmediatePropagation()`, and the launcher skips `defaultPrevented` events.
-> `stopPropagation()` alone does **not** stop later listeners on the same
-> `document` — that is exactly how the compact Radio disclosure made one key
-> close the disclosure *and* dismiss the launcher.
->
-> **Accepted:** a surface class that never clears means no launcher for that page
-> load, with no timeout. None of the four classes is restored at startup, so an
-> already-blocked init is an error path, while a long recording or clean-view
-> session is ordinary — a "reveal anyway" timer would trade a benign no-show for
-> the card punching through a recording in progress. The no-show is benign: the
-> handler is inert, no session flag is written, the observer still reveals the
-> card if the class clears, and it returns next session either way.
->
-> **Blocked storage un-ticks the box.** "Don't show this again" is a claim about
-> the future, so a refused `setItem` reverts the checkbox and says so in the
-> status line instead of showing a saved preference that was never saved.
->
-> Gates: `node scripts/qa-firstrun.mjs --url <app>` (in-app checks across eight
-> independent sections) plus its `--teeth` negative control, which removes
-> the launcher and requires EVERY launcher-dependent section to go red — it
-> always exits non-zero, `1` meaning the control is healthy and `2` meaning it
-> is not. Plus the unit pins above.
+> Gates: `src/firstRunExperience.test.mjs` e `node scripts/qa-firstrun.mjs
+> --url <app>` (percorre os 4 passos, ações, ESC na busca, sessão, celular).
 
 > **2026-08-08 — performance waves 1+2:** the app idles via an explicit render
 > governor (`src/renderGovernor.js` — hold/release from every per-frame

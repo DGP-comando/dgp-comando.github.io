@@ -19,7 +19,7 @@ import { DATAGEO_LAYERS } from './data/datageoLayers.js';
 import { initDatageoTicker } from './datageoTicker.js';
 import { initDatageoBriefing } from './datageoBriefing.js';
 import { initDatageoAreaWatch } from './datageoAreaWatch.js';
-import { initDatageoShortcuts } from './datageoShortcuts.js';
+import { initDatageoShortcuts, openLayersPanel, openLocationSearch } from './datageoShortcuts.js';
 import {
   fetchActiveIncidents,
   fetchCemadenAlerts,
@@ -335,10 +335,12 @@ async function init() {
       const revealFirstRun = () => {
         if (firstRunRevealed) return;
         firstRunRevealed = true;
-        // dataManager is passed explicitly: the globe missions enable bundled
-        // keyless layers through it, and reaching for styleManager._dataManager
-        // would make a private field part of this feature's contract.
-        initFirstRunExperience({ styleManager, dataManager });
+        // O tutorial não liga camadas: seus dois botões de ação apenas abrem o
+        // painel de camadas e a busca, pelos mesmos caminhos dos atalhos L e B.
+        initFirstRunExperience({
+          styleManager,
+          actions: { openLayers: openLayersPanel, openSearch: openLocationSearch },
+        });
       };
       loadingScreen.addEventListener('transitionend', revealFirstRun, { once: true });
       setTimeout(revealFirstRun, 900);

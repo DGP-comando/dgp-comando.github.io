@@ -5,6 +5,23 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ## [Unreleased] — 2026-09-11
 
+### Changed
+
+- A tela de entrada **"Escolha a sua missão" saiu** e deu lugar a um
+  **tutorial em 4 passos**: boas-vindas, **Camadas de dados** (onde fica o
+  painel, temas, ligar e desligar, camadas que só aparecem com zoom, ficha
+  municipal, estado salvo no link) e **Pesquisa de localização** (botão
+  LOCALIZAÇÃO, sugestões dos 399 municípios, endereços, tecla P), com os
+  **ajustes da tela** (estilos, HUD, visão limpa, atalhos) num último passo
+  mais discreto. Cada passo realça o painel real, e dois botões abrem o painel
+  de camadas e a busca. O tutorial não liga nenhuma camada; volta a cada
+  sessão até marcar "Não mostrar de novo".
+
+### Fixed
+
+- A tecla **B** (e o botão do tutorial) agora deixa o cursor no campo de
+  busca: a gaveta de LOCALIZAÇÃO abre com transição e o foco se perdia.
+
 ### Added
 
 - Nova camada **Linhas de distribuição** (classe Infraestrutura): a rede de
