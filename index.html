@@ -830,53 +830,89 @@
 
   <div id="scene-runtime"></div>
 
-  <!-- Explicit mission choice on a fresh session. Live feeds are not auto-enabled
-       until the visitor asks; shared links skip this surface entirely. It returns
-       every session until "Don't show this again" is ticked — see
-       src/firstRunExperience.js for the full show policy. -->
-  <aside id="first-run-launcher" role="dialog" aria-labelledby="first-run-title" aria-describedby="first-run-description" hidden>
+  <!-- Tutorial de entrada, em passos: camadas e busca de localização em
+       destaque, ajustes da tela por último e mais discretos. Não liga camada
+       nenhuma; link compartilhado não vê. Volta a cada sessão até marcar
+       "Não mostrar de novo" (política em src/firstRunExperience.js). -->
+  <aside id="first-run-launcher" role="dialog" aria-labelledby="tour-title-inicio" aria-describedby="first-run-description" hidden>
     <div class="first-run-scanline" aria-hidden="true"></div>
     <header class="first-run-header">
-      <span class="first-run-kicker">SALA DE SITUAÇÃO · DATAGEO PR</span>
+      <span class="first-run-kicker">TUTORIAL · DATAGEO PR</span>
+      <span class="tour-counter" data-tour-counter aria-hidden="true">1 / 4</span>
     </header>
-    <h2 id="first-run-title">Escolha a sua missão</h2>
-    <!-- The card's one persuasive line, final and VERBATIM (2026-08-23)
-         — including the unspaced em dash. The arc it has to carry: this looks
-         like something you should not have access to → the sources are all
-         public → the data is real. Tile subcopy stays purely functional. -->
-    <p id="first-run-description">Os 399 municípios do Paraná numa sala de comando. Dados públicos, pipelines próprios, tudo ao vivo.</p>
-    <div class="first-run-choices">
-      <button type="button" data-first-run-choice="defesa-civil">
-        <span class="material-symbols-outlined" aria-hidden="true">emergency</span>
-        <span><strong>DEFESA CIVIL</strong><small>Alertas CEMADEN, rios, clima e focos de calor</small></span>
-        <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
-      </button>
-      <button type="button" data-first-run-choice="epidemiologico">
-        <span class="material-symbols-outlined" aria-hidden="true">coronavirus</span>
-        <span><strong>EPIDEMIOLÓGICO</strong><small>Dengue InfoDengue e risco territorial IRTC</small></span>
-        <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
-      </button>
-      <button type="button" data-first-run-choice="agro-ambiental">
-        <span class="material-symbols-outlined" aria-hidden="true">local_fire_department</span>
-        <span><strong>AGROAMBIENTAL</strong><small>Focos FIRMS, clima, qualidade do ar e IRTC</small></span>
-        <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
-      </button>
-      <button type="button" class="first-run-explore" data-first-run-choice="explore">
-        <span class="material-symbols-outlined" aria-hidden="true">public</span>
-        <span><strong>EXPLORAR LIVREMENTE</strong><small>Começar com o globo limpo</small></span>
-        <span class="material-symbols-outlined first-run-arrow" aria-hidden="true">arrow_forward</span>
-      </button>
+
+    <div class="tour-steps">
+      <section class="tour-step" data-tour-step="inicio">
+        <h2 id="tour-title-inicio">Bem-vindo à sala de situação</h2>
+        <p id="first-run-description">Os 399 municípios do Paraná numa sala de comando. Dados públicos, pipelines próprios, tudo ao vivo.</p>
+        <ol class="tour-agenda">
+          <li><strong>Camadas de dados</strong><small>o que ligar no mapa</small></li>
+          <li><strong>Pesquisa de localização</strong><small>como chegar a um município ou local</small></li>
+          <li><strong>Ajustes da tela</strong><small>estilos, HUD e atalhos</small></li>
+        </ol>
+      </section>
+
+      <section class="tour-step" data-tour-step="camadas" hidden>
+        <h2 id="tour-title-camadas"><span class="material-symbols-outlined" aria-hidden="true">layers</span>Camadas de dados</h2>
+        <p>Tudo o que aparece no mapa sai do painel <b>CAMADAS DE DADOS</b>, no canto esquerdo.</p>
+        <ul class="tour-points">
+          <li>Clique no <kbd>+</kbd> do painel, ou tecle <kbd>L</kbd>, para abrir a lista.</li>
+          <li>As camadas estão agrupadas por tema: Limites, Infraestrutura, Logística agro, Clima, Hidrologia, Ambiente, Saúde e ar, Riscos e alertas.</li>
+          <li>Clique numa camada para ligar ou desligar. A linha mostra a fonte, a contagem e a última atualização.</li>
+          <li>Algumas só aparecem de perto, como as rodovias municipais e as linhas de distribuição: aproxime o zoom.</li>
+          <li>Passe o mouse sobre um município para ver o resumo e clique para abrir a ficha completa.</li>
+          <li>As camadas ligadas ficam salvas e seguem junto no link compartilhado.</li>
+        </ul>
+        <button type="button" class="tour-action" data-tour-action="layers">
+          <span class="material-symbols-outlined" aria-hidden="true">left_panel_open</span>Abrir o painel de camadas
+        </button>
+      </section>
+
+      <section class="tour-step" data-tour-step="localizacao" hidden>
+        <h2 id="tour-title-localizacao"><span class="material-symbols-outlined" aria-hidden="true">travel_explore</span>Pesquisa de localização</h2>
+        <p>O botão <b>LOCALIZAÇÃO</b>, na barra inferior, leva a câmera a qualquer lugar.</p>
+        <ul class="tour-points">
+          <li>Abra LOCALIZAÇÃO e clique na lupa, ou tecle <kbd>B</kbd>, e digite o nome de um município.</li>
+          <li>A lista sugere os municípios do Paraná enquanto você digita: use <kbd>↑</kbd> <kbd>↓</kbd> e <kbd>Enter</kbd> para enquadrar o escolhido.</li>
+          <li>Um endereço ou lugar fora da lista também funciona: digite e tecle <kbd>Enter</kbd>.</li>
+          <li>A barra informa o local e a referência mais próxima do centro da tela.</li>
+          <li>Tecle <kbd>P</kbd> para voltar a câmera ao Paraná inteiro.</li>
+        </ul>
+        <button type="button" class="tour-action" data-tour-action="search">
+          <span class="material-symbols-outlined" aria-hidden="true">search</span>Experimentar a busca
+        </button>
+      </section>
+
+      <section class="tour-step tour-step-minor" data-tour-step="preferencias" hidden>
+        <h2 id="tour-title-preferencias">Ajustes da tela <small>opcional</small></h2>
+        <p>Quando quiser personalizar a sala:</p>
+        <dl class="tour-prefs">
+          <dt>ESTILOS VISUAIS</dt><dd>visual do mapa e fonte da imagem de fundo (teclas <kbd>1</kbd>–<kbd>7</kbd>)</dd>
+          <dt>TELA</dt><dd>HUD (<kbd>H</kbd>), detecção e efeitos</dd>
+          <dt>Visão limpa</dt><dd>esconde os painéis (<kbd>V</kbd>); tela cheia em <kbd>M</kbd></dd>
+          <dt>Cantos</dt><dd>CENAS, VIGILÂNCIA (<kbd>A</kbd>) e BRIEFING DIÁRIO</dd>
+        </dl>
+        <p class="tour-hint">Tecle <kbd>?</kbd> a qualquer momento para ver todos os atalhos.</p>
+      </section>
     </div>
+
+    <nav class="tour-nav" aria-label="Navegação do tutorial">
+      <button type="button" class="tour-skip" data-tour-skip>Pular tutorial</button>
+      <div class="tour-dots" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="tour-nav-buttons">
+        <button type="button" class="tour-back" data-tour-back>Voltar</button>
+        <button type="button" class="tour-next" data-tour-next>Próximo</button>
+      </div>
+    </nav>
+
     <div class="first-run-footer">
       <label class="first-run-suppress">
         <input type="checkbox" data-first-run-suppress />
         <span>Não mostrar de novo</span>
       </label>
-      <span>ESC para fechar</span>
+      <span>← → navegam · ESC fecha</span>
     </div>
-    <!-- Kept out of the footer row: it swaps to mission progress and errors, and
-         a live region that also holds layout makes the row jump as it speaks. -->
-    <p class="first-run-note" data-first-run-status role="status" aria-live="polite">Dica: passe o mouse sobre um município para ver o resumo e clique para abrir a ficha completa.</p>
+    <p class="first-run-note" data-first-run-status role="status" aria-live="polite"></p>
   </aside>
 
   <!-- Intelligence HUD Overlay -->

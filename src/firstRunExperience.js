@@ -1,112 +1,65 @@
-// First-run mission launcher.
+// Tutorial de entrada (substitui o antigo launcher "Escolha a sua missão").
 //
-// The map deliberately does not auto-enable live feeds on every visit: doing so
-// would spend optional API quotas, surprise returning operators, and fight share
-// links. A new visitor instead gets one compact, explicit choice after startup.
+// Um card não modal, em passos, que explica a sala antes de o operador sair
+// clicando: CAMADAS DE DADOS e PESQUISA DE LOCALIZAÇÃO têm o destaque, os
+// ajustes da tela (estilos, HUD, atalhos) vêm por último e mais discretos.
+// Ele NÃO liga camada nenhuma nem grava preferência: os dois botões de ação
+// ("Abrir o painel de camadas", "Experimentar a busca") fazem exatamente o que
+// o clique do operador faria no próprio painel.
 //
-// SHOW POLICY (product decision, 2026-08-23). The launcher is NOT one-shot. A new
-// operator needs the map explained more than once, so it returns every fresh
-// browser session until they say otherwise:
+// SHOW POLICY. O tutorial não é one-shot: volta a cada sessão nova até o
+// operador dizer o contrário.
 //
-//   - a share link never sees it — its author already chose the experience;
-//   - `?welcome=0` suppresses, `?welcome=1` replays (it outranks BOTH the
-//     session flag and the durable one, so support can always demo it);
-//   - ticking "Don't show this again" writes the DURABLE suppression — that
-//     tick is the only thing that stops it coming back;
-//   - any other close (a mission, Explore manually, ESC) writes only the
-//     SESSION flag, so it stays gone for this tab and returns next session.
+//   - um link compartilhado nunca o vê — o autor já escolheu a vista;
+//   - `?welcome=0` suprime, `?welcome=1` reapresenta (vence as DUAS
+//     supressões, para suporte e demonstração);
+//   - "Não mostrar de novo" grava a supressão DURÁVEL — só essa marca impede
+//     a volta;
+//   - qualquer outro fechamento (Concluir, Pular, ESC) grava só a flag de
+//     SESSÃO: some nesta aba e volta na próxima sessão.
 //
-// Choosing a mission is deliberately NOT durable suppression: picking a mission
-// is enthusiasm, not "never show me this again".
+// As chaves mudaram de `first-run-mission` para `first-run-tour`: quem
+// suprimiu o card de missões ainda não viu este tutorial.
 
-/** Durable suppression. Written ONLY by the "Don't show this again" checkbox. */
-export const FIRST_RUN_STORAGE_KEY = 'gev:first-run-mission:v1';
-/** Per-session dismissal. Written by every close path; scoped to sessionStorage. */
-export const FIRST_RUN_SESSION_KEY = 'gev:first-run-mission-session:v1';
-
-/**
- * Configurable name for the fires/quakes mission. Flip this ONE constant to
- * re-label the tile; the alternates are pre-written so the choice is a taste
- * call at review time, not an edit.
- * @type {'ENVIRONMENTAL'|'EARTH_WATCH'|'ACTIVE_EVENTS'}
- */
-export const ENVIRONMENTAL_LABEL_CHOICE = 'ENVIRONMENTAL';
-
-const ENVIRONMENTAL_LABELS = Object.freeze({
-  ENVIRONMENTAL: Object.freeze({ title: 'ENVIRONMENTAL' }),
-  EARTH_WATCH: Object.freeze({ title: 'EARTH WATCH' }),
-  ACTIVE_EVENTS: Object.freeze({ title: 'ACTIVE EVENTS' }),
-});
+/** Supressão durável. Escrita SÓ pela caixa "Não mostrar de novo". */
+export const FIRST_RUN_STORAGE_KEY = 'gev:first-run-tour:v1';
+/** Dispensa por sessão. Escrita por todo fechamento; em sessionStorage. */
+export const FIRST_RUN_SESSION_KEY = 'gev:first-run-tour-session:v1';
 
 /**
- * @param {string} [choice]
- * @returns {{title: string}} The label set the constant above selects.
+ * Passos, na ordem. `targets` são os elementos da página realçados enquanto o
+ * passo está na tela; `minor` marca o passo de menor ênfase.
+ * @type {ReadonlyArray<{id: string, targets: ReadonlyArray<string>, minor?: boolean}>}
  */
-export function environmentalLabel(choice = ENVIRONMENTAL_LABEL_CHOICE) {
-  return ENVIRONMENTAL_LABELS[choice] || ENVIRONMENTAL_LABELS.ENVIRONMENTAL;
+export const FIRST_RUN_TOUR_STEPS = Object.freeze([
+  Object.freeze({ id: 'inicio', targets: Object.freeze([]) }),
+  Object.freeze({ id: 'camadas', targets: Object.freeze(['#data-panel']) }),
+  Object.freeze({ id: 'localizacao', targets: Object.freeze(['#location-bar']) }),
+  Object.freeze({ id: 'preferencias', targets: Object.freeze(['#control-panel', '#pp-toggles']), minor: true }),
+]);
+
+/** Classe posta nos alvos do passo atual. */
+export const TOUR_HIGHLIGHT_CLASS = 'tour-highlight';
+
+/**
+ * Estado da navegação para um índice de passo (já limitado ao intervalo).
+ * @param {number} index
+ * @param {number} [total]
+ * @returns {{index: number, canBack: boolean, isLast: boolean, counter: string, nextLabel: string}}
+ */
+export function tourNavState(index, total = FIRST_RUN_TOUR_STEPS.length) {
+  const safeTotal = Math.max(1, Math.trunc(total) || 1);
+  const raw = Number.isFinite(index) ? Math.trunc(index) : 0;
+  const clamped = Math.min(Math.max(raw, 0), safeTotal - 1);
+  const isLast = clamped === safeTotal - 1;
+  return {
+    index: clamped,
+    canBack: clamped > 0,
+    isLast,
+    counter: `${clamped + 1} / ${safeTotal}`,
+    nextLabel: clamped === 0 ? 'Começar' : isLast ? 'Concluir' : 'Próximo',
+  };
 }
-
-/*
- * MISSION → APP STATE, AND WHAT IT IS ALLOWED TO PERSIST
- * ─────────────────────────────────────────────────────────────────────────────
- * Product decision: picking a mission carries the same weight as clicking the
- * toggles it represents — durable where those clicks are durable — but it must
- * never write a preference the visitor did not effectively choose by picking it.
- * Layer enablement IS durable in this app (`gev:layer-state:v2`, written by
- * LayerStateCoordinator._commitExplicit only for origin user/voice/tool), so:
- *
- *   TOUCHED, DURABLE      layer enables for the mission's OWN layers, at
- *                         `origin: 'user'` — identical to clicking those rows.
- *                         Choosing ENVIRONMENTAL *is* choosing those layers.
- *   TOUCHED, DURABLE      the Context panel reveal, but only for the two
- *                         Context missions, exactly as the visible Contacts /
- *                         Space Missions tabs do it. The globe missions open no
- *                         panel at all — nothing there needs explaining, and a
- *                         panel-collapse write is a pref nobody chose.
- *   TOUCHED, SESSION      the camera. Never persisted by anything.
- *   NOT TOUCHED           detection mode + density. The reasonable-defaults
- *                         landing owns the DENSE/75 start, and Contacts owns
- *                         detection through contactsDetectionPolicy while it is
- *                         active. A mission has no opinion.
- *   NOT TOUCHED           `_detectionUserOverridden`. Setting it would mean "the
- *                         operator hand-edited detection" and would silently
- *                         kill the CRT/NVG/FLIR auto-preset contract for the
- *                         whole session. Missions run through setContextMode and
- *                         DataManager.setEnabled, neither of which writes it.
- *   NOT TOUCHED           detection allocation (`gev:detection-allocation:v1`),
- *                         3D aircraft models, scope feather. All are defaults or
- *                         separate durable prefs the visitor did not choose here.
- *                         In particular nothing calls `_setModels3dEnabled` /
- *                         `_setModels3dMode`, which default to origin 'user' and
- *                         would persist a 3D choice nobody made.
- *
- * The two Context missions deliberately reuse `styleManager.setContextMode`, the
- * same facade the visible tabs and voice use, so Contacts detection ownership,
- * layer isolation and rollback stay in exactly one place.
- */
-
-/** @type {Readonly<Record<string, object>>} */
-export const FIRST_RUN_MISSIONS = Object.freeze({
-  // Presets de missao da Sala de Situacao DataGeo PR (Fase 2 da fusao,
-  // PLANO_FUSAO.md §5). Todos sao missoes "globe": ligam um conjunto de
-  // camadas DataGeo e deixam o operador na visao estadual.
-  'defesa-civil': Object.freeze({
-    kind: 'globe',
-    layerIds: Object.freeze(['datageo-municipios', 'datageo-cemaden', 'datageo-rios', 'datageo-clima', 'local-firms']),
-    busyText: 'Montando o quadro de Defesa Civil…',
-  }),
-  epidemiologico: Object.freeze({
-    kind: 'globe',
-    layerIds: Object.freeze(['datageo-municipios', 'datageo-dengue', 'datageo-irtc']),
-    busyText: 'Carregando vigilância epidemiológica…',
-  }),
-  'agro-ambiental': Object.freeze({
-    kind: 'globe',
-    layerIds: Object.freeze(['datageo-municipios', 'local-firms', 'datageo-clima', 'datageo-ar', 'datageo-irtc', 'datageo-ferrovias', 'datageo-ventos']),
-    busyText: 'Carregando quadro agroambiental…',
-  }),
-  explore: Object.freeze({ kind: 'none' }),
-});
 
 /*
  * STORAGE ACCESS IS LAZY AND GUARDED — NEVER A DEFAULT PARAMETER.
@@ -115,25 +68,20 @@ export const FIRST_RUN_MISSIONS = Object.freeze({
  * some enterprise policies) reading it THROWS SecurityError. A default parameter
  * like `storage = globalThis.localStorage` evaluates that getter before the
  * function body starts, so it throws outside every try/catch this module has —
- * the exception escapes, initFirstRunExperience never runs, and the launcher
+ * the exception escapes, initFirstRunExperience never runs, and the tutorial
  * silently never appears. That is the exact opposite of failing open.
- *
- * So the storage AREA is resolved inside a try, at the moment it is used, and an
- * injected stub (tests, callers) short-circuits the global entirely.
  */
 
 /**
  * Resolve a Web Storage area without letting a hostile getter escape.
  * @param {'local'|'session'} kind
  * @param {object|null|undefined} injected Explicit store; `undefined` means "use the global".
- * @returns {{getItem?: Function, setItem?: Function, removeItem?: Function}|null}
  */
 function resolveStore(kind, injected) {
   if (injected !== undefined) return injected;
   try {
     return kind === 'session' ? globalThis.sessionStorage : globalThis.localStorage;
   } catch {
-    // Privacy-restricted storage should not make first launch silent.
     return null;
   }
 }
@@ -148,10 +96,8 @@ function readStored(kind, injected, key) {
 }
 
 /**
- * Write one key, best-effort. Never throws; REPORTS whether the value landed so
- * a caller that showed the visitor a promise ("don't show this again") can take
- * it back rather than display a preference nothing stored.
- * @returns {boolean} true only if the value was actually written.
+ * Write one key, best-effort. Never throws; REPORTS whether the value landed.
+ * @returns {boolean}
  */
 function writeStored(kind, injected, key, value) {
   try {
@@ -164,10 +110,7 @@ function writeStored(kind, injected, key, value) {
   }
 }
 
-/**
- * Remove one key, best-effort.
- * @returns {boolean} true only if the removal actually happened.
- */
+/** Remove one key, best-effort. @returns {boolean} */
 function removeStored(kind, injected, key) {
   try {
     const store = resolveStore(kind, injected);
@@ -180,7 +123,7 @@ function removeStored(kind, injected, key) {
 }
 
 /**
- * Decide whether the launcher belongs in this page load.
+ * Decide whether the tutorial belongs in this page load.
  * @param {object} input
  * @param {boolean} [input.hasShareState]
  * @param {{getItem: Function}|null} [input.storage] Durable (localStorage).
@@ -197,7 +140,6 @@ export function shouldShowFirstRun({
   if (hasShareState) return false;
   const params = new URLSearchParams(location?.search || '');
   if (params.get('welcome') === '0') return false;
-  // The demo/support escape hatch outranks both suppressions on purpose.
   if (params.get('welcome') === '1') return true;
   if (readStored('local', storage, FIRST_RUN_STORAGE_KEY) === 'suppressed') return false;
   if (readStored('session', sessionStorageRef, FIRST_RUN_SESSION_KEY) === 'dismissed') return false;
@@ -205,12 +147,7 @@ export function shouldShowFirstRun({
 }
 
 /**
- * Write (or clear) the durable "don't show this again" suppression. Storage is
- * best-effort — a blocked store still closes the launcher for this session —
- * but the outcome is RETURNED, because the checkbox that calls this is showing
- * the visitor a claim about the future and must not keep a tick nothing saved.
- * @param {boolean} suppressed
- * @param {{setItem: Function, removeItem?: Function}|null} [storage]
+ * Write (or clear) the durable "não mostrar de novo" suppression.
  * @returns {boolean} true if the durable state now matches what was asked.
  */
 export function setFirstRunSuppressed(suppressed, storage) {
@@ -219,58 +156,14 @@ export function setFirstRunSuppressed(suppressed, storage) {
     : removeStored('local', storage, FIRST_RUN_STORAGE_KEY);
 }
 
-/**
- * Record that this browser session has seen and closed the launcher.
- * @param {{setItem: Function}|null} [sessionStorageRef]
- * @returns {void}
- */
+/** Record that this browser session has seen and closed the tutorial. */
 export function rememberFirstRunSessionDismissed(sessionStorageRef) {
   writeStored('session', sessionStorageRef, FIRST_RUN_SESSION_KEY, 'dismissed');
 }
 
 /**
- * Run a launcher choice against the app's existing internal APIs.
- *
- * A failed mission is NOT closed: the visitor can retry or fall back to manual
- * exploration rather than being stranded on a map they did not ask for.
- *
- * @param {string} choice Key of FIRST_RUN_MISSIONS.
- * @param {object} deps
- * @param {(mode: string) => Promise<object>} deps.setContextMode
- * @param {(layerId: string) => Promise<boolean>} deps.setLayerEnabled
- * @param {() => Promise<any>} deps.flyToGlobe
- * @returns {Promise<{ok: boolean, choice: string, result?: object, failedLayerIds?: string[]}>}
- */
-export async function runFirstRunChoice(choice, { setContextMode, setLayerEnabled, flyToGlobe }) {
-  const mission = FIRST_RUN_MISSIONS[choice];
-  if (!mission) return { ok: false, choice };
-  if (mission.kind === 'none') return { ok: true, choice };
-  if (mission.kind === 'context') {
-    const result = await setContextMode(mission.contextMode);
-    return { ok: Boolean(result?.ok), choice, result };
-  }
-  // Globe missions: start the pull-out and the layer work together so the
-  // camera is already moving while the feeds spin up. The flight is framing,
-  // not the mission — a stalled or superseded flight never fails the tile.
-  const flight = Promise.resolve()
-    .then(() => flyToGlobe())
-    .catch(() => null);
-  const outcomes = await Promise.all(mission.layerIds.map(async (layerId) => {
-    try {
-      return { layerId, ok: (await setLayerEnabled(layerId)) !== false };
-    } catch {
-      return { layerId, ok: false };
-    }
-  }));
-  await flight;
-  const failedLayerIds = outcomes.filter((entry) => !entry.ok).map((entry) => entry.layerId);
-  return { ok: failedLayerIds.length === 0, choice, failedLayerIds };
-}
-
-/**
  * Body classes that mean "another surface owns the screen". Each of these also
- * hides the launcher in CSS, and the observer below turns that into a yield —
- * see the ESC ARBITRATION note on initFirstRunExperience.
+ * hides the card in CSS, and the observer below turns that into a yield.
  */
 export const EXCLUSIVE_SURFACE_CLASSES = Object.freeze([
   'cockpit-mode',
@@ -291,19 +184,19 @@ export function exclusiveSurfaceActive(documentRef = globalThis.document) {
 }
 
 /**
- * Wire and reveal the mission launcher.
+ * Wire and reveal the tutorial.
  * @param {object} input
- * @param {object} input.styleManager Initialized StyleManager.
- * @param {object} [input.dataManager] DataManager, for the globe missions' layers.
+ * @param {object} [input.styleManager] Initialized StyleManager (share-state check).
+ * @param {{openLayers?: Function, openSearch?: Function}} [input.actions]
  * @param {Document} [input.documentRef]
  * @param {Storage} [input.storage]
  * @param {Storage} [input.sessionStorageRef]
  * @param {Location} [input.location]
- * @returns {null|{dismiss: Function}}
+ * @returns {null|{dismiss: Function, isTopmost: Function, goTo: Function}}
  */
 export function initFirstRunExperience({
   styleManager,
-  dataManager = styleManager?._dataManager,
+  actions = {},
   documentRef = globalThis.document,
   storage,
   sessionStorageRef,
@@ -323,17 +216,17 @@ export function initFirstRunExperience({
     return null;
   }
 
-  // The tile name is configurable from one constant, so paint it from the
-  // module rather than trusting the markup to have been edited to match.
-  const environmentalTitle = root.querySelector('[data-first-run-environmental-title]');
-  if (environmentalTitle) environmentalTitle.textContent = environmentalLabel().title;
-
   const status = root.querySelector('[data-first-run-status]');
   const suppressBox = root.querySelector('[data-first-run-suppress]');
-  const buttons = [...root.querySelectorAll('[data-first-run-choice]')];
-  const defaultStatus = status?.textContent || '';
+  const counter = root.querySelector('[data-tour-counter]');
+  const backBtn = root.querySelector('[data-tour-back]');
+  const nextBtn = root.querySelector('[data-tour-next]');
+  const skipBtn = root.querySelector('[data-tour-skip]');
+  const dots = [...root.querySelectorAll('.tour-dots > span')];
+  const sections = FIRST_RUN_TOUR_STEPS.map((step) => root.querySelector(`[data-tour-step="${step.id}"]`));
   const previouslyFocused = documentRef.activeElement;
-  let busy = false;
+  let current = 0;
+  let highlighted = [];
   let closing = false;
 
   const focusables = () => [
@@ -341,21 +234,10 @@ export function initFirstRunExperience({
   ].filter((node) => !node.hasAttribute('disabled') && node.getClientRects().length > 0);
 
   /**
-   * Is something painted OVER the card? A measurable box is not a visible card.
-   * The attribution lightbox is a full-screen overlay at `z-index: 200` against
-   * this card's 175 and announces itself with NO body class, so it left the
-   * launcher measurable but buried: ESC dismissed a card the visitor could not
-   * see — and burned the session flag — behind a lightbox that stayed open.
-   *
-   * Watching one more class would have fixed one more overlay. Hit-testing the
-   * card's own centre answers it for ANY overlay, classed or not, shipped or
-   * future, which is why this is the general guard and the class list stays the
-   * yield mechanism rather than the visibility test.
-   *
-   * Inconclusive answers count as UNCOVERED on purpose — no elementFromPoint, a
-   * zero-sized box, a centre outside the viewport, a null hit. This guard exists
-   * to stop the launcher acting while something is demonstrably on top of it; it
-   * must never become the reason ESC quietly stops working.
+   * Is something painted OVER the card? The attribution lightbox and the
+   * shortcuts help are full-screen overlays above this card that announce
+   * themselves with NO body class. Hit-testing the card's own centre answers it
+   * for ANY overlay. Inconclusive answers count as UNCOVERED on purpose.
    */
   const coveredByOverlay = () => {
     if (typeof documentRef.elementFromPoint !== 'function') return false;
@@ -372,35 +254,59 @@ export function initFirstRunExperience({
     }
   };
 
-  /**
-   * Is the launcher REALLY the thing on screen right now? Not "did we add the
-   * class" — the class survives while CSS hides the card behind an exclusive
-   * surface, and a handler that trusts the class alone consumes keys for an
-   * invisible element. getClientRects() is empty under `display: none`, which
-   * is exactly how every one of those surfaces hides this card; the hit test
-   * then covers the overlays that leave the box intact and simply sit on top.
-   */
   const isTopmost = () => root.isConnected
     && root.classList.contains('visible')
     && root.getClientRects().length > 0
     && !coveredByOverlay();
 
+  const clearHighlight = () => {
+    for (const node of highlighted) node.classList?.remove(TOUR_HIGHLIGHT_CLASS);
+    highlighted = [];
+  };
+
+  const applyHighlight = (step) => {
+    clearHighlight();
+    for (const selector of step.targets) {
+      const node = documentRef.querySelector?.(selector);
+      if (!node) continue;
+      node.classList.add(TOUR_HIGHLIGHT_CLASS);
+      highlighted.push(node);
+    }
+  };
+
+  const goTo = (index, { focus = true } = {}) => {
+    if (closing) return;
+    const nav = tourNavState(index);
+    current = nav.index;
+    sections.forEach((section, i) => {
+      if (section) section.hidden = i !== current;
+    });
+    const heading = sections[current]?.querySelector('h2');
+    if (heading?.id) root.setAttribute('aria-labelledby', heading.id);
+    root.dataset.step = FIRST_RUN_TOUR_STEPS[current].id;
+    if (counter) counter.textContent = nav.counter;
+    dots.forEach((dot, i) => dot.classList.toggle('active', i === current));
+    if (backBtn) backBtn.hidden = !nav.canBack;
+    if (nextBtn) nextBtn.textContent = nav.nextLabel;
+    if (status) status.textContent = '';
+    if (root.classList.contains('visible')) applyHighlight(FIRST_RUN_TOUR_STEPS[current]);
+    if (focus) nextBtn?.focus?.({ preventScroll: true });
+  };
+
   const dismiss = ({ restoreFocus = true } = {}) => {
     if (closing) return;
     closing = true;
+    clearHighlight();
     rememberFirstRunSessionDismissed(sessionStorageRef);
     root.classList.remove('visible');
     root.setAttribute('aria-hidden', 'true');
     documentRef.removeEventListener('keydown', onKeyDown, true);
-    globalThis.removeEventListener?.('resize', onViewportResize);
     surfaceObserver?.disconnect();
     const remove = () => root.remove();
     root.addEventListener('transitionend', remove, { once: true });
     // `transitionend` never fires under prefers-reduced-motion (no transition),
     // so a bounded fallback is what actually removes the node there.
     globalThis.setTimeout?.(remove, 400);
-    // Return the keyboard where it was, not to a node that is being removed —
-    // but never when yielding, because the surface taking over owns focus now.
     if (!restoreFocus) return;
     if (typeof previouslyFocused?.focus === 'function' && previouslyFocused.isConnected) {
       previouslyFocused.focus({ preventScroll: true });
@@ -409,118 +315,64 @@ export function initFirstRunExperience({
     }
   };
 
-  const setBusy = (next, choice = '') => {
-    busy = next;
-    root.dataset.state = next ? 'loading' : 'ready';
-    root.setAttribute('aria-busy', String(next));
-    // aria-disabled, not `disabled`: disabling the focused button drops focus to
-    // <body> mid-flight and strands a keyboard visitor outside the launcher.
-    for (const button of buttons) button.setAttribute('aria-disabled', String(next));
-    if (!status) return;
-    if (next) status.textContent = FIRST_RUN_MISSIONS[choice]?.busyText || 'Working…';
-    else if (status.dataset.sticky !== 'true') status.textContent = defaultStatus;
+  const onNext = () => {
+    if (tourNavState(current).isLast) dismiss();
+    else goTo(current + 1);
   };
 
-  const onChoice = async (event) => {
-    if (busy || closing) return;
-    const choice = event.currentTarget?.dataset?.firstRunChoice;
-    if (!FIRST_RUN_MISSIONS[choice]) return;
-    if (status) delete status.dataset.sticky;
-    setBusy(true, choice);
-    let outcome = null;
+  const onAction = (event) => {
+    const kind = event.currentTarget?.dataset?.tourAction;
+    const run = kind === 'layers' ? actions.openLayers : kind === 'search' ? actions.openSearch : null;
+    if (typeof run !== 'function') return;
     try {
-      outcome = await runFirstRunChoice(choice, {
-        setContextMode: async (mode) => {
-          const result = await styleManager.setContextMode(mode);
-          if (result?.ok) {
-            // setContextMode is also a voice/internal facade and deliberately
-            // does not decide panel chrome. This first-run click is an explicit
-            // visual choice, so reveal the result exactly as the visible
-            // Contacts / Space Missions tabs do.
-            styleManager.setPanelCollapsed?.('global-context-panel', false, { explicit: true });
-          }
-          return result;
-        },
-        // `origin: 'user'` on purpose: a mission tile is a real person choosing
-        // these layers, so it persists exactly as clicking those rows would.
-        setLayerEnabled: (layerId) => dataManager.setEnabled(layerId, true, { origin: 'user' }),
-        flyToGlobe: () => styleManager.resetToGlobeView(),
-      });
+      run();
     } catch (error) {
-      // A thrown mission is a real defect worth seeing in a bug report; the
-      // ordinary "could not enable" path returns ok:false and stays quiet.
-      console.warn('[First run] Mission launch failed:', error);
+      console.warn('[Tutorial] ação falhou:', kind, error);
+      if (status) status.textContent = 'Não foi possível abrir agora; use o painel diretamente.';
     }
-    if (closing) return;
-    if (outcome?.ok) {
-      dismiss();
-      return;
-    }
-    const failed = outcome?.failedLayerIds?.length
-      ? outcome.failedLayerIds
-      : outcome?.result?.failedLayerIds;
-    const detail = Array.isArray(failed) && failed.length ? ` (${failed.join(', ')})` : '';
-    if (status) {
-      status.dataset.sticky = 'true';
-      status.textContent = `Could not open that mission${detail}. Retry or explore manually.`;
-    }
-    setBusy(false);
   };
 
   const onSuppressChange = (event) => {
     const box = event.currentTarget;
     const wanted = Boolean(box?.checked);
     if (setFirstRunSuppressed(wanted, storage)) return;
-    // The write is best-effort; the TICK is not. A box left checked after a
-    // refused write tells the visitor "never again" about a launcher that is
-    // already guaranteed to come back next session. Put the box back where the
-    // truth is, and say why rather than leaving a control that undoes itself.
+    // A box left checked after a refused write promises "never again" about a
+    // tutorial that is guaranteed to come back next session.
     if (box) box.checked = !wanted;
-    if (!status) return;
-    status.dataset.sticky = 'true';
-    status.textContent = 'This browser is blocking storage, so that could not be saved.';
+    if (status) status.textContent = 'Este navegador está bloqueando o armazenamento; a preferência não foi salva.';
   };
 
   function onKeyDown(event) {
     // THE ARBITRATION RULE: never consume input for a card nobody can see.
-    // The observer below normally removes the launcher before another surface
-    // finishes engaging, but MutationObserver callbacks are microtasks, so a
-    // keydown can still arrive in the window between the class landing and the
-    // yield running. This check closes that window deterministically.
     if (closing || !isTopmost()) return;
-    // AND THE BELT FOR THE COOPERATIVE HALF. A surface that owns this key marks
-    // it handled (preventDefault) and silences the rest of us on the way past
-    // (stopImmediatePropagation). If one of them ever ships only the first half,
-    // the mark alone still keeps ONE key to ONE action — which is precisely what
-    // the compact Radio disclosure did with a plain stopPropagation(), a call
-    // that never blocks later listeners on the same document.
+    // A key another surface already handled is not ours.
     if (event.defaultPrevented) return;
+    // Non-modal: while the operator is working on the page (the search field
+    // the tutorial just opened, a layer row), keys belong to the page.
+    const active = documentRef.activeElement;
+    const focusInCard = root.contains(active);
+    const focusIdle = !active || active === documentRef.body;
+    if (!focusInCard && !focusIdle) return;
     if (event.key === 'Escape') {
-      // ESC is an exit, not a mission: it must work even mid-flight. The
-      // launcher is the topmost surface while it is up, so it consumes the key
-      // rather than also closing a panel the visitor cannot see behind it.
       event.preventDefault();
       event.stopPropagation();
       dismiss();
       return;
     }
-    if (event.key !== 'Tab') return;
-    // Keep Tab inside the launcher while it is up. The rest of the page is
-    // deliberately still live to the mouse, so this stops short of claiming
-    // `aria-modal` — it confines the keyboard without asserting the map is inert.
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      if (active?.tagName === 'INPUT') return;
+      event.preventDefault();
+      if (event.key === 'ArrowRight') onNext();
+      else goTo(current - 1);
+      return;
+    }
+    if (event.key !== 'Tab' || !focusInCard) return;
+    // Keep Tab cycling inside the card while focus is in it; the page stays
+    // live to the mouse, so this stops short of aria-modal.
     const order = focusables();
     if (!order.length) return;
     const first = order[0];
     const last = order[order.length - 1];
-    const active = documentRef.activeElement;
-    // Plain focus(), NOT preventScroll: on a short viewport the mission list
-    // scrolls inside the card, and a tile the keyboard just reached has to be
-    // brought into view rather than focused somewhere off-screen.
-    if (!root.contains(active)) {
-      event.preventDefault();
-      (event.shiftKey ? last : first).focus();
-      return;
-    }
     if (event.shiftKey && active === first) {
       event.preventDefault();
       last.focus();
@@ -530,21 +382,17 @@ export function initFirstRunExperience({
     }
   }
 
-  for (const button of buttons) button.addEventListener('click', onChoice);
+  nextBtn?.addEventListener('click', onNext);
+  backBtn?.addEventListener('click', () => goTo(current - 1));
+  skipBtn?.addEventListener('click', () => dismiss());
+  for (const button of root.querySelectorAll('[data-tour-action]')) {
+    button.addEventListener('click', onAction);
+  }
   suppressBox?.addEventListener('change', onSuppressChange);
-  // Capture phase: the app binds its own global hotkeys (including bare letters
-  // that cycle detection and styles), and the launcher owns the keyboard first.
+  // Capture phase: the app binds its own global hotkeys on document.
   documentRef.addEventListener('keydown', onKeyDown, true);
 
-  // The scroll fade is an affordance, so it may only appear when the list really
-  // overflows. On a viewport where all five tiles fit, a faded bottom edge would
-  // promise a sixth mission that does not exist.
-  const choiceList = root.querySelector('.first-run-choices');
-  const syncScrollAffordance = () => {
-    if (!choiceList) return;
-    const overflows = choiceList.scrollHeight > choiceList.clientHeight + 1;
-    choiceList.dataset.scrollable = String(overflows);
-  };
+  goTo(0, { focus: false });
 
   let revealed = false;
   const reveal = () => {
@@ -554,63 +402,29 @@ export function initFirstRunExperience({
     globalThis.requestAnimationFrame?.(() => {
       if (closing) return;
       root.classList.add('visible');
-      syncScrollAffordance();
-      buttons[0]?.focus?.({ preventScroll: true });
+      applyHighlight(FIRST_RUN_TOUR_STEPS[current]);
+      nextBtn?.focus?.({ preventScroll: true });
     });
   };
 
   /*
-   * ESC ARBITRATION — the launcher never competes for the key.
-   *
-   * Two real defects motivated this. Cockpit registers its capture-phase
-   * keydown listener at construction, long before this module runs, and calls
-   * stopImmediatePropagation() — so with both up, ESC exited Cockpit BEHIND the
-   * card. And a Scene starting merely hid the launcher in CSS while its handler
-   * stayed armed, so ESC dismissed an invisible launcher (writing the session
-   * flag) while the Scene played on.
-   *
-   * Rather than fight over listener order, the launcher YIELDS. Every exclusive
-   * surface announces itself with a body class that already hides this card, so
-   * one observer turns "something else took the screen" into "step aside for
-   * this session". The stacking question then never arises: the launcher is
-   * gone before the other surface can receive a key. And if a surface is
-   * already up when this runs, the launcher waits rather than appearing over it.
-   *
-   * Yielding covers the surfaces that TAKE THE SCREEN and say so. Two more kinds
-   * of contender exist, and each is answered where it actually lives:
-   *
-   *   an overlay that takes the screen SILENTLY — the attribution lightbox sits
-   *     at z-index 200 with no class to watch. isTopmost() hit-tests the card's
-   *     own centre, so an unclassed overlay disarms the handler exactly like a
-   *     classed one, with nothing to keep in step;
-   *   a small control that claims only the KEY — a disclosure or popover the
-   *     launcher is not hiding behind and must not yield to. Whoever handles ESC
-   *     first marks it (preventDefault) and stops the rest (stopImmediatePropagation);
-   *     the launcher honours the mark. One key, one action, no ordering fight.
+   * ESC ARBITRATION — the tutorial never competes for the key. Every exclusive
+   * surface announces itself with a body class that already hides this card,
+   * so one observer turns "something else took the screen" into "step aside
+   * for this session". If a surface is already up, the tutorial waits.
    */
   const yieldToExclusiveSurface = () => {
     if (closing) return;
-    // Session-scoped, like any other dismissal: it returns next session. Focus
-    // stays with whatever just took the screen.
     dismiss({ restoreFocus: false });
   };
 
   /*
    * ACCEPTED, DELIBERATELY NOT TIMED OUT: a surface class that never clears
-   * means the launcher never appears in that page load.
-   *
-   * A "reveal anyway after N seconds" timer was considered and rejected. None of
-   * the four classes is restored at startup — every one is toggled by a live
-   * action (cockpit entry, a scene run, the recording toggle, the clean-view
-   * toggle) — so an already-blocked init is an error path, while a genuinely
-   * long recording or clean-view session is completely ordinary. A timer would
-   * trade a benign no-show for the launcher punching through a recording in
-   * progress, which is the worse of the two failures.
-   *
-   * And the no-show IS benign: the card stays hidden, the key handler is inert
-   * (isTopmost() is false), no session flag is written, and the observer is
-   * still watching — so it appears the moment the class clears, and returns next
-   * session regardless. Documented in docs/CURRENT-STATE.md.
+   * means the tutorial never appears in that page load. None of the four
+   * classes is restored at startup, so an already-blocked init is an error
+   * path, while a long recording or clean-view session is ordinary; a "reveal
+   * anyway" timer would punch through a recording. Documented in
+   * docs/CURRENT-STATE.md.
    */
   const syncToExclusiveSurfaces = () => {
     if (closing) return;
@@ -619,19 +433,14 @@ export function initFirstRunExperience({
     else if (!revealed && !blocked) reveal();
   };
 
-  // A rotated phone changes which tiles fit, so the affordance re-measures.
-  const onViewportResize = () => syncScrollAffordance();
-  globalThis.addEventListener?.('resize', onViewportResize);
-
   const surfaceObserver = typeof globalThis.MutationObserver === 'function'
     ? new globalThis.MutationObserver(syncToExclusiveSurfaces)
     : null;
-  // Attributes only, no subtree: this is a class watch on one element, so it
-  // costs nothing per frame and never asks the render governor for a frame.
+  // Attributes only, no subtree: a class watch on one element.
   if (documentRef.body) {
     surfaceObserver?.observe(documentRef.body, { attributes: true, attributeFilter: ['class'] });
   }
   syncToExclusiveSurfaces();
 
-  return { dismiss, isTopmost };
+  return { dismiss, isTopmost, goTo };
 }

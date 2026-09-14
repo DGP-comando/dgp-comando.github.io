@@ -141,6 +141,25 @@ function defaultToggleLayers() {
   }
 }
 
+/**
+ * Garante o painel de camadas ABERTO (sem alternar), pelo mesmo botão de
+ * colapso que o operador usaria. Usado pelo tutorial de entrada.
+ */
+export function openLayersPanel() {
+  const panel = document.getElementById('data-panel');
+  if (!panel) return;
+  panel.classList.add('active');
+  if (panel.classList.contains('collapsed')) {
+    const btn = panel.querySelector('.panel-collapse-btn[data-collapse-target="data-panel"]');
+    if (btn) btn.click();
+    else panel.classList.remove('collapsed');
+  }
+}
+
+export function openLocationSearch() {
+  defaultOpenSearch();
+}
+
 function defaultOpenSearch() {
   const input = document.getElementById('location-search');
   if (!input) return;
@@ -153,8 +172,22 @@ function defaultOpenSearch() {
   } else if (bar?.classList.contains('collapsed')) {
     bar.click();
   }
+  focusWhenFocusable(input);
+}
+
+/**
+ * A gaveta do dock abre com transição de visibilidade: no mesmo tick do clique
+ * o campo ainda não aceita foco e `focus()` falha em silêncio. Tenta de novo a
+ * cada frame por até ~600 ms, parando assim que o foco pegar.
+ */
+function focusWhenFocusable(input, deadline = performance.now() + 600) {
   input.focus({ preventScroll: true });
-  input.select?.();
+  if (document.activeElement === input) {
+    input.select?.();
+    return;
+  }
+  if (performance.now() > deadline) return;
+  requestAnimationFrame(() => focusWhenFocusable(input, deadline));
 }
 
 function defaultToggleFullscreen() {
@@ -207,13 +240,10 @@ export function initDatageoShortcuts({ actions = {}, keymap = DEFAULT_KEYMAP } =
   };
 
   const dispatchKey = createShortcutDispatcher({ actions: merged, keymap, isHelpOpen: () => helpOpen });
-  // Com o launcher de missões aberto ele é a superfície do topo: os atalhos
-  // não agem na página por trás dele.
-  const dispatch = (event) => {
-    const launcher = document.getElementById('first-run-launcher');
-    if (launcher && !launcher.hidden && !helpOpen) return undefined;
-    return dispatchKey(event);
-  };
+  // O tutorial de entrada NÃO é modal e ensina justamente estas teclas (L, B,
+  // P, ?), então os atalhos seguem valendo com ele aberto; o card não tem
+  // campo de texto onde uma letra pudesse ser "digitação".
+  const dispatch = (event) => dispatchKey(event);
   // Captura na window: roda antes dos listeners do GEV em document, então
   // o Esc que fecha a ajuda não fecha também a ficha ou o launcher.
   window.addEventListener('keydown', dispatch, true);
