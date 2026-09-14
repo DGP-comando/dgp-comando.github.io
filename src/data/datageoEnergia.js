@@ -13,6 +13,7 @@
 
 import * as Cesium from 'cesium';
 import { makePointsLayer, cssColor } from './datageoLogistica.js';
+import { datageoDistribuicaoLayer } from './datageoDistribuicao.js';
 
 const LT_URL = '/data/linhas-transmissao-pr.geojson';
 
@@ -198,6 +199,7 @@ export const datageoGeracaoLayer = makePointsLayer({
 
 export const DATAGEO_ENERGIA_LAYERS = [
   datageoLinhasTransmissaoLayer,
+  datageoDistribuicaoLayer,
   datageoSubestacoesLayer,
   datageoGeracaoLayer,
 ];
