@@ -7,6 +7,14 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Nova camada **Linhas de distribuição** (classe Infraestrutura): a rede de
+  média tensão da Copel, 13,8 kV (verde) e 34,5 kV (rosa), com 777 mil trechos
+  e ~205 mil km da BDGD/ANEEL (COPEL-DIS 2022-12-31). A rede vem fatiada em
+  células de 0,25° (`public/data/distribuicao/`, 14,8 MB) e só aparece com a
+  câmera abaixo de 70 km, carregando as 9 células mais próximas do centro da
+  vista. Dados gerados por `scripts/build_distribuicao.py` a partir do projeto
+  energy; sem unidades consumidoras.
+
 - Nova camada **Conectividade** (classe Infraestrutura), com as duas metades
   que só fazem sentido juntas: **5.803 ERBs** coloridas pela geração mais alta
   (5G/4G/3G/2G, com legenda e contagem na linha do painel) e o **negativo da

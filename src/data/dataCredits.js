@@ -63,6 +63,12 @@ export const DATA_CREDITS = [
       '<a href="https://acervofundiario.incra.gov.br/acervo/" target="_blank" rel="noopener">INCRA · Acervo Fundiário (SIPRA)</a>',
   },
   {
+    key: 'aneel-bdgd',
+    html:
+      'Linhas de distribuição (média tensão Copel): ' +
+      '<a href="https://dadosabertos-aneel.opendata.arcgis.com/" target="_blank" rel="noopener">ANEEL · Base de Dados Geográfica da Distribuidora (BDGD)</a>, COPEL-DIS 2022-12-31',
+  },
+  {
     key: 'mma-cnuc',
     html:
       'Unidades de conservação federais e estaduais: ' +
