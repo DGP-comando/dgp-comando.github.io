@@ -1993,6 +1993,12 @@ body.ui-clean-view #scene-runtime.active {
   transform: none;
 }
 
+/* `wait` acima descreve um voo em andamento. O botão de foco fica desabilitado
+   enquanto NÃO HÁ município selecionado, que não é espera: é indisponível. */
+#focus-municipio:disabled {
+  cursor: not-allowed;
+}
+
 #top-center-actions .material-symbols-outlined {
   font-size: 18px;
 }

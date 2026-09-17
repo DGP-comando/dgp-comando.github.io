@@ -494,8 +494,38 @@ function toggleWatch() {
   syncWatchButton();
 }
 
+/**
+ * Nome do evento que anuncia qual municipio esta SELECIONADO agora — o da
+ * ficha aberta, venha ela de um clique no mapa ou da busca por nome. O
+ * `detail` e `{ibge, nome}` ou null quando a ficha fecha.
+ *
+ * E um CustomEvent no `document` de proposito: a ficha nao conhece a barra de
+ * acoes nem as camadas, e um barramento proprio para um unico assinante seria
+ * mais codigo do que a plataforma ja da de graca.
+ */
+export const MUNICIPIO_SELECIONADO_EVENT = 'datageo:municipio-selecionado';
+
+function anunciarSelecao() {
+  document.dispatchEvent(new CustomEvent(MUNICIPIO_SELECIONADO_EVENT, {
+    detail: _current ? { ...(_current) } : null,
+  }));
+}
+
+/**
+ * Municipio da ficha aberta, ou null. E a resposta canonica a "qual municipio
+ * esta selecionado".
+ * @returns {{ibge: string, nome: string}|null}
+ */
+export function getMunicipioSelecionado() {
+  return _current ? { ...(_current) } : null;
+}
+
 export function closeFicha() {
   if (_panel) _panel.classList.remove('open');
+  if (!_current) return;
+  _current = null;
+  syncWatchButton();
+  anunciarSelecao();
 }
 
 /**
@@ -508,6 +538,7 @@ export async function openFicha({ ibge, nome, info }) {
   panel.classList.add('open');
   _current = { ibge: String(ibge), nome };
   syncWatchButton();
+  anunciarSelecao();
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent =
     `IBGE ${ibge}` + (info?.prefeito ? ` · Prefeito: ${info.prefeito} (${info.partido})` : '');

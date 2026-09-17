@@ -5,6 +5,10 @@
  * camada some acima de 90 km e que o botão de reset volta ao Paraná inteiro
  * com norte para cima e vista ortogonal. Salva screenshot.
  *
+ * Cobre também o par que só existe junto com essa camada: o HUD desligado por
+ * padrão e o botão "aproximar ao município selecionado", que precisa mostrar a
+ * malha mesmo num município grande demais para caber abaixo do teto de altura.
+ *
  * Uso: node scripts/qa-estradas.mjs [--url http://localhost:5173] [--shot out.png]
  * Requer dev server rodando.
  */
@@ -39,6 +43,20 @@ try {
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.__godsEyeView?.viewer, { timeout: 90_000 });
   await sleep(10_000);
+
+  // Antes de qualquer interação: é isto que o operador encontra ao abrir.
+  // O HUD é construído sempre; quem liga e desliga é a classe `active` em
+  // #intel-hud (IntelHUD.show/hide), espelhada no botão. Checar as DUAS é o
+  // ponto: um botão aceso sobre um HUD escondido é a falha clássica de default.
+  const primeiroFrame = await page.evaluate(() => ({
+    hudAtivo: document.getElementById('intel-hud')?.classList.contains('active') ?? null,
+    botaoAceso: document.getElementById('hud-toggle')?.classList.contains('active') ?? null,
+    focoDesabilitado: document.getElementById('focus-municipio')?.disabled ?? null,
+  }));
+  check('HUD desligado por padrão, com o botão apagado',
+    primeiroFrame.hudAtivo === false && primeiroFrame.botaoAceso === false, primeiroFrame);
+  check('botão de foco começa desabilitado, sem município selecionado',
+    primeiroFrame.focoDesabilitado === true, primeiroFrame);
 
   const setView = (height) => page.evaluate((h) => {
     const v = window.__godsEyeView.viewer;
@@ -116,6 +134,42 @@ try {
     return shows;
   });
   check('acima do teto a coleção inteira fica oculta', longe.includes(false), longe);
+
+  // Foco num município GRANDE: Guarapuava (3.117 km²) só cabe na tela acima do
+  // teto de 90 km das rurais, então é o caso que o botão precisa resolver.
+  await page.evaluate(() => window.__godsEyeView.dataManager.layers
+    .get('datageo-municipios')?.module?.openMunicipioFicha({ ibge: '4109401', nome: 'Guarapuava' }));
+  await sleep(1_500);
+  const habilitado = await page.evaluate(() => ({
+    disabled: document.getElementById('focus-municipio')?.disabled,
+    title: document.getElementById('focus-municipio')?.title,
+  }));
+  check('selecionar um município habilita o botão de foco',
+    habilitado.disabled === false && /Guarapuava/.test(habilitado.title ?? ''), habilitado);
+
+  await page.click('#focus-municipio');
+  await sleep(7_000);
+  const foco = await page.evaluate(() => {
+    const c = window.__godsEyeView.viewer.camera;
+    return { heightKm: Math.round(c.positionCartographic.height / 1000) };
+  });
+  const noFoco = await visibleGroups();
+  check('Guarapuava enquadrado fica ACIMA do teto de 90 km',
+    foco.heightKm > 90, foco);
+  check('mesmo assim as duas classes aparecem: o foco suspende os tetos',
+    noFoco.shown > 0 && noFoco.hidden === 0, { ...foco, ...noFoco });
+
+  // Sair da divisa desarma o foco sozinho: os tetos voltam a valer.
+  await setView(120_000);
+  await sleep(2_500);
+  const foraDaDivisa = await page.evaluate(() => {
+    const gp = window.__godsEyeView.viewer.scene.groundPrimitives;
+    const shows = [];
+    for (let i = 0; i < gp.length; i++) shows.push(gp.get(i).show);
+    return shows;
+  });
+  check('fora da divisa o foco se desarma e o teto volta a valer',
+    foraDaDivisa.includes(false), foraDaDivisa);
 
   // Reset: gira e inclina a câmera antes, para provar que o botão restaura
   // norte para cima e vista ortogonal, não só a altura.

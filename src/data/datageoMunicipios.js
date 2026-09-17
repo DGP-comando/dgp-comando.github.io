@@ -163,9 +163,12 @@ export function createDatageoMunicipiosLayer() {
   let _dataSource = null;
   let _info = null;
   let _infoPromise = null;
-  // IBGE -> { nome, boundingSphere }. Enquadramento real de cada municipio,
-  // montado uma vez no load do GeoJSON para a busca por nome nao precisar
-  // varrer 399 entidades a cada tecla. Ver getMunicipioFocus.
+  // IBGE -> { nome, boundingSphere, rectangle }. Enquadramento real de cada
+  // municipio, montado uma vez no load do GeoJSON para a busca por nome nao
+  // precisar varrer 399 entidades a cada tecla. A esfera enquadra a camera; o
+  // retangulo responde "este ponto esta dentro do municipio?", que e o que as
+  // camadas com teto de altura usam para se manter visiveis no municipio em
+  // foco. Ver getMunicipioFocus.
   let _focus = new Map();
   let _handler = null;
   let _tooltip = null;
@@ -374,6 +377,7 @@ export function createDatageoMunicipiosLayer() {
     // municipio inteiro, e nao so o primeiro anel do arquivo.
     if (!ibge) return;
     const sphere = Cesium.BoundingSphere.fromPoints(positions);
+    const rect = Cesium.Rectangle.fromCartesianArray(positions);
     const previous = focus.get(ibge);
     focus.set(ibge, previous
       ? {
@@ -383,8 +387,9 @@ export function createDatageoMunicipiosLayer() {
           sphere,
           new Cesium.BoundingSphere(),
         ),
+        rectangle: Cesium.Rectangle.union(previous.rectangle, rect, new Cesium.Rectangle()),
       }
-      : { nome, boundingSphere: sphere });
+      : { nome, boundingSphere: sphere, rectangle: rect });
   }
 
   async function loadAsPrimitives(viewer) {
@@ -577,12 +582,20 @@ export function createDatageoMunicipiosLayer() {
      * sobre a divisa em vez de num raio fixo em torno do centroide. Devolve
      * null enquanto o GeoJSON nao carregou — quem chama cai no centroide.
      * @param {string|number} ibge
-     * @returns {{ibge: string, nome: string, boundingSphere: Cesium.BoundingSphere}|null}
+     * @returns {{ibge: string, nome: string, boundingSphere: Cesium.BoundingSphere,
+     *   rectangle: Cesium.Rectangle}|null}
      */
     getMunicipioFocus(ibge) {
       const code = String(ibge ?? '');
       const found = code ? _focus.get(code) : null;
-      return found ? { ibge: code, nome: found.nome, boundingSphere: found.boundingSphere } : null;
+      return found
+        ? {
+          ibge: code,
+          nome: found.nome,
+          boundingSphere: found.boundingSphere,
+          rectangle: found.rectangle,
+        }
+        : null;
     },
 
     /**
