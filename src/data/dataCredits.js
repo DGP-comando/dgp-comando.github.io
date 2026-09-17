@@ -69,6 +69,13 @@ export const DATA_CREDITS = [
       '<a href="https://dadosabertos-aneel.opendata.arcgis.com/" target="_blank" rel="noopener">ANEEL · Base de Dados Geográfica da Distribuidora (BDGD)</a>, COPEL-DIS 2022-12-31',
   },
   {
+    key: 'sicar-car',
+    html:
+      'Imóveis rurais (CAR, apenas ativos): ' +
+      '<a href="https://consultapublica.car.gov.br" target="_blank" rel="noopener">SICAR · Serviço Florestal Brasileiro</a>, ' +
+      'WFS público; divisas declaratórias generalizadas a 30 m',
+  },
+  {
     key: 'osm-estradas',
     html:
       'Estradas municipais (urbanas e rurais): ' +
