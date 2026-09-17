@@ -10,10 +10,12 @@
 // {ficha, info, climaHist} e devolve HTML (ou null para omitir a secao).
 // Integrar uma base nova = uma chave nova em fetchMunicipioFicha (datageoClient)
 // + um builder aqui. Nada mais. Base ESTATICA (JSON em public/data, como o
-// clima historico BR-DWGD) entra no Promise.all de openFicha.
+// clima historico BR-DWGD ou a estrutura fundiaria do CAR) entra no
+// Promise.all de openFicha.
 
 import { fetchMunicipioFicha } from './data/datageoClient.js';
 import { getClimaMunicipio } from './data/climaHistorico.js';
+import { getCarMunicipio } from './data/carMunicipios.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -89,6 +91,60 @@ const SECTIONS = [
       }
     }
     return rows.length ? section('Economia agropecuária · SEAB/DERAL', rows.join('')) : null;
+  },
+
+  /**
+   * Estrutura fundiaria declarada no CAR (imoveis ATIVOS), por classe de
+   * modulos fiscais. Duas barras por classe: quantos imoveis e quanta area.
+   *
+   * As duas juntas sao o ponto — e a assimetria entre elas que diz alguma
+   * coisa. "Metade dos imoveis em 8% da area" e um retrato de estrutura
+   * fundiaria; so a contagem, ou so a area, nao e.
+   */
+  function fundiaria({ car }) {
+    if (!car) return null;
+    const nf = (v, casas = 0) => Number(v).toLocaleString('pt-BR', {
+      minimumFractionDigits: casas, maximumFractionDigits: casas,
+    });
+    // Percentual com UMA casa abaixo de 10%: arredondar a classe ">50 MF" de
+    // 0,1% para "0%" diria que não há imóvel grande nenhum, bem ao lado da
+    // barra de área mostrando que eles ocupam 7% do município. A concentração
+    // fundiária mora justamente nessa assimetria; ela não pode sumir no
+    // arredondamento.
+    const pct = (v) => nf(v, v > 0 && v < 10 ? 1 : 0);
+    const linhas = car.linhas.map(({ classe, n, ha, pctN, pctHa }) => (
+      `<div class="fx-car-row">` +
+        `<span class="fx-car-label">${esc(classe)} MF</span>` +
+        `<span class="fx-car-bars">` +
+          `<span class="fx-car-track" title="${nf(n)} imóveis">` +
+            `<span class="fx-car-fill" style="width:${pctN.toFixed(1)}%;background:#22d3ee"></span></span>` +
+          `<span class="fx-car-track" title="${nf(ha)} ha">` +
+            `<span class="fx-car-fill" style="width:${pctHa.toFixed(1)}%;background:#fbbf24"></span></span>` +
+        `</span>` +
+        `<span class="fx-car-val">${pct(pctN)}% · ${pct(pctHa)}%</span>` +
+      `</div>`
+    ));
+    // A leitura que o operador levaria embora, dita em palavras: sem isto as
+    // barras exigem que ele compare duas larguras de cabeca.
+    const pequenos = car.linhas[0];
+    const grandes = car.linhas[car.linhas.length - 1];
+    const takeaway = pequenos.pctN >= 1
+      ? `<div class="fx-sub">Até 4 MF: <b>${pct(pequenos.pctN)}%</b> dos imóveis em ` +
+        `<b>${pct(pequenos.pctHa)}%</b> da área` +
+        (grandes.n ? ` · acima de 50 MF: <b>${pct(grandes.pctN)}%</b> em <b>${pct(grandes.pctHa)}%</b>` : '') +
+        `</div>`
+      : '';
+    return section(
+      'Estrutura fundiária · CAR (ativos)',
+      `<div>${nf(car.totalImoveis)} imóveis · ${nf(car.totalHa)} ha declarados</div>` +
+      takeaway +
+      `<div class="fx-car-legenda">` +
+        `<span class="fx-car-chave" style="background:#22d3ee"></span>% dos imóveis · ` +
+        `<span class="fx-car-chave" style="background:#fbbf24"></span>% da área` +
+      `</div>` +
+      linhas.join('') +
+      `<div class="fx-dim">Módulos fiscais; CAR é declaratório, não cadastro fundiário.</div>`,
+    );
   },
 
   function demografia({ info }) {
@@ -414,6 +470,18 @@ function injectStyles() {
     #datageo-ficha .fx-spark-bar { width: 12px; background: #f472b6; border-radius: 2px 2px 0 0; opacity: 0.85; }
     #datageo-ficha .fx-spark-dense { gap: 1px; }
     #datageo-ficha .fx-spark-thin { width: auto; flex: 1; border-radius: 1px 1px 0 0; }
+    /* Distribuicao fundiaria: duas barras EMPILHADAS por classe (imoveis em
+       cima, area embaixo). Empilhar em vez de duas linhas separadas mantem as
+       5 classes legiveis num cartao de 360px, e a posicao (cima/baixo) carrega
+       a distincao junto com a cor, para nao depender so de matiz. */
+    #datageo-ficha .fx-car-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+    #datageo-ficha .fx-car-label { flex: 0 0 62px; color: #94a3b8; white-space: nowrap; }
+    #datageo-ficha .fx-car-bars { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    #datageo-ficha .fx-car-track { height: 5px; background: rgba(148,163,184,0.15); border-radius: 3px; overflow: hidden; }
+    #datageo-ficha .fx-car-fill { display: block; height: 100%; border-radius: 3px; }
+    #datageo-ficha .fx-car-val { flex: 0 0 66px; text-align: right; color: #94a3b8; white-space: nowrap; }
+    #datageo-ficha .fx-car-legenda { color: #64748b; margin: 2px 0 6px; }
+    #datageo-ficha .fx-car-chave { display: inline-block; width: 16px; height: 5px; border-radius: 3px; vertical-align: middle; margin-right: 3px; }
     #datageo-ficha .fx-fontes { padding: 8px 14px; border-top: 1px solid rgba(34,211,238,0.2); color: #475569; font-size: 9px; letter-spacing: 0.04em; }
     #datageo-ficha .fx-loading { padding: 20px 14px; color: #64748b; }
     /* Celular: ficha em tela quase cheia (o cartao de 360px estourava). */
@@ -447,7 +515,7 @@ function ensurePanel() {
     <button class="fx-watch" type="button" aria-pressed="false" hidden>VIGIAR</button>
     <div class="fx-header"><div class="fx-nome"></div><div class="fx-meta"></div></div>
     <div class="fx-body"></div>
-    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · DataGeo PR</div>
+    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · SICAR/SFB · DataGeo PR</div>
   `;
   document.body.appendChild(_panel);
   _panel.querySelector('.fx-close').addEventListener('click', closeFicha);
@@ -546,16 +614,18 @@ export async function openFicha({ ibge, nome, info }) {
     '<div class="fx-loading">Consultando as bases do DataGeo…</div>';
 
   try {
-    // Clima historico e arquivo estatico: em paralelo com o Supabase, e sem
-    // poder derrubar a ficha (getClimaMunicipio nunca lanca).
-    const [ficha, climaHist] = await Promise.all([
+    // Clima historico e estrutura fundiaria sao arquivos estaticos: em
+    // paralelo com o Supabase, e sem poder derrubar a ficha (nem
+    // getClimaMunicipio nem getCarMunicipio lancam).
+    const [ficha, climaHist, car] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
+      getCarMunicipio(ibge),
     ]);
     if (seq !== _requestSeq) return; // outro municipio foi clicado no meio
     const html = SECTIONS.map((build) => {
       try {
-        return build({ ficha, info, climaHist });
+        return build({ ficha, info, climaHist, car });
       } catch (err) {
         console.warn('[DataGeo:ficha] secao falhou:', err);
         return null;

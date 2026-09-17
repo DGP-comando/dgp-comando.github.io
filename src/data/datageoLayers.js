@@ -51,6 +51,7 @@ import { datageoClimaHistoricoLayer } from './datageoClimaHistorico.js';
 import { datageoConectividadeLayer } from './datageoConectividade.js';
 import { datageoRodoviasLayer } from './datageoRodovias.js';
 import { datageoEstradasLayer } from './datageoEstradas.js';
+import { datageoCarLayer } from './datageoCar.js';
 import { DATAGEO_LOGISTICA_LAYERS } from './datageoLogistica.js';
 import { DATAGEO_ENERGIA_LAYERS } from './datageoEnergia.js';
 import { DATAGEO_TERRITORIOS_LAYERS } from './datageoTerritorios.js';
@@ -980,6 +981,7 @@ export const datageoFerroviasLayer = (() => {
 export const DATAGEO_LAYERS = [
   datageoMunicipiosLayer,
   ...DATAGEO_TERRITORIOS_LAYERS,
+  datageoCarLayer,
   datageoClimaLayer,
   datageoRiosLayer,
   datageoCemadenLayer,

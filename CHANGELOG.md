@@ -49,6 +49,24 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   mapa. Dados gerados por `scripts/build_estradas.py` a partir do extrato
   Geofabrik da região Sul.
 
+- Nova camada **CAR · imóveis ativos** (classe Território) e nova seção
+  **Estrutura fundiária** na ficha municipal, das mesmas classes de **módulos
+  fiscais** (0-4, 4-10, 10-20, 20-50, >50) — o mapa responde *onde* estão os
+  imóveis de cada porte e a ficha responde *quanto* eles pesam. São os ~533 mil
+  imóveis **ativos** do CAR no PR (pendentes, suspensos e cancelados ficam de
+  fora), do WFS público do SICAR.
+
+  No mapa cada divisa é desenhada como linha, colorida e engrossada por classe
+  de módulos fiscais, fatiada em células de 0,25° que carregam abaixo de 90 km.
+  Na ficha, cada classe ganha duas barras: **% dos imóveis e % da área**, porque
+  é a assimetria entre as duas que retrata a estrutura fundiária — "metade dos
+  imóveis em 8% da área" é uma informação que nenhuma das duas dá sozinha.
+
+  As divisas saem **generalizadas a 30 m** para caber no Pages, e o CAR é
+  **declaratório**: a camada serve para ver onde e de que porte, não para medir
+  divisa nem instruir processo. Os números da ficha vêm dos atributos
+  declarados, não da geometria simplificada.
+
 - Novo botão **"Aproximar ao município selecionado"** na barra superior. Enquadra
   o município da ficha aberta e **garante que as camadas apareçam nele
   independente da escala**: um município grande (Guarapuava, Pinhão) só cabe na
