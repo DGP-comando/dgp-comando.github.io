@@ -13,6 +13,7 @@ import {
   decodeBloomIntensity,
 } from './bloom.js';
 import { LOCATIONS, CITY_POIS, GLOBE_VIEW, flyToGlobeView, flyToMunicipio, flyToPresetLocation, flyToPOI, searchAndFlyTo } from './locations.js';
+import { PARANA_OVERVIEW, flyToParanaOverview } from './camera.js';
 import { locationMiniStatus } from './locationStatus.js';
 import {
   exactMunicipioMatch,
@@ -2153,6 +2154,7 @@ export class StyleManager {
     this._shareTrackingNoticeGeneration = 0;
     this._globeResetPromise = null;
     this._globeResetHandler = null;
+    this._paranaResetHandler = null;
     this._clearSelectedLayersPromise = null;
     this._clearSelectedLayersManagerPromise = null;
     this._clearSelectedLayersHandler = null;
@@ -2363,6 +2365,7 @@ export class StyleManager {
     this._globalLoadingLabel = document.getElementById('global-loading-label');
     this._globalLoadingDetail = document.getElementById('global-loading-detail');
     this._resetGlobeBtn = document.getElementById('reset-globe-view');
+    this._resetParanaBtn = document.getElementById('reset-parana-view');
     this._cockpitResetGlobeBtn = document.getElementById('cockpit-reset-globe');
     this._styleButtons = document.getElementById('style-buttons');
     this._trafficSyncChip = document.getElementById('traffic-sync-chip');
@@ -2638,6 +2641,7 @@ export class StyleManager {
     this._initShareButton();
     this._initClearSelectedLayersButton();
     this._initResetGlobeButton();
+    this._initResetParanaButton();
     this._initHUDToggle();
     this._initModels3dToggle();
     this._applyGlobalPostDefaults();
@@ -9862,6 +9866,33 @@ export class StyleManager {
     }
   }
 
+  /**
+   * Volta a camera ao enquadramento estadual: o Parana inteiro, norte para
+   * cima e vista ortogonal. E o irmao local do reset de globo — depois de
+   * descer num municipio (e girar a vista atras de uma camada), este e o
+   * caminho de uma tecla de volta ao quadro de referencia do produto.
+   */
+  _initResetParanaButton() {
+    if (!this._resetParanaBtn) return;
+    this._paranaResetHandler = () => { this.resetToParanaView(); };
+    this._resetParanaBtn.addEventListener('click', this._paranaResetHandler);
+  }
+
+  /**
+   * @returns {{ok: boolean, action: string, heightKm: number}} verdade do voo
+   *   pedido, no mesmo formato que resetToGlobeView devolve.
+   */
+  resetToParanaView() {
+    this.viewer.trackedEntity = undefined;
+    this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    flyToParanaOverview(this.viewer);
+    return {
+      ok: true,
+      action: 'zoom_to_parana',
+      heightKm: Math.round(PARANA_OVERVIEW.heightM / 1000),
+    };
+  }
+
   /** Wire the top-center action that clears only manager-owned data layers. */
   _initClearSelectedLayersButton() {
     if (!this._clearSelectedLayersBtn) return;
@@ -10445,6 +10476,10 @@ export class StyleManager {
       this._resetGlobeBtn?.removeEventListener('click', this._globeResetHandler);
       this._cockpitResetGlobeBtn?.removeEventListener('click', this._globeResetHandler);
       this._globeResetHandler = null;
+    }
+    if (this._resetParanaBtn && this._paranaResetHandler) {
+      this._resetParanaBtn.removeEventListener('click', this._paranaResetHandler);
+      this._paranaResetHandler = null;
     }
     if (this._clearSelectedLayersBtn && this._clearSelectedLayersHandler) {
       this._clearSelectedLayersBtn.removeEventListener('click', this._clearSelectedLayersHandler);

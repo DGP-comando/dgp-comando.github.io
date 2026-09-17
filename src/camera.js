@@ -50,30 +50,68 @@ export function flyToPreset(viewer, presetName, duration = 3.0) {
  * Set camera to Austin on load with a cinematic fly-in.
  */
 /**
+ * Enquadramento canonico da Sala de Situacao: o Parana inteiro em quadro,
+ * NORTE PARA CIMA e vista ORTOGONAL (pitch -90). E para onde o voo de
+ * abertura chega e para onde o botao de reset volta — o mesmo quadro, para
+ * que "visao geral do estado" signifique sempre a mesma coisa.
+ */
+export const PARANA_OVERVIEW = Object.freeze({
+  lon: -51.6,
+  lat: -24.7,
+  heightM: 900_000,
+  durationS: 3.5,
+});
+
+/**
+ * Voa ate o enquadramento estadual. `endTransform` volta a identidade para
+ * soltar qualquer referencial preso a uma entidade rastreada, senao o voo
+ * chega torto.
+ * @param {Cesium.Viewer} viewer
+ * @param {{duration?: number, complete?: Function, cancel?: Function}} [options]
+ * @returns {{latitude: number, longitude: number, heightM: number}}
+ */
+export function flyToParanaOverview(viewer, options = {}) {
+  viewer.camera.cancelFlight();
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(
+      PARANA_OVERVIEW.lon, PARANA_OVERVIEW.lat, PARANA_OVERVIEW.heightM,
+    ),
+    orientation: {
+      heading: 0,
+      pitch: Cesium.Math.toRadians(-90),
+      roll: 0.0,
+    },
+    duration: Number.isFinite(options.duration) && options.duration > 0
+      ? options.duration
+      : PARANA_OVERVIEW.durationS,
+    easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+    endTransform: Cesium.Matrix4.IDENTITY,
+    complete: options.complete,
+    cancel: options.cancel,
+  });
+  return {
+    latitude: PARANA_OVERVIEW.lat,
+    longitude: PARANA_OVERVIEW.lon,
+    heightM: PARANA_OVERVIEW.heightM,
+  };
+}
+
+/**
  * Voo de abertura da Sala de Situacao: o Parana inteiro em quadro (visao
  * estadual ~900 km), nao um mergulho urbano — o operador escolhe onde descer.
  */
 export function flyToParana(viewer) {
   viewer.camera.setView({
-    destination: Cesium.Cartesian3.fromDegrees(-51.6, -24.7, 4_000_000),
+    destination: Cesium.Cartesian3.fromDegrees(
+      PARANA_OVERVIEW.lon, PARANA_OVERVIEW.lat, 4_000_000,
+    ),
     orientation: {
       heading: Cesium.Math.toRadians(0),
       pitch: Cesium.Math.toRadians(-90),
       roll: 0.0,
     },
   });
-  setTimeout(() => {
-    viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(-51.6, -24.7, 900_000),
-      orientation: {
-        heading: Cesium.Math.toRadians(0),
-        pitch: Cesium.Math.toRadians(-90),
-        roll: 0.0,
-      },
-      duration: 3.5,
-      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
-    });
-  }, 400);
+  setTimeout(() => flyToParanaOverview(viewer), 400);
 }
 
 export function flyToAustin(viewer) {
