@@ -7,6 +7,13 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Changed
 
+- As **rodovias municipais saíram da camada Rodovias**: eram buscadas ao vivo no
+  Overpass por bbox da câmera (fila serial, espelhos, 429/504) e traziam só
+  secondary/tertiary/unclassified. Agora são a camada **Estradas municipais**,
+  servida como células estáticas, com as ruas urbanas e as vicinais rurais que
+  a consulta antiga não trazia e sem depender de um serviço de terceiros no
+  meio da navegação. A camada Rodovias segue com as federais e estaduais.
+
 - A tela de entrada **"Escolha a sua missão" saiu** e deu lugar a um
   **tutorial em 4 passos**: boas-vindas, **Camadas de dados** (onde fica o
   painel, temas, ligar e desligar, camadas que só aparecem com zoom, ficha
@@ -23,6 +30,22 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   busca: a gaveta de LOCALIZAÇÃO abre com transição e o foco se perdia.
 
 ### Added
+
+- Nova camada **Estradas municipais** (classe Infraestrutura): o terceiro nível
+  da malha viária, abaixo das federais e estaduais que a camada Rodovias já
+  servia. São **394 mil trechos do OpenStreetMap** separados em **urbanas**
+  (190 mil ruas de cidade e vila, cinza frio) e **rurais** (204 mil vicinais e
+  estradas de terra, cinza quente). A malha vem fatiada em células de 0,25°
+  (`public/data/estradas/`, 17,9 MB) e obedece a dois tetos de altura: as
+  rurais entram **abaixo de 90 km** — o enquadramento de um município, então
+  escolher um município na busca já as liga — e as urbanas **abaixo de 30 km**,
+  porque a malha de uma cidade vista de longe é um borrão que come o resto do
+  mapa. Dados gerados por `scripts/build_estradas.py` a partir do extrato
+  Geofabrik da região Sul.
+
+- Novo botão **"Voltar à visão do Paraná"** na barra superior (ao lado do reset
+  de globo): devolve a câmera ao enquadramento do estado inteiro, **norte para
+  cima e vista ortogonal**, de qualquer altura, giro ou inclinação.
 
 - Nova camada **Linhas de distribuição** (classe Infraestrutura): a rede de
   média tensão da Copel, 13,8 kV (verde) e 34,5 kV (rosa), com 777 mil trechos
