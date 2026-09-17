@@ -69,6 +69,13 @@ export const DATA_CREDITS = [
       '<a href="https://dadosabertos-aneel.opendata.arcgis.com/" target="_blank" rel="noopener">ANEEL · Base de Dados Geográfica da Distribuidora (BDGD)</a>, COPEL-DIS 2022-12-31',
   },
   {
+    key: 'osm-estradas',
+    html:
+      'Estradas municipais (urbanas e rurais): ' +
+      '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© colaboradores do OpenStreetMap</a> ' +
+      '(ODbL 1.0), extrato Geofabrik da região Sul',
+  },
+  {
     key: 'mma-cnuc',
     html:
       'Unidades de conservação federais e estaduais: ' +
