@@ -39,6 +39,7 @@ import {
 import { ShareLinkManager } from './sharelink.js';
 
 const uiSource = fs.readFileSync(new URL('./ui.js', import.meta.url), 'utf8');
+const htmlSource = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const indexHtml = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const shareSource = fs.readFileSync(new URL('./sharelink.js', import.meta.url), 'utf8');
 
@@ -271,4 +272,30 @@ test('a share link that carries detection OFF still restores OFF', () => {
   const dense = managerForHash('#lat=10&lon=20&dm=DENSE&dd=75').parseInitialHash();
   assert.equal(dense.detectionMode, 'DENSE');
   assert.equal(dense.detectionDensity, 75);
+});
+
+// ---------------------------------------------------------------------------
+// 5. HUD — OFF on a first run (2026-09-17)
+// ---------------------------------------------------------------------------
+
+test('first run opens with the HUD off, but still on the tactical variant', () => {
+  // A default is about what covers the map before the operator asks for it.
+  // The VARIANT is a separate decision and stays 'tactical', so turning the HUD
+  // on with H lands on the intended look instead of some fallback.
+  const baseline = uiBlock('const GLOBAL_POST_DEFAULTS = {', '\n};');
+  assert.match(baseline, /hudVisible: false,/, 'the HUD baseline is off');
+  assert.match(baseline, /hudVariant: 'tactical',/, 'the variant survived the flip');
+
+  // The button ships unlit in the markup, so the control agrees with the engine
+  // on frame one — a lit button over a hidden HUD is the classic default skew.
+  const hudButton = htmlSource.match(/<button class="([^"]*)" id="hud-toggle"/);
+  assert.ok(hudButton, 'HUD toggle still carries its class list in the markup');
+  assert.doesNotMatch(hudButton[1], /\bactive\b/, 'the HUD button ships unlit');
+});
+
+test('a share link that carries the HUD on still restores it on', () => {
+  // Same rule as detection: the default governs a session that said nothing.
+  assert.equal(managerForHash('#lat=10&lon=20&hv=1').parseInitialHash().hudVisible, true,
+    'an explicit hv=1 survives the default flip');
+  assert.equal(managerForHash('#lat=10&lon=20&hv=0').parseInitialHash().hudVisible, false);
 });

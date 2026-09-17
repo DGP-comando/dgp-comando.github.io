@@ -21,6 +21,14 @@
 // PrimitiveCollection com um GroundPolylinePrimitive por grupo (sem pick);
 // acima de `maxLoadedCells` as mais antigas fora da vista são destruídas,
 // para a memória de GPU não crescer num passeio pelo estado.
+//
+// FOCO (`focusOn`): enquanto o centro da vista está dentro do retângulo de um
+// município em foco, TODOS os tetos de altura são ignorados e a camada aparece
+// qualquer que seja a escala. É o que faz "aproximar ao município selecionado"
+// mostrar a camada mesmo nos municípios grandes, que enquadrados ficam acima do
+// teto. O custo continua limitado por `maxCellsPerView`: o foco muda o que se
+// VÊ, não quantas células se carrega. O foco se desarma sozinho ao sair do
+// retângulo — não há estado para alguém esquecer de limpar.
 
 import * as Cesium from 'cesium';
 import { governorRequestRender } from '../renderGovernor.js';
@@ -150,6 +158,8 @@ export function createSlicedLineLayer(config) {
   let _lastUpdate = null;
   let _lastError = null;
   let _lastHeight = Infinity;
+  let _focusRect = null; // Cesium.Rectangle do município em foco, ou null
+  let _emFoco = false;   // centro da vista dentro de _focusRect
 
   function requestFrame(reason) {
     governorRequestRender(`${id}:${reason}`);
@@ -181,7 +191,7 @@ export function createSlicedLineLayer(config) {
   function applyGroupGates(cell) {
     for (const group of cell.groups) {
       const gate = group.style.maxHeight;
-      const show = !Number.isFinite(gate) || _lastHeight < gate;
+      const show = _emFoco || !Number.isFinite(gate) || _lastHeight < gate;
       if (group.primitive.show !== show) group.primitive.show = show;
     }
   }
@@ -257,17 +267,20 @@ export function createSlicedLineLayer(config) {
     if (!_enabled || !_viewer || !_root) return;
     const carto = _viewer.camera.positionCartographic;
     _lastHeight = carto?.height ?? Infinity;
-    setVisible(_lastHeight < maxHeight);
-    if (!_visible) return;
-    for (const cell of _cells.values()) applyGroupGates(cell);
-    const index = await loadIndex();
     // Centro da vista: o ponto do globo no meio da tela (câmera inclinada
     // olha longe da própria posição); sem interseção, a posição da câmera.
+    // Vem ANTES da decisão de visibilidade porque é ele que diz se estamos
+    // dentro do município em foco.
     const canvas = _viewer.scene.canvas;
     const center = _viewer.camera.pickEllipsoid(
       new Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2),
     );
     const target = center ? Cesium.Cartographic.fromCartesian(center) : carto;
+    _emFoco = Boolean(_focusRect && target && Cesium.Rectangle.contains(_focusRect, target));
+    setVisible(_emFoco || _lastHeight < maxHeight);
+    if (!_visible) return;
+    for (const cell of _cells.values()) applyGroupGates(cell);
+    const index = await loadIndex();
     const keys = nearestCells(
       Cesium.Math.toDegrees(target.latitude),
       Cesium.Math.toDegrees(target.longitude),
@@ -304,6 +317,16 @@ export function createSlicedLineLayer(config) {
     init(viewer) {
       _viewer = viewer;
       console.log(`${log} Initialized`);
+    },
+
+    /**
+     * Município em foco: enquanto o centro da vista estiver dentro de
+     * `rectangle`, a camada ignora os tetos de altura. `null` desarma.
+     * @param {Cesium.Rectangle|null} rectangle
+     */
+    focusOn(rectangle) {
+      _focusRect = rectangle ?? null;
+      onCameraChanged();
     },
 
     enable() {
@@ -363,6 +386,8 @@ export function createSlicedLineLayer(config) {
       _cells.clear();
       _inflight.clear();
       _visible = false;
+      _focusRect = null;
+      _emFoco = false;
       _viewer = null;
     },
 

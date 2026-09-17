@@ -80,6 +80,7 @@ import militaryAwarenessLayer from './data/militaryAwareness.js';
 import militaryInstallationsLayer from './data/militaryInstallations.js';
 import rocketLaunchesLayer from './data/rocketLaunches.js';
 import { datageoMunicipiosLayer } from './data/datageoMunicipios.js';
+import { MUNICIPIO_SELECIONADO_EVENT, getMunicipioSelecionado } from './datageoFicha.js';
 import {
   aggregateLayerLoading,
   canPresentDeferredStatusNotice,
@@ -396,7 +397,12 @@ const GLOBAL_POST_DEFAULTS = {
   bloom: { enabled: false, intensity: BLOOM_INTENSITY_DEFAULT },
   sharpen: { enabled: true, intensity: 49 },
   hudVariant: 'tactical',
-  hudVisible: true,
+  // HUD OFF on a first run. The variant stays 'tactical' so turning it on with
+  // H (or the TELA toggle) lands on the intended look — the default is about
+  // what covers the map before the operator asks for it, not about which HUD.
+  // A share link's `hv=1` still turns it on: this is a baseline, applied before
+  // any restore.
+  hudVisible: false,
   // Detection is ON for EVERY style on a first run, Normal included (owner
   // directive 2026-08-22: "detect should also be on by default"). It is the
   // same preset object the military styles and Contacts already apply, so there
@@ -2155,6 +2161,8 @@ export class StyleManager {
     this._globeResetPromise = null;
     this._globeResetHandler = null;
     this._paranaResetHandler = null;
+    this._focusMunicipioHandler = null;
+    this._municipioSelecionadoHandler = null;
     this._clearSelectedLayersPromise = null;
     this._clearSelectedLayersManagerPromise = null;
     this._clearSelectedLayersHandler = null;
@@ -2366,6 +2374,7 @@ export class StyleManager {
     this._globalLoadingDetail = document.getElementById('global-loading-detail');
     this._resetGlobeBtn = document.getElementById('reset-globe-view');
     this._resetParanaBtn = document.getElementById('reset-parana-view');
+    this._focusMunicipioBtn = document.getElementById('focus-municipio');
     this._cockpitResetGlobeBtn = document.getElementById('cockpit-reset-globe');
     this._styleButtons = document.getElementById('style-buttons');
     this._trafficSyncChip = document.getElementById('traffic-sync-chip');
@@ -2642,6 +2651,7 @@ export class StyleManager {
     this._initClearSelectedLayersButton();
     this._initResetGlobeButton();
     this._initResetParanaButton();
+    this._initFocusMunicipioButton();
     this._initHUDToggle();
     this._initModels3dToggle();
     this._applyGlobalPostDefaults();
@@ -9883,6 +9893,10 @@ export class StyleManager {
    *   pedido, no mesmo formato que resetToGlobeView devolve.
    */
   resetToParanaView() {
+    // Voltar ao estado inteiro encerra o trabalho num município: os tetos de
+    // altura das camadas voltam a valer, senão a malha municipal ficaria
+    // pendurada na vista estadual de um município central.
+    this._setLayerFocusRectangle(null);
     this.viewer.trackedEntity = undefined;
     this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
     flyToParanaOverview(this.viewer);
@@ -9891,6 +9905,79 @@ export class StyleManager {
       action: 'zoom_to_parana',
       heightKm: Math.round(PARANA_OVERVIEW.heightM / 1000),
     };
+  }
+
+  /**
+   * Botão "aproximar ao município selecionado". Fica desabilitado enquanto não
+   * há ficha aberta: sem município selecionado ele não teria destino, e um
+   * botão que não faz nada é pior do que um botão apagado.
+   */
+  _initFocusMunicipioButton() {
+    if (!this._focusMunicipioBtn) return;
+    this._focusMunicipioHandler = () => { this.focusSelectedMunicipio(); };
+    this._focusMunicipioBtn.addEventListener('click', this._focusMunicipioHandler);
+    this._municipioSelecionadoHandler = (event) => {
+      const selecionado = event?.detail ?? null;
+      this._focusMunicipioBtn.disabled = !selecionado;
+      this._focusMunicipioBtn.title = selecionado
+        ? `Aproximar a ${selecionado.nome}, com todas as camadas visíveis`
+        : 'Aproximar ao município selecionado, com todas as camadas visíveis';
+    };
+    document.addEventListener(MUNICIPIO_SELECIONADO_EVENT, this._municipioSelecionadoHandler);
+    this._municipioSelecionadoHandler({ detail: getMunicipioSelecionado() });
+  }
+
+  /**
+   * Declara (ou desarma, com `null`) o município em foco para toda camada que
+   * esconde a si mesma por escala. O contrato é `focusOn(rectangle)`: quem não
+   * o implementa simplesmente não tem teto de altura para suspender, então o
+   * laço é duck-typed em vez de manter uma lista de camadas gated que ficaria
+   * desatualizada na próxima camada nova.
+   * @param {Cesium.Rectangle|null} rectangle
+   * @returns {number} quantas camadas aceitaram o foco
+   */
+  _setLayerFocusRectangle(rectangle) {
+    let n = 0;
+    for (const entry of this._dataManager?.layers?.values?.() ?? []) {
+      if (typeof entry?.module?.focusOn !== 'function') continue;
+      entry.module.focusOn(rectangle);
+      n += 1;
+    }
+    return n;
+  }
+
+  /**
+   * Enquadra o município da ficha aberta e garante que as camadas ligadas
+   * apareçam nele INDEPENDENTE DA ESCALA.
+   *
+   * O enquadramento sozinho não bastava: um município grande (Guarapuava,
+   * Pinhão) só cabe na tela acima de 70-90 km, que é justamente onde as
+   * estradas e a rede de distribuição se escondem para não virar borrão. O
+   * foco suspende esses tetos enquanto o centro da vista estiver dentro da
+   * divisa, e se desarma sozinho quando se sai dela.
+   * @returns {{ok: boolean, ibge?: string, nome?: string, camadas?: number, reason?: string}}
+   */
+  focusSelectedMunicipio() {
+    const selecionado = getMunicipioSelecionado();
+    if (!selecionado) {
+      this._showToast('Selecione um município primeiro');
+      return { ok: false, reason: 'sem-selecao' };
+    }
+    const focus = datageoMunicipiosLayer.getMunicipioFocus?.(selecionado.ibge) || null;
+    if (!focus?.boundingSphere) {
+      this._showToast('Divisas ainda carregando');
+      return { ok: false, reason: 'sem-divisa' };
+    }
+    const camadas = this._setLayerFocusRectangle(focus.rectangle ?? null);
+    const carto = Cesium.Cartographic.fromCartesian(focus.boundingSphere.center);
+    this.viewer.trackedEntity = undefined;
+    this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    flyToMunicipio(this.viewer, {
+      lat: Cesium.Math.toDegrees(carto.latitude),
+      lon: Cesium.Math.toDegrees(carto.longitude),
+      boundingSphere: focus.boundingSphere,
+    });
+    return { ok: true, ibge: selecionado.ibge, nome: focus.nome || selecionado.nome, camadas };
   }
 
   /** Wire the top-center action that clears only manager-owned data layers. */
@@ -10476,6 +10563,14 @@ export class StyleManager {
       this._resetGlobeBtn?.removeEventListener('click', this._globeResetHandler);
       this._cockpitResetGlobeBtn?.removeEventListener('click', this._globeResetHandler);
       this._globeResetHandler = null;
+    }
+    if (this._municipioSelecionadoHandler) {
+      document.removeEventListener(MUNICIPIO_SELECIONADO_EVENT, this._municipioSelecionadoHandler);
+      this._municipioSelecionadoHandler = null;
+    }
+    if (this._focusMunicipioBtn && this._focusMunicipioHandler) {
+      this._focusMunicipioBtn.removeEventListener('click', this._focusMunicipioHandler);
+      this._focusMunicipioHandler = null;
     }
     if (this._resetParanaBtn && this._paranaResetHandler) {
       this._resetParanaBtn.removeEventListener('click', this._paranaResetHandler);

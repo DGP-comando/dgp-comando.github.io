@@ -7,6 +7,12 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Changed
 
+- O **HUD agora começa desligado**. Ele é uma leitura sobreposta ao mapa
+  (MGRS, GSD, altitude, coleta) e cobria a cartografia antes de alguém pedir;
+  a tecla **H** e o toggle em TELA continuam ligando, e um link com `hv=1`
+  continua restaurando ligado. A variante segue `tactical`, então ligar o HUD
+  cai no visual pretendido.
+
 - As **rodovias municipais saíram da camada Rodovias**: eram buscadas ao vivo no
   Overpass por bbox da câmera (fila serial, espelhos, 429/504) e traziam só
   secondary/tertiary/unclassified. Agora são a camada **Estradas municipais**,
@@ -42,6 +48,15 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   porque a malha de uma cidade vista de longe é um borrão que come o resto do
   mapa. Dados gerados por `scripts/build_estradas.py` a partir do extrato
   Geofabrik da região Sul.
+
+- Novo botão **"Aproximar ao município selecionado"** na barra superior. Enquadra
+  o município da ficha aberta e **garante que as camadas apareçam nele
+  independente da escala**: um município grande (Guarapuava, Pinhão) só cabe na
+  tela acima de 90-156 km, justamente onde as estradas municipais e a rede de
+  distribuição se escondem para não virar borrão. Enquanto o centro da vista
+  está dentro da divisa, esses tetos ficam suspensos; ao sair dela o foco se
+  desarma sozinho. O botão fica apagado enquanto nenhum município está
+  selecionado.
 
 - Novo botão **"Voltar à visão do Paraná"** na barra superior (ao lado do reset
   de globo): devolve a câmera ao enquadramento do estado inteiro, **norte para
