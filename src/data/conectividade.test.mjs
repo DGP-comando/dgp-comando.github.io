@@ -90,3 +90,25 @@ test('a escala de cor das torres nao invade o ciano nem o violeta de outras cama
     assert.ok(!(r > 120 && b > 140 && g < r - 30), `${hex} caiu na familia violeta`);
   }
 });
+
+// ── Tooltip e anéis de alcance nominal (torreCobertura.js) ─────────────────
+import { aneisDeCobertura, chaveDeSite, tecnologias, torreTooltipHtml } from './torreCobertura.js';
+
+test('anéis por geração, do maior para o menor, só das gerações da torre', () => {
+  assert.deepEqual(tecnologias(15), ['5G', '4G', '3G', '2G']);
+  assert.deepEqual(aneisDeCobertura(4 | 8).map((a) => a.tec), ['4G', '5G']);
+  assert.deepEqual(aneisDeCobertura(0), []);
+});
+
+test('mesma estrutura = mesmas coordenadas até ~11 m', () => {
+  assert.equal(chaveDeSite(-25.123441, -49.1), chaveDeSite(-25.123449, -49.1));
+  assert.notEqual(chaveDeSite(-25.1234, -49.1), chaveDeSite(-25.1236, -49.1));
+});
+
+test('tooltip escapa texto e avisa que o alcance é estimado', () => {
+  const html = torreTooltipHtml({ operadora: '<i>X</i>', mask: 4, municipio: 'Abatiá', lat: -23, lon: -50, vizinhas: ['TIM'] });
+  assert.ok(!html.includes('<i>X</i>'));
+  assert.match(html, /Mesma estrutura: TIM/);
+  assert.match(html, /ESTIMADO/);
+  assert.match(html, /4G 9 km/);
+});

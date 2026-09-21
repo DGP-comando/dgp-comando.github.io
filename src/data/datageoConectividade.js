@@ -9,12 +9,23 @@
 // IDR-Parana (levantamento sobre o licenciamento ANATEL). O levantamento tem
 // DATA, e ela e mostrada na linha do painel: um mapa de cobertura sem data
 // engana mais do que informa.
+//
+// Passar o mouse numa torre abre o tooltip (operadora, geracoes, municipio,
+// outras operadoras na mesma estrutura) e desenha os aneis de alcance NOMINAL
+// de cada geracao que ela oferece (torreCobertura.js): estimativa, dita como
+// estimativa, porque o levantamento nao traz altura, potencia nem azimute.
 
 import * as Cesium from 'cesium';
 import { governorRequestRender } from '../renderGovernor.js';
 import { createCachedFactory, createReadyPump } from './entityDiff.js';
+import { createEntityHoverTooltip } from './entityHoverTooltip.js';
+import { centroidByIbge } from './prCentroids.js';
+import { aneisDeCobertura, chaveDeSite, torreTooltipHtml } from './torreCobertura.js';
 
 const TORRES_URL = '/data/conectividade-torres.json';
+const TORRE_PREFIX = 'datageo-conectividade:torre:';
+const TEC_COR = Object.freeze({ '5G': '#a3e635', '4G': '#4ade80', '3G': '#15803d', '2G': '#71717a' });
+const ANEL_PONTOS = 96;
 const COBERTURA_URL = '/data/conectividade-sem-cobertura.geojson';
 
 /**
@@ -138,6 +149,22 @@ export function conectividadeLegend(counts) {
     .map((klass) => ({ label: klass.label, color: klass.color, count: counts[klass.key] }));
 }
 
+/**
+ * Circulo geodesico (lon/lat em graus) de raio `km` em torno de (lat, lon),
+ * fechado, para a borda do anel. Aproximacao local plana: erro desprezivel
+ * nas dezenas de km que interessam aqui.
+ */
+function circuloGraus(lat, lon, km) {
+  const out = [];
+  const dLat = km / 111.32;
+  const dLon = km / (111.32 * Math.cos((lat * Math.PI) / 180));
+  for (let i = 0; i <= ANEL_PONTOS; i++) {
+    const a = (i / ANEL_PONTOS) * 2 * Math.PI;
+    out.push(lon + dLon * Math.cos(a), lat + dLat * Math.sin(a));
+  }
+  return out;
+}
+
 export const datageoConectividadeLayer = (() => {
   let _viewer = null;
   let _torresSource = null;
@@ -153,6 +180,51 @@ export const datageoConectividadeLayer = (() => {
   let _legend = [];
   let _vintage = null;
   let _areaKm2 = null;
+  let _tooltip = null;
+  let _destaque = null; // CustomDataSource dos aneis da torre sob o mouse
+  let _destaquePump = null;
+
+  function limparDestaque() {
+    if (!_destaque) return;
+    _destaque.entities.removeAll();
+    governorRequestRender('datageo-conectividade:destaque');
+  }
+
+  function destacar(entity) {
+    limparDestaque();
+    _destaquePump?.stop();
+    const props = entity?.properties?.getValue?.(Cesium.JulianDate.now());
+    if (!props || !_destaque) return;
+    for (const { tec, km } of aneisDeCobertura(props.mask)) {
+      const cor = Cesium.Color.fromCssColorString(TEC_COR[tec]);
+      _destaque.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(props.lon, props.lat),
+        ellipse: {
+          semiMajorAxis: km * 1000,
+          semiMinorAxis: km * 1000,
+          material: cor.withAlpha(0.12),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          classificationType: Cesium.ClassificationType.BOTH,
+        },
+      });
+      _destaque.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray(circuloGraus(props.lat, props.lon, km)),
+          width: 2,
+          material: cor.withAlpha(0.85),
+          clampToGround: true,
+        },
+      });
+    }
+    // Anel preso ao terreno e montado em worker: no modo de render sob demanda,
+    // alguem precisa pedir quadros ate ele ficar pronto, senao nao aparece.
+    _destaquePump = createReadyPump({
+      isReady: () => !_viewer || _viewer.dataSourceDisplay?.ready === true,
+      requestRender: () => governorRequestRender('datageo-conectividade:destaque'),
+      timeoutMs: 4_000,
+    });
+    _destaquePump.start();
+  }
 
   function aplicarVisibilidade() {
     if (_torresSource) _torresSource.show = _enabled;
@@ -178,10 +250,24 @@ export const datageoConectividadeLayer = (() => {
 
     const source = new Cesium.CustomDataSource('datageo-conectividade-torres');
     const counts = {};
-    for (const [lat, lon, , mask] of data.torres) {
+    const operadoras = data.operadoras ?? [];
+    // Operadoras por estrutura: varias ERBs dividem a mesma torre fisica.
+    const porSite = new Map();
+    for (const [lat, lon, op] of data.torres) {
+      const key = chaveDeSite(lat, lon);
+      porSite.set(key, [...(porSite.get(key) ?? []), operadoras[op] ?? '—']);
+    }
+    data.torres.forEach(([lat, lon, op, mask, ibge], i) => {
       const klass = classeDaTorre(mask);
       counts[klass.key] = (counts[klass.key] || 0) + 1;
+      const operadora = operadoras[op] ?? '—';
+      const vizinhas = [...new Set(porSite.get(chaveDeSite(lat, lon)))].filter((o) => o !== operadora);
       source.entities.add({
+        id: `${TORRE_PREFIX}${i}`,
+        properties: {
+          operadora, mask, lat, lon, vizinhas, vintage: _vintage,
+          municipio: centroidByIbge(ibge)?.name ?? '',
+        },
         position: Cesium.Cartesian3.fromDegrees(lon, lat),
         point: {
           pixelSize: 4,
@@ -192,7 +278,7 @@ export const datageoConectividadeLayer = (() => {
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
-    }
+    });
     _count = data.torres.length;
     _legend = conectividadeLegend(counts);
     source.show = _enabled;
@@ -252,6 +338,17 @@ export const datageoConectividadeLayer = (() => {
 
     init(viewer) {
       _viewer = viewer;
+      _destaque = new Cesium.CustomDataSource('datageo-conectividade-destaque');
+      viewer.dataSources.add(_destaque);
+      if (typeof document !== 'undefined') {
+        _tooltip = createEntityHoverTooltip({
+          viewer,
+          idPrefix: TORRE_PREFIX,
+          render: torreTooltipHtml,
+          isActive: () => _enabled,
+          onHover: destacar,
+        });
+      }
       console.log('[Data:datageo-conectividade] Initialized');
     },
 
@@ -263,6 +360,8 @@ export const datageoConectividadeLayer = (() => {
 
     disable() {
       _enabled = false;
+      _tooltip?.hide();
+      limparDestaque();
       aplicarVisibilidade();
       governorRequestRender('datageo-conectividade');
     },
@@ -289,7 +388,10 @@ export const datageoConectividadeLayer = (() => {
     destroy(viewer) {
       _enabled = false;
       pararPump();
-      for (const source of [_torresSource, _coberturaSource]) {
+      _tooltip?.destroy();
+      _tooltip = null;
+      _destaquePump?.stop();
+      for (const source of [_torresSource, _coberturaSource, _destaque]) {
         if (source) viewer?.dataSources?.remove(source, true);
       }
       if (_coberturaPrimitive) {
@@ -303,6 +405,7 @@ export const datageoConectividadeLayer = (() => {
       }
       _torresSource = null;
       _coberturaSource = null;
+      _destaque = null;
       _coberturaPrimitive = null;
       _viewer = null;
       _legend = [];

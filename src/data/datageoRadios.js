@@ -6,25 +6,29 @@
 // inteira do estado, município a município, como girar o dial; a troca de
 // estação toca um chiado curto de estática até o áudio entrar.
 //
-// Dado estático (public/data/radios-pr.json, scripts/build_radios.py) do
-// Radio Browser; só streams HTTPS que passaram na checagem diária deles.
-// O áudio vai direto do servidor da emissora para um único <audio>, sempre
-// depois de um clique: nada é proxiado, gravado ou redistribuído.
+// Dado estático (public/data/radios-pr.json, scripts/build_radios.py): as
+// rádios comunitárias outorgadas pela Anatel, as estações do radio.garden e
+// do Radio Browser, com contato e endereço do estúdio. O áudio vai direto do
+// servidor da emissora para um único <audio>, sempre depois de um clique:
+// nada é proxiado, gravado ou redistribuído.
 //
-// Fica de fora do radio.garden: a mira no centro do globo que sintoniza o
-// lugar embaixo dela. Com ~12 lugares no estado, clicar resolve.
+// Rádio sem stream HTTPS entra assim mesmo, "só no dial": a comunitária que
+// fala com o produtor pode não transmitir pela internet, mas tem frequência,
+// telefone e endereço. Município só com essas fica com o ponto cinza; as
+// setas pulam essas estações, porque não há o que tocar.
 
 import * as Cesium from 'cesium';
 import { centroidByIbge } from './prCentroids.js';
 import { createEntityHoverTooltip } from './entityHoverTooltip.js';
 import { escapeHtml } from './vesselTooltip.js';
+import { contactLines, isLive, placeTooltipHtml, stationBadges } from './radioContact.js';
 import { governorRequestRender } from '../renderGovernor.js';
 
 const ID = 'datageo-radios';
 const DATA_URL = '/data/radios-pr.json';
 const GREEN = '#3ddc84';
 const DOT_COLOR = Cesium.Color.fromCssColorString(GREEN);
-const HALO_COLOR = DOT_COLOR.withAlpha(0.3);
+const DIAL_COLOR = Cesium.Color.fromCssColorString('#94a3b8');
 const PLAY_TIMEOUT_MS = 12_000;
 const STATIC_GAIN = 0.05;
 const VOLUME_KEY = 'datageo-radio-volume';
@@ -37,6 +41,16 @@ export function dotSize(stationCount) {
 /** Achata os lugares numa lista única de estações, na ordem do arquivo. */
 export function flattenStations(places) {
   return places.flatMap((place) => place.stations.map((station) => ({ station, place })));
+}
+
+/** Próximo índice AO VIVO a partir de `from`, andando `step`; -1 se nenhum. */
+export function nextLiveIndex(entries, from, step) {
+  const n = entries.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (((from + step * k) % n) + n) % n;
+    if (isLive(entries[i].station)) return i;
+  }
+  return -1;
 }
 
 function readVolume() {
@@ -125,6 +139,18 @@ const PLAYER_CSS = `
   .dgr-vol { flex: 1; min-width: 60px; accent-color: ${GREEN}; }
   .dgr-status { font-size: 11px; color: #94a3b8; min-height: 15px; }
   #dg-radio[data-state="error"] .dgr-status { color: #fca5a5; }
+  #dg-radio[data-state="dial"] .dgr-play { background: #334155 !important; color: #94a3b8 !important; box-shadow: none; cursor: default; }
+  .dgr-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .dgr-badges:empty, .dgr-contact:empty { display: none; }
+  .dgr-badges span { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: rgba(61, 220, 132, 0.14); color: ${GREEN}; }
+  .dgr-contact { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .dgr-contact a { color: #cbd5e1; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dgr-contact a:hover { color: ${GREEN}; text-decoration: underline; }
+  .dgr-list button.dial { color: #94a3b8; }
+  .dgr-ent { color: #64748b; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rt-st { margin-top: 6px; max-width: 320px; }
+  .rt-tag, .rt-det { color: #94a3b8; font-size: 10px; }
+  .rt-det { white-space: normal; }
   .dgr-list { list-style: none; margin: 0; padding: 0; max-height: 150px; overflow-y: auto; border-top: 1px solid rgba(255, 255, 255, 0.08); }
   .dgr-list button { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 4px;
     text-align: left; border-radius: 8px; }
@@ -150,6 +176,7 @@ const PLAYER_HTML = `
     <div class="dgr-logo" aria-hidden="true">📻</div>
     <div style="min-width:0"><div class="dgr-name"></div><div class="dgr-meta"></div></div>
   </div>
+  <div class="dgr-badges"></div>
   <div class="dgr-controls">
     <button class="dgr-skip" type="button" data-step="-1" aria-label="Estação anterior">⏮</button>
     <button class="dgr-play" type="button" aria-label="Tocar">▶</button>
@@ -157,6 +184,7 @@ const PLAYER_HTML = `
     <input class="dgr-vol" type="range" min="0" max="1" step="0.01" aria-label="Volume">
   </div>
   <div class="dgr-status" aria-live="polite"></div>
+  <div class="dgr-contact"></div>
   <ol class="dgr-list" aria-label="Estações do município"></ol>
 `;
 
@@ -182,6 +210,7 @@ function createPlayer({ onSelectionChange }) {
 
   const setState = (state, status) => {
     root.dataset.state = state;
+    $('.dgr-play').disabled = state === 'dial';
     $('.dgr-status').textContent = status;
     $('.dgr-play').textContent = state === 'playing' || state === 'loading' ? '❚❚' : '▶';
     $('.dgr-play').setAttribute('aria-label', state === 'playing' || state === 'loading' ? 'Pausar' : 'Tocar');
@@ -202,13 +231,17 @@ function createPlayer({ onSelectionChange }) {
     $('.dgr-name').textContent = station.name;
     $('.dgr-name').title = station.name;
     const kbps = station.bitrate ? `${station.bitrate} kbps` : '';
-    $('.dgr-meta').textContent = [station.tags.slice(0, 2).join(', '), station.codec, kbps].filter(Boolean).join(' · ');
+    $('.dgr-meta').textContent = [station.freq, (station.tags ?? []).slice(0, 2).join(', '), kbps].filter(Boolean).join(' · ');
+    $('.dgr-badges').innerHTML = stationBadges(station).map((b) => `<span>${escapeHtml(b)}</span>`).join('');
+    $('.dgr-contact').innerHTML = contactLines(station, place.nome).map((l) => `<a href="${escapeHtml(l.href)}"
+      target="_blank" rel="noopener" title="${escapeHtml(l.label)}">${l.icon} ${escapeHtml(l.label)}</a>`).join('')
+      + (station.entidade ? `<span class="dgr-ent" title="Entidade outorgada (Anatel)">🏛 ${escapeHtml(station.entidade)}</span>` : '');
     const logo = $('.dgr-logo');
     logo.style.backgroundImage = station.favicon ? `url("${encodeURI(station.favicon)}")` : '';
     logo.textContent = station.favicon ? '' : '📻';
     $('.dgr-list').innerHTML = place.stations.map((s) => `
-      <li><button type="button" data-id="${escapeHtml(s.id)}" aria-current="${s.id === station.id}">
-        <span class="dgr-eq" aria-hidden="true"><i></i><i></i><i></i></span>${escapeHtml(s.name)}
+      <li><button type="button" class="${isLive(s) ? '' : 'dial'}" data-id="${escapeHtml(s.id)}" aria-current="${s.id === station.id}">
+        <span class="dgr-eq" aria-hidden="true"><i></i><i></i><i></i></span>${escapeHtml(s.name)}${s.freq ? ` · ${escapeHtml(s.freq)}` : ''}
       </button></li>`).join('');
   };
 
@@ -224,11 +257,13 @@ function createPlayer({ onSelectionChange }) {
   };
 
   const tune = (nextIndex) => {
-    if (!entries.length) return;
-    index = (nextIndex + entries.length) % entries.length;
+    if (nextIndex < 0 || !entries.length) return;
+    index = nextIndex % entries.length;
     renderStation();
     root.classList.add('open');
-    play();
+    const { station } = entries[index];
+    if (isLive(station)) play();
+    else halt('dial', `Só no dial${station.freq ? `: ${station.freq}` : ''} · sem transmissão pela internet`);
     onSelectionChange(entries[index].place.ibge);
   };
 
@@ -249,10 +284,10 @@ function createPlayer({ onSelectionChange }) {
   });
   $('.dgr-play').addEventListener('click', () => {
     if (root.dataset.state === 'playing' || root.dataset.state === 'loading') halt('paused', 'Pausado');
-    else play();
+    else if (isLive(entries[index]?.station)) play();
   });
   root.querySelectorAll('.dgr-skip').forEach((btn) => {
-    btn.addEventListener('click', () => tune(index + Number(btn.dataset.step)));
+    btn.addEventListener('click', () => tune(nextLiveIndex(entries, index, Number(btn.dataset.step))));
   });
   $('.dgr-list').addEventListener('click', (ev) => {
     const id = ev.target.closest('button[data-id]')?.dataset.id;
@@ -276,8 +311,9 @@ function createPlayer({ onSelectionChange }) {
       if (index < 0 && root.classList.contains('open')) close();
     },
     openPlace(ibge) {
-      const found = entries.findIndex((e) => e.place.ibge === ibge);
-      if (found >= 0) tune(found);
+      // Abre na primeira estação que toca; município só no dial abre na primeira.
+      const live = entries.findIndex((e) => e.place.ibge === ibge && isLive(e.station));
+      tune(live >= 0 ? live : entries.findIndex((e) => e.place.ibge === ibge));
     },
     close,
     destroy() {
@@ -300,12 +336,16 @@ function createRadiosLayer() {
   let lastError = null;
   let selected = null;
 
+  const baseColor = (place) => (place.stations.some(isLive) ? DOT_COLOR : DIAL_COLOR);
+
   const highlight = (ibge) => {
     selected = ibge;
-    for (const entity of dataSource?.entities.values ?? []) {
-      const isSel = entity.id === `${ID}:${ibge}`;
-      entity.point.color = isSel ? Cesium.Color.WHITE : DOT_COLOR;
-      entity.point.outlineColor = isSel ? DOT_COLOR.withAlpha(0.6) : HALO_COLOR;
+    for (const place of places) {
+      const entity = dataSource?.entities.getById(`${ID}:${place.ibge}`);
+      if (!entity) continue;
+      const isSel = place.ibge === ibge;
+      entity.point.color = isSel ? Cesium.Color.WHITE : baseColor(place);
+      entity.point.outlineColor = isSel ? DOT_COLOR.withAlpha(0.6) : baseColor(place).withAlpha(0.3);
     }
     governorRequestRender(`${ID}:select`);
   };
@@ -320,13 +360,13 @@ function createRadiosLayer() {
         position: Cesium.Cartesian3.fromDegrees(c.lon, c.lat),
         point: {
           pixelSize: dotSize(place.stations.length),
-          color: DOT_COLOR,
-          outlineColor: HALO_COLOR,
+          color: baseColor(place),
+          outlineColor: baseColor(place).withAlpha(0.3),
           outlineWidth: 5,
           heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
-        properties: { nome: place.nome, n: place.stations.length },
+        properties: { ibge: place.ibge },
       });
     }
     if (selected) highlight(selected);
@@ -335,9 +375,9 @@ function createRadiosLayer() {
   return {
     id: ID,
     name: 'Rádios ao vivo',
-    category: 'Cultura',
+    category: 'Infraestrutura',
     icon: '📻',
-    source: 'Radio Browser',
+    source: 'Anatel · radio.garden · Radio Browser',
     updateInterval: 24 * 3600_000,
 
     init(v) {
@@ -349,8 +389,10 @@ function createRadiosLayer() {
       tooltip = createEntityHoverTooltip({
         viewer,
         idPrefix: `${ID}:`,
-        render: (p) => `<div class="vt-nome">📻 ${escapeHtml(p.nome)}</div>`
-          + `<div>${p.n} ${p.n === 1 ? 'estação' : 'estações'} ao vivo · clique para ouvir</div>`,
+        render: (p) => {
+          const place = places.find((pl) => pl.ibge === p.ibge);
+          return place ? placeTooltipHtml(place) : '';
+        },
         isActive: () => Boolean(dataSource?.show),
       });
       handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);

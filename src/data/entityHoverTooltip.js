@@ -76,9 +76,11 @@ export function tooltipPlacement(pointer, box, viewport, offset = { x: 16, y: 12
  * @param {string} options.idPrefix prefixo dos ids de entidade desta camada
  * @param {(props: object) => string} options.render HTML (texto já escapado)
  * @param {() => boolean} options.isActive camada visível?
+ * @param {(entity: Cesium.Entity|null) => void} [options.onHover] avisado quando
+ *   a entidade sob o mouse muda (null ao sair), para a camada destacar algo
  * @returns {{destroy: () => void, hide: () => void}}
  */
-export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive }) {
+export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive, onHover = null }) {
   injectStyles();
   const el = document.createElement('div');
   el.className = 'datageo-entity-tooltip';
@@ -94,6 +96,7 @@ export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive })
   let destroyed = false;
 
   const hide = () => {
+    if (hoveredId) onHover?.(null);
     hoveredId = null;
     el.style.display = 'none';
   };
@@ -140,6 +143,7 @@ export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive })
       }
       el.innerHTML = html;
       hoveredId = entity.id;
+      onHover?.(entity);
     }
     place();
   };

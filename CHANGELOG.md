@@ -37,13 +37,31 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
-- Nova camada **Rádios ao vivo** (classe Cultura), no modelo do radio.garden:
+- As **torres de celular** (camada Conectividade) ganharam tooltip: operadora,
+  gerações (2G a 5G), município, outras operadoras na mesma estrutura e
+  coordenadas. Passar o mouse também **destaca a área de cobertura**, um anel
+  por geração que a torre oferece, nas cores da legenda. É o alcance NOMINAL
+  de uma macrocélula rural em cada faixa (5G 1,5 km, 3G 7 km, 4G 9 km, 2G
+  15 km), não medição: o levantamento não traz altura, potência nem azimute,
+  e o próprio tooltip avisa isso. A mancha cinza continua sendo a área sem 3G+
+  medida.
+
+- Nova camada **Rádios ao vivo** (classe Infraestrutura), no modelo do radio.garden:
   cada ponto verde é um município, do tamanho de quantas estações ele tem, e
   clicar abre um player que já sai tocando. As setas zapeiam pela lista do
   estado inteiro, a troca de estação chia um pouco de estática até o áudio
-  entrar, e a lista do município marca a que está no ar. São as rádios do PR
-  no diretório público Radio Browser com stream HTTPS funcionando; o áudio vem
-  direto de cada emissora. Desligar a camada para o som.
+  entrar, e a lista do município marca a que está no ar. Desligar a camada
+  para o som.
+
+- A camada de rádios passou a trazer as **rádios comunitárias**: as 286
+  instaladas no PR segundo a Anatel entram todas, com a entidade outorgada,
+  e ganham nome no ar, stream, contato e endereço quando a pesquisa achou.
+  Somam-se as estações do radio.garden (com o stream próprio de cada
+  emissora), do Ache Rádios, do Rankeador e do Radio Browser. Rádio sem
+  transmissão pela internet aparece **"só no dial"**, com frequência e
+  contato; município só com essas fica com o ponto cinza. O **tooltip** e o
+  player mostram frequência, telefone, WhatsApp, endereço do estúdio (com link
+  para o mapa), site e redes, além dos selos Comunitária e Programa rural.
 
 - Nova camada **Estradas municipais** (classe Infraestrutura): o terceiro nível
   da malha viária, abaixo das federais e estaduais que a camada Rodovias já

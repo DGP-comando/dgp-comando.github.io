@@ -78,7 +78,11 @@ export const DATA_CREDITS = [
   {
     key: 'radio-browser',
     html:
-      'Rádios ao vivo: diretório <a href="https://www.radio-browser.info" target="_blank" rel="noopener">Radio Browser</a> (domínio público); ' +
+      'Rádios: comunitárias outorgadas pela <a href="https://sistemas.anatel.gov.br/srd/" target="_blank" rel="noopener">Anatel (SRD)</a>; ' +
+      'estações e streams via <a href="https://radio.garden" target="_blank" rel="noopener">radio.garden</a>, ' +
+      '<a href="https://www.acheradios.com.br" target="_blank" rel="noopener">Ache Rádios</a>, ' +
+      '<a href="https://www.rankeador.com.br" target="_blank" rel="noopener">Rankeador</a> e ' +
+      '<a href="https://www.radio-browser.info" target="_blank" rel="noopener">Radio Browser</a>; ' +
       'o áudio vem direto de cada emissora',
   },
   {
