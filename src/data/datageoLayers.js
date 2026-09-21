@@ -52,6 +52,7 @@ import { datageoConectividadeLayer } from './datageoConectividade.js';
 import { datageoRodoviasLayer } from './datageoRodovias.js';
 import { datageoEstradasLayer } from './datageoEstradas.js';
 import { datageoCarLayer } from './datageoCar.js';
+import { datageoRadiosLayer } from './datageoRadios.js';
 import { DATAGEO_LOGISTICA_LAYERS } from './datageoLogistica.js';
 import { DATAGEO_ENERGIA_LAYERS } from './datageoEnergia.js';
 import { DATAGEO_TERRITORIOS_LAYERS } from './datageoTerritorios.js';
@@ -1005,4 +1006,5 @@ export const DATAGEO_LAYERS = [
   // precipitacao e o fundo sobre o qual os riscos de vento sao lidos.
   datageoPrecipitacaoLayer,
   datageoVentosLayer,
+  datageoRadiosLayer,
 ];

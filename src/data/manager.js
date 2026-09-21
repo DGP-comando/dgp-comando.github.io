@@ -39,6 +39,7 @@ const LAYER_CATEGORY_ORDER = Object.freeze([
   'Ambiente',
   'Saúde e ar',
   'Riscos e alertas',
+  'Cultura',
   'Contexto global',
 ]);
 const DEFAULT_LAYER_CATEGORY = 'Contexto global';

@@ -76,6 +76,12 @@ export const DATA_CREDITS = [
       'WFS público; divisas declaratórias generalizadas a 30 m',
   },
   {
+    key: 'radio-browser',
+    html:
+      'Rádios ao vivo: diretório <a href="https://www.radio-browser.info" target="_blank" rel="noopener">Radio Browser</a> (domínio público); ' +
+      'o áudio vem direto de cada emissora',
+  },
+  {
     key: 'osm-estradas',
     html:
       'Estradas municipais (urbanas e rurais): ' +

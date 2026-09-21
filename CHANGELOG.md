@@ -37,6 +37,14 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Nova camada **Rádios ao vivo** (classe Cultura), no modelo do radio.garden:
+  cada ponto verde é um município, do tamanho de quantas estações ele tem, e
+  clicar abre um player que já sai tocando. As setas zapeiam pela lista do
+  estado inteiro, a troca de estação chia um pouco de estática até o áudio
+  entrar, e a lista do município marca a que está no ar. São as rádios do PR
+  no diretório público Radio Browser com stream HTTPS funcionando; o áudio vem
+  direto de cada emissora. Desligar a camada para o som.
+
 - Nova camada **Estradas municipais** (classe Infraestrutura): o terceiro nível
   da malha viária, abaixo das federais e estaduais que a camada Rodovias já
   servia. São **394 mil trechos do OpenStreetMap** separados em **urbanas**
