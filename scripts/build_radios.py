@@ -51,6 +51,7 @@ GEOJSON = ROOT / 'public' / 'data' / 'municipios-pr.geojson'
 RADCOM = ROOT / 'data' / 'radios' / 'radcom-pr.json'
 RADIOGARDEN = ROOT / 'data' / 'radios' / 'radiogarden-pr.json'
 DIRETORIOS = ROOT / 'data' / 'radios' / 'diretorios-pr.json'
+EXTRAS = ROOT / 'data' / 'radios' / 'contatos-extra.json'
 OUT = ROOT / 'public' / 'data' / 'radios-pr.json'
 API = 'https://de1.api.radio-browser.info/json/stations/search?countrycode=BR&limit=100000'
 UA = 'datageo-command/1.0 (build script; github.com/DGP-comando)'
@@ -69,7 +70,9 @@ ADDR_OK = re.compile(
     r'[^,;]{2,60}?(?:,|\s-|\s)\s*(?:n[º°o.]?\s*)?\d{1,5}\b',
     re.I,
 )
-PHONE = re.compile(r'\(?\b(\d{2})\)?[\s.-]?(9?\d{4})[\s.-]?(\d{4})\b')
+# DDD do Paraná (41 a 46): número de outra região é da agência que fez o site
+# ou de uma homônima em outro estado, não do estúdio.
+PHONE = re.compile(r'\(?\b(4[1-6])\)?[\s.-]?(9?\d{4})[\s.-]?(\d{4})\b')
 
 
 def norm(text: str) -> str:
@@ -313,6 +316,20 @@ def main():
                 by_freq.setdefault(fkey, twin)
             if twin['url']:
                 by_url.setdefault(twin['url'], twin)
+
+    # Contato achado depois, no site da rádio ou em busca
+    # (scripts/fetch_contatos_radio.py, scripts/buscar_contatos_radio.py):
+    # só preenche o que falta, sempre passando pela mesma limpeza.
+    extras = json.loads(EXTRAS.read_text(encoding='utf-8')) if EXTRAS.exists() else {}
+    for st in stations:
+        extra = extras.get(st['id'])
+        if not extra:
+            continue
+        if extra.get('name') and st['name'].startswith('Comunitária '):
+            st['name'] = extra['name']
+        for k, v in contact(extra).items():
+            if v and not st.get(k):
+                st[k] = v
 
     places = {}
     for st in stations:
