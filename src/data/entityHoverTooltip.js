@@ -70,6 +70,25 @@ export function tooltipPlacement(pointer, box, viewport, offset = { x: 16, y: 12
   return { left, top };
 }
 
+// Camadas de LINHA clamped (estradas conveniadas) ficam, no pick, embaixo do
+// preenchimento dos municípios: scene.pick devolve o GroundPrimitive do
+// município. Elas pedem `drill` e são achadas com drillPick; o hover do
+// município consulta `drillHoverAt` para ceder a vez sobre elas.
+const DRILL_LIMIT = 4;
+const drillOwners = new Set();
+
+const idOf = (picked) => (typeof picked?.id?.id === 'string' ? picked.id.id : null);
+
+/** Há, sob `position`, entidade de alguma camada `drill` ligada? */
+export function drillHoverAt(scene, position) {
+  const owners = [...drillOwners].filter((o) => o.isActive());
+  if (!owners.length || !position) return false;
+  return scene.drillPick(position, DRILL_LIMIT).some((picked) => {
+    const id = idOf(picked);
+    return id && owners.some((o) => id.startsWith(o.idPrefix));
+  });
+}
+
 /**
  * @param {object} options
  * @param {Cesium.Viewer} options.viewer
@@ -78,10 +97,14 @@ export function tooltipPlacement(pointer, box, viewport, offset = { x: 16, y: 12
  * @param {() => boolean} options.isActive camada visível?
  * @param {(entity: Cesium.Entity|null) => void} [options.onHover] avisado quando
  *   a entidade sob o mouse muda (null ao sair), para a camada destacar algo
+ * @param {boolean} [options.drill] procurar a entidade também embaixo do topo
+ *   (drillPick), para linhas clamped sob o preenchimento dos municípios
  * @returns {{destroy: () => void, hide: () => void}}
  */
-export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive, onHover = null }) {
+export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive, onHover = null, drill = false }) {
   injectStyles();
+  const owner = { idPrefix, isActive };
+  if (drill) drillOwners.add(owner);
   const el = document.createElement('div');
   el.className = 'datageo-entity-tooltip';
   el.setAttribute('role', 'tooltip');
@@ -129,7 +152,8 @@ export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive, o
     lastPick = performance.now();
     pickedPointer = Cesium.Cartesian2.clone(pointer, pickedPointer ?? new Cesium.Cartesian2());
 
-    const entity = entityFromPick(viewer.scene.pick(pointer));
+    const entity = entityFromPick(viewer.scene.pick(pointer))
+      ?? (drill ? viewer.scene.drillPick(pointer, DRILL_LIMIT).map(entityFromPick).find(Boolean) : null);
     if (!entity) {
       hide();
       return;
@@ -194,6 +218,7 @@ export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive, o
     hide,
     destroy() {
       destroyed = true;
+      drillOwners.delete(owner);
       clearTimeout(trailing);
       handler.destroy();
       canvas.removeEventListener('mouseleave', onLeave);

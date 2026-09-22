@@ -37,6 +37,14 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Camada **Estradas Rurais Conveniadas** (Infraestrutura, token `M` no link):
+  os 96 convênios de 2026 da SEAB (SET, preliminar) por cima dos 352 trechos
+  protocolados em 2025 e dos 490 da malha automatizada de 2025, cada conjunto
+  com seu chip na linha do painel. O hover mostra convênio, município, valores,
+  empenho e pagamento; o CNPJ do colaborador fica de fora. Os acentos dos
+  convênios vieram perdidos no arquivo recebido e são reconstituídos por
+  vocabulário (4 palavras seguem sem reparo).
+
 - As **torres de celular** (camada Conectividade) ganharam tooltip: operadora,
   gerações (2G a 5G), município, outras operadoras na mesma estrutura e
   coordenadas. Passar o mouse também **destaca a área de cobertura**, um anel

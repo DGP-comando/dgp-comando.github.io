@@ -28,6 +28,7 @@ import * as Cesium from 'cesium';
 import { openFicha } from '../datageoFicha.js';
 import { governorRequestRender } from '../renderGovernor.js';
 import { createReadyPump } from './entityDiff.js';
+import { drillHoverAt } from './entityHoverTooltip.js';
 
 const GEOJSON_URL = '/data/municipios-pr.geojson';
 const INFO_URL = '/data/municipios-info.json';
@@ -297,7 +298,8 @@ export function createDatageoMunicipiosLayer() {
     // Sobre a divisa (so no caminho de entidades): manter o hover corrente em
     // vez de piscar o tooltip.
     if (target === 'border') return;
-    if (!target) {
+    // Sobre uma linha com hover próprio (drill), o tooltip é dela.
+    if (!target || drillHoverAt(viewer.scene, _pointer)) {
       clearHover();
       return;
     }

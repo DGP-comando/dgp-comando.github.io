@@ -86,6 +86,12 @@ export const DATA_CREDITS = [
       'o áudio vem direto de cada emissora',
   },
   {
+    key: 'seab-estradas-conveniadas',
+    html:
+      'Estradas rurais conveniadas 2026 (preliminar), protocolos 2025 e malha automatizada 2025: ' +
+      'SEAB-PR, Secretaria da Agricultura e do Abastecimento',
+  },
+  {
     key: 'osm-estradas',
     html:
       'Estradas municipais (urbanas e rurais): ' +
