@@ -19,6 +19,8 @@
 
 import * as Cesium from 'cesium';
 import { openFichaRegiao } from '../datageoFicha.js';
+import { createEntityHoverTooltip } from './entityHoverTooltip.js';
+import { escapeHtml as esc } from './vesselTooltip.js';
 
 function centroidOf(rings) {
   // centroide simples do anel externo (suficiente para ancorar label)
@@ -34,10 +36,11 @@ function centroidOf(rings) {
 
 function makeTerritorioLayer({
   id, name, icon, source, url, cssColor, labelOf, labelMaxDist, category = 'Limites',
-  fillAlpha = 0.25, onClick = null,
+  fillAlpha = 0.25, onClick = null, tooltipOf = null,
 }) {
   let _dataSource = null;
   let _handler = null;
+  let _tooltip = null;
   let _props = [];
   let _enabled = false;
   let _count = 0;
@@ -69,6 +72,7 @@ function makeTerritorioLayer({
 
     disable() {
       _enabled = false;
+      _tooltip?.hide();
       if (_dataSource) _dataSource.show = false;
     },
 
@@ -98,11 +102,10 @@ function makeTerritorioLayer({
               const outer = rings[0];
               if (!outer || outer.length < 4) continue;
               const positions = outer.map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat));
-              // Sem preenchimento, sem polígono: um classificador transparente
-              // ainda seria "pickado" e roubaria o clique da camada de municípios.
-              if (fillAlpha > 0) _dataSource.entities.add({
-                // id para o clique (onClick): `${id}:<indice da feature>:<parte>`
+              _dataSource.entities.add({
+                // id para clique/hover: `${id}:<indice da feature>:<parte>`
                 id: `${id}:${n}:${_dataSource.entities.values.length}`,
+                properties: props,
                 polygon: {
                   hierarchy: new Cesium.PolygonHierarchy(
                     positions,
@@ -149,6 +152,17 @@ function makeTerritorioLayer({
           _count = n;
           _dataSource.show = _enabled;
           await viewer.dataSources.add(_dataSource);
+          if (tooltipOf && !_tooltip) {
+            // drill: o polígono fica sob o preenchimento dos municípios, e o
+            // hover do município cede a vez (drillHoverAt).
+            _tooltip = createEntityHoverTooltip({
+              viewer,
+              idPrefix: `${id}:`,
+              render: tooltipOf,
+              isActive: () => Boolean(_dataSource?.show),
+              drill: true,
+            });
+          }
           if (onClick && !_handler) {
             _handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
             _handler.setInputAction((click) => {
@@ -178,6 +192,8 @@ function makeTerritorioLayer({
     destroy(viewer) {
       _handler?.destroy();
       _handler = null;
+      _tooltip?.destroy();
+      _tooltip = null;
       if (_dataSource) {
         viewer.dataSources.remove(_dataSource, true);
         _dataSource = null;
@@ -191,6 +207,18 @@ function makeTerritorioLayer({
 }
 
 const fmtHa = (ha) => (ha ? ` · ${Math.round(ha).toLocaleString('pt-BR')} ha` : '');
+const fmtInt = (v) => Math.round(Number(v)).toLocaleString('pt-BR');
+
+/** Tooltip padrão: título, linhas "rótulo: valor" (vazias somem) e fonte. */
+function tooltipHtml(titulo, linhas, fonte) {
+  const corpo = linhas
+    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '')
+    .map(([k, v]) => `<div><span class="vt-dim">${esc(k)}:</span> ${esc(v)}</div>`)
+    .join('');
+  return `<div class="vt-nome">${esc(titulo)}</div>${corpo}<div class="vt-fontes">${esc(fonte)}</div>`;
+}
+const areaHa = (ha) => (Number(ha) > 0 ? `${fmtInt(ha)} ha` : '');
+const nomeTi = (p) => `${String(p.nome).startsWith('TI ') ? '' : 'TI '}${p.nome}`;
 
 export const datageoTerrasIndigenasLayer = makeTerritorioLayer({
   id: 'datageo-terras-indigenas',
@@ -200,8 +228,12 @@ export const datageoTerrasIndigenasLayer = makeTerritorioLayer({
   url: '/data/terras-indigenas-pr.geojson',
   cssColor: '#fb923c',
   // O nome da FUNAI ja vem prefixado ("TI Marrecas") — nao duplicar.
-  labelOf: (p) => `${String(p.nome).startsWith('TI ') ? '' : 'TI '}${p.nome}${fmtHa(p.area_ha)}`,
+  labelOf: (p) => `${nomeTi(p)}${fmtHa(p.area_ha)}`,
   labelMaxDist: 600_000,
+  tooltipOf: (p) => tooltipHtml(nomeTi(p), [
+    ['Etapa', p.etapa],
+    ['Área', areaHa(p.area_ha)],
+  ], 'FUNAI/CMR'),
 });
 
 export const datageoQuilombolasLayer = makeTerritorioLayer({
@@ -213,6 +245,10 @@ export const datageoQuilombolasLayer = makeTerritorioLayer({
   cssColor: '#c084fc',
   labelOf: (p) => `TQ ${p.nome}${p.fase ? ` (${p.fase})` : ''}`,
   labelMaxDist: 1_600_000,
+  tooltipOf: (p) => tooltipHtml(`Território quilombola ${p.nome}`, [
+    ['Município', p.municipio],
+    ['Fase', p.fase],
+  ], 'IBGE, Censo 2022'),
 });
 
 const fmtFamilias = (n) => (Number(n) > 0 ? ` · ${Math.round(n).toLocaleString('pt-BR')} famílias` : '');
@@ -226,6 +262,15 @@ export const datageoAssentamentosLayer = makeTerritorioLayer({
   cssColor: '#a3e635',
   // 311 projetos no PR: rótulo só perto para não virar tapete de texto.
   labelOf: (p) => `${p.nome}${fmtFamilias(p.familias)}`,
+  tooltipOf: (p) => tooltipHtml(p.nome, [
+    ['Município', p.municipio],
+    ['Área', areaHa(p.area_ha)],
+    ['Famílias', Number(p.familias) > 0 ? `${fmtInt(p.familias)} de ${fmtInt(p.capacidade)} de capacidade` : ''],
+    ['Fase', p.fase],
+    ['Criação', p.criacao],
+    ['Obtenção', p.obtencao],
+    ['Código SIPRA', p.codigo],
+  ], 'INCRA/SIPRA'),
   labelMaxDist: 80_000,
 });
 
@@ -278,6 +323,10 @@ export const datageoRegionaisIdrLayer = makeTerritorioLayer({
   fillAlpha: 0.12,
   labelOf: (p) => `IDR ${p.regional}`,
   labelMaxDist: 1_800_000,
+  tooltipOf: (p) => tooltipHtml(`Regional ${p.regional}`, [
+    ['Municípios', fmtInt(p.municipios.length)],
+    ['Ficha', 'clique para abrir a ficha regional'],
+  ], 'IDR-Paraná'),
   onClick: (p) => openFichaRegiao({
     nome: `Regional ${p.regional}`,
     meta: `IDR-Paraná · ${plural(p.municipios.length, 'município', 'municípios')}`,
@@ -285,8 +334,9 @@ export const datageoRegionaisIdrLayer = makeTerritorioLayer({
   }),
 });
 
-// Só contorno: 27 municípios estão em duas associações, e os polígonos se
-// sobrepõem; preenchimento empilhado ficaria ilegível.
+// Quase só contorno: 27 municípios estão em duas associações, e os polígonos
+// se sobrepõem; preenchimento empilhado ficaria ilegível. O alfa mínimo existe
+// para o polígono ser "pickado" pelo tooltip.
 export const datageoAssociacoesLayer = makeTerritorioLayer({
   id: 'datageo-associacoes',
   name: 'Associações de municípios',
@@ -294,9 +344,13 @@ export const datageoAssociacoesLayer = makeTerritorioLayer({
   source: 'SECID-PR',
   url: '/data/associacoes-pr.geojson',
   cssColor: '#f472b6',
-  fillAlpha: 0,
+  fillAlpha: 0.02,
   labelOf: (p) => p.sigla,
   labelMaxDist: 1_800_000,
+  tooltipOf: (p) => tooltipHtml(p.sigla, [
+    ['Nome', p.nome],
+    ['Municípios', fmtInt(p.municipios.length)],
+  ], 'SECID-PR'),
 });
 
 export const DATAGEO_TERRITORIOS_LAYERS = [
