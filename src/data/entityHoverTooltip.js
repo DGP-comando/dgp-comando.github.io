@@ -33,7 +33,7 @@ function injectStyles() {
       font-size: 11px;
       line-height: 1.5;
       color: #cbd5e1;
-      z-index: 91;
+      z-index: 149; /* acima dos painéis (< 150), abaixo da pílula de voz e dos toasts */
       pointer-events: none;
       white-space: normal;
     }
@@ -99,15 +99,17 @@ export function drillHoverAt(scene, position) {
  *   a entidade sob o mouse muda (null ao sair), para a camada destacar algo
  * @param {boolean} [options.drill] procurar a entidade também embaixo do topo
  *   (drillPick), para linhas clamped sob o preenchimento dos municípios
+ * @param {number} [options.maxWidth] largura máxima em px (padrão 340 do CSS)
  * @returns {{destroy: () => void, hide: () => void}}
  */
-export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive, onHover = null, drill = false }) {
+export function createEntityHoverTooltip({ viewer, idPrefix, render, isActive, onHover = null, drill = false, maxWidth }) {
   injectStyles();
   const owner = { idPrefix, isActive };
   if (drill) drillOwners.add(owner);
   const el = document.createElement('div');
   el.className = 'datageo-entity-tooltip';
   el.setAttribute('role', 'tooltip');
+  if (maxWidth) el.style.maxWidth = `${maxWidth}px`;
   document.body.appendChild(el);
 
   let pointer = null;

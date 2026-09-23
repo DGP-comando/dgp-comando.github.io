@@ -92,6 +92,16 @@ export const DATA_CREDITS = [
       'SEAB-PR, Secretaria da Agricultura e do Abastecimento',
   },
   {
+    key: 'idr-agroindustrias',
+    html:
+      'Agroindústrias: IDR-Paraná, diagnóstico das agroindústrias 2023 e cadastro do IDR GETEC; ' +
+      'frigoríficos e laticínios do SIGSIF/MAPA',
+  },
+  {
+    key: 'rotas-turisticas',
+    html: 'Rotas turísticas: Rota do Queijo Paranaense e Rota da Uva e do Vinho do Paraná',
+  },
+  {
     key: 'osm-estradas',
     html:
       'Estradas municipais (urbanas e rurais): ' +

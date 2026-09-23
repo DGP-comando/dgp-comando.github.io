@@ -37,6 +37,22 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Camada **Agroindústrias (cadastro IDR)** (Logística agro, token `N`): 1.267
+  pontos do diagnóstico das agroindústrias de 2023 do IDR-Paraná e do cadastro
+  do IDR GETEC, casados por nome no município. O hover lista todos os campos do
+  diagnóstico e do GETEC, menos CPF, telefone e faturamento. Coordenadas
+  digitadas em formatos mistos (graus/minutos/segundos, UTM, decimal sem
+  separador) são lidas e checadas contra o município declarado; as que caem
+  fora dele vêm marcadas no tooltip.
+
+- Camada **Rotas turísticas** (Logística agro, token `O`): os 85 pontos da Rota
+  do Queijo Paranaense e da Rota da Uva e do Vinho, com produtos, experiências
+  e contato no hover.
+
+- A camada **Agroindústrias** (SIGSIF/MAPA e serrarias OSM) ganhou tooltip com
+  nome, tipo, município e fonte. O tooltip de entidade passou a ficar acima dos
+  painéis laterais.
+
 - Camada **Estradas Rurais Conveniadas** (Infraestrutura, token `M` no link):
   os 96 convênios de 2026 da SEAB (SET, preliminar) por cima dos 352 trechos
   protocolados em 2025 e dos 490 da malha automatizada de 2025, cada conjunto
