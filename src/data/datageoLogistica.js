@@ -252,7 +252,7 @@ export const datageoAgroindustriasLayer = makePointsLayer({
   name: 'Agroindústrias',
   icon: '🏭',
   source: 'SIGSIF/MAPA · OSM',
-  url: '/data/agroindustrias-pr.geojson',
+  url: '/privado/agroindustrias-pr.geojson',
   styleFor: (p) => {
     const s = AGRO_STYLE[p.kind];
     if (!s) return null;

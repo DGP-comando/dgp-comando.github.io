@@ -59,7 +59,6 @@ TARGETS = {
     'municipios-pr.geojson': 0.0,
     'armazens-conab-pr.geojson': 0.0,
     'usinas-pr.geojson': 0.0,
-    'agroindustrias-pr.geojson': 0.0,
     'subestacoes-pr.geojson': 0.0,
     'ceasas-pr.geojson': 0.0,
     'conectividade-torres.json': None,  # None = JSON generico, so minifica

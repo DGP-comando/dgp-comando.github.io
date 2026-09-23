@@ -8,7 +8,7 @@
 // Os dois últimos são o "todas as estradas" contra o qual as conveniadas se
 // leem, por isso ficam em tons frios e finos, e as conveniadas por cima.
 //
-// Dado estático (public/data/estradas-conveniadas-pr.geojson, via
+// Dado estático (bucket privado, data/privado/estradas-conveniadas-pr.geojson, via
 // scripts/build_estradas_conveniadas.py), sem o CNPJ do colaborador. São
 // menos de mil trechos: entidades clamped bastam, e dão o hover de graça.
 

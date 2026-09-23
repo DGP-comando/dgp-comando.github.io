@@ -15,3 +15,6 @@ output/
 
 # Estaticos nao-abertos: servidos pelo bucket privado datageo-privado (scripts/upload_privado.py)
 data/privado/
+# Fontes brutas nao-abertas (SEAB, radios): ficam so locais
+data/estradas-conveniadas/
+data/radios/

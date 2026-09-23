@@ -6,7 +6,7 @@
 // inteira do estado, município a município, como girar o dial; a troca de
 // estação toca um chiado curto de estática até o áudio entrar.
 //
-// Dado estático (public/data/radios-pr.json, scripts/build_radios.py): as
+// Dado estático (bucket privado, data/privado/radios-pr.json, scripts/build_radios.py): as
 // rádios comunitárias outorgadas pela Anatel, as estações do radio.garden e
 // do Radio Browser, com contato e endereço do estúdio. O áudio vai direto do
 // servidor da emissora para um único <audio>, sempre depois de um clique:

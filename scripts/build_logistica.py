@@ -140,7 +140,7 @@ def build_agroindustrias():
     kinds = {}
     for x in feats:
         kinds[x['properties']['kind']] = kinds.get(x['properties']['kind'], 0) + 1
-    out = OUT / 'agroindustrias-pr.geojson'
+    out = OUT.parent.parent / 'data' / 'privado' / 'agroindustrias-pr.geojson'  # bucket privado: upload_privado.py
     out.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats},
                               ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     print(f'agroindustrias: {kinds}, {out.stat().st_size / 1024:.0f} KB')
