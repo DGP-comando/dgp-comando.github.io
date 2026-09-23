@@ -145,6 +145,7 @@ export const datageoSubestacoesLayer = makePointsLayer({
   source: 'EPE',
   url: '/data/subestacoes-pr.geojson',
   styleFor: (p) => ({
+    grupo: p.planejada ? 'planejada' : 'existente',
     size: p.planejada ? 9 : 7,
     color: p.planejada ? cores.planejada : cssColor('#38bdf8', 1),
     label: p.planejada
@@ -152,6 +153,10 @@ export const datageoSubestacoesLayer = makePointsLayer({
       : `${p.nome} · ${p.tensao ?? ''} kV`,
     labelMaxDist: p.planejada ? 900_000 : 250_000,
   }),
+  legend: [
+    { grupo: 'existente', label: 'Existente', color: '#38bdf8' },
+    { grupo: 'planejada', label: 'Prevista', color: '#fbbf24' },
+  ],
 });
 
 // Usinas SIGEL/ANEEL por tipo + aerogeradores individuais (torres) num
@@ -179,6 +184,7 @@ export const datageoGeracaoLayer = makePointsLayer({
   styleFor: (p) => {
     if (p.tipo === 'aerogerador') {
       return {
+        grupo: 'aerogerador',
         size: 3.5,
         color: cssColor('#ffffff', 0.85),
         label: `Aerogerador ${p.nome}${p.alt ? ` · ${p.alt} m` : ''}`,
@@ -189,12 +195,17 @@ export const datageoGeracaoLayer = makePointsLayer({
     if (!s) return null;
     const mw = (Number(p.pot_kw) || 0) / 1000;
     return {
+      grupo: p.tipo,
       size: mw >= 500 ? s.base + 5 : mw >= 50 ? s.base + 2 : s.base,
       color: cssColor(s.cor, 0.9),
       label: `${s.rotulo} ${p.nome}${p.pot_kw ? ` · ${fmtMw(p.pot_kw)}` : ''}`,
       labelMaxDist: mw >= 500 ? 1_500_000 : mw >= 50 ? 400_000 : 130_000,
     };
   },
+  legend: [
+    ...Object.entries(USINA_STYLE).map(([grupo, s]) => ({ grupo, label: s.rotulo, color: s.cor })),
+    { grupo: 'aerogerador', label: 'Aerogerador', color: '#ffffff' },
+  ],
 });
 
 export const DATAGEO_ENERGIA_LAYERS = [

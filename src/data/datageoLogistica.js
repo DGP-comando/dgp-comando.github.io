@@ -45,9 +45,14 @@ const labelCondition = createCachedFactory(
 
 // Exportada: datageoEnergia.js reusa a mesma factory para as subestacoes.
 // `tooltip(props)` opcional devolve o HTML (já escapado) do hover do ponto.
-export function makePointsLayer({ id, name, category = CATEGORY, icon, source, url, styleFor, tooltip, tooltipWidth }) {
+// `legend` opcional, [{ grupo, label, color }]: vira a legenda de cores na
+// linha do painel; `styleFor` diz o `grupo` de cada ponto, e a contagem sai
+// dos pontos carregados.
+export function makePointsLayer({ id, name, category = CATEGORY, icon, source, url, styleFor, tooltip, tooltipWidth, legend }) {
   let _dataSource = null;
   let _tooltip = null;
+  let _counts = {};
+  let _onRowControls = null;
   let _enabled = false;
   let _count = 0;
   let _lastUpdate = null;
@@ -84,11 +89,13 @@ export function makePointsLayer({ id, name, category = CATEGORY, icon, source, u
           const gj = await resp.json();
           _dataSource = new Cesium.CustomDataSource(id);
           let n = 0;
+          const counts = {};
           for (const f of gj.features ?? []) {
             const [lon, lat] = f.geometry?.coordinates ?? [];
             if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
             const style = styleFor(f.properties ?? {});
             if (!style) continue;
+            if (style.grupo) counts[style.grupo] = (counts[style.grupo] ?? 0) + 1;
             _dataSource.entities.add({
               id: tooltip ? `${id}:${n++}` : undefined,
               properties: tooltip ? f.properties : undefined,
@@ -118,6 +125,8 @@ export function makePointsLayer({ id, name, category = CATEGORY, icon, source, u
                 : undefined,
             });
           }
+          _counts = counts;
+          _onRowControls?.();
           _dataSource.show = _enabled;
           await viewer.dataSources.add(_dataSource);
           if (tooltip && typeof document !== 'undefined') {
@@ -154,6 +163,18 @@ export function makePointsLayer({ id, name, category = CATEGORY, icon, source, u
     getStats() {
       return { count: _count, lastUpdate: _lastUpdate, error: _lastError };
     },
+
+    ...(legend && {
+      setRowControlsListener(fn) {
+        _onRowControls = fn;
+      },
+      getRowControls() {
+        return {
+          chips: [],
+          legend: legend.map((g) => ({ label: g.label, color: g.color, count: _counts[g.grupo] ?? 0 })),
+        };
+      },
+    }),
   };
 }
 
@@ -172,6 +193,7 @@ export const datageoArmazensLayer = makePointsLayer({
   styleFor: (p) => {
     if (p.kind === 'porto') {
       return {
+        grupo: 'porto',
         size: 12,
         color: cssColor('#f97316'),
         label: p.nome,
@@ -180,6 +202,7 @@ export const datageoArmazensLayer = makePointsLayer({
     }
     const cap = Number(p.cap_t) || 0;
     return {
+      grupo: 'armazem',
       // Capacidade dita o tamanho: silos grandes saltam na visão regional.
       size: cap >= 50_000 ? 7 : cap >= 10_000 ? 5 : 3.5,
       color: cssColor('#fbbf24', 0.85),
@@ -187,6 +210,10 @@ export const datageoArmazensLayer = makePointsLayer({
       labelMaxDist: 45_000,
     };
   },
+  legend: [
+    { grupo: 'armazem', label: 'Armazém', color: '#fbbf24' },
+    { grupo: 'porto', label: 'Porto', color: '#f97316' },
+  ],
 });
 
 const AGRO_STYLE = {
@@ -229,6 +256,7 @@ export const datageoAgroindustriasLayer = makePointsLayer({
     const s = AGRO_STYLE[p.kind];
     if (!s) return null;
     return {
+      grupo: p.kind,
       size: s.size,
       color: cssColor(s.color, 0.9),
       label: `${s.rotulo}: ${p.nome}`,
@@ -236,14 +264,22 @@ export const datageoAgroindustriasLayer = makePointsLayer({
     };
   },
   tooltip: agroindustriaTooltipHtml,
+  legend: Object.entries(AGRO_STYLE).map(([grupo, s]) => ({ grupo, label: s.rotulo, color: s.color })),
 });
 
+const IDR_GRUPOS = [
+  { grupo: 'vegetal', label: 'Origem vegetal', color: '#4ade80' },
+  { grupo: 'animal', label: 'Origem animal', color: '#f472b6' },
+  { grupo: 'mista', label: 'Vegetal e animal', color: '#c084fc' },
+];
+const IDR_COR = Object.fromEntries(IDR_GRUPOS.map((g) => [g.grupo, g.color]));
+
 // Matéria-prima do diagnóstico ou, no ponto só do GETEC, o tipo (Vegetal/Animal/Mista).
-const IDR_COR = (mp = '') => {
+const idrGrupo = (mp = '') => {
   const animal = mp.includes('Animal') || mp.includes('Mista');
   const vegetal = mp.includes('Vegetal') || mp.includes('Mista');
-  if (animal && vegetal) return '#c084fc';
-  return animal ? '#f472b6' : '#4ade80';
+  if (animal && vegetal) return 'mista';
+  return animal ? 'animal' : 'vegetal';
 };
 
 export const datageoAgroindustriasIdrLayer = makePointsLayer({
@@ -252,14 +288,19 @@ export const datageoAgroindustriasIdrLayer = makePointsLayer({
   icon: '🧺',
   source: 'IDR-Paraná 2023',
   url: '/data/agroindustrias-idr-pr.geojson',
-  styleFor: (p) => ({
-    size: 6,
-    color: cssColor(IDR_COR(p['Matéria-prima'] ?? p['GETEC · Tipo']), 0.9),
-    label: p['Agroindústria'],
-    labelMaxDist: 40_000,
-  }),
+  styleFor: (p) => {
+    const grupo = idrGrupo(p['Matéria-prima'] ?? p['GETEC · Tipo']);
+    return {
+      grupo,
+      size: 6,
+      color: cssColor(IDR_COR[grupo], 0.9),
+      label: p['Agroindústria'],
+      labelMaxDist: 40_000,
+    };
+  },
   tooltip: agroindustriaIdrTooltipHtml,
   tooltipWidth: 720,
+  legend: IDR_GRUPOS,
 });
 
 const ROTA_STYLE = {
@@ -282,6 +323,7 @@ export const datageoRotasTuristicasLayer = makePointsLayer({
   source: 'Rota do Queijo · Rota da Uva e Vinho',
   url: '/data/rotas-turisticas-pr.geojson',
   styleFor: (p) => ({
+    grupo: p.rota,
     size: 9,
     color: cssColor(ROTA_STYLE[p.rota]?.color ?? '#e2e8f0'),
     label: p.nome,
@@ -289,6 +331,7 @@ export const datageoRotasTuristicasLayer = makePointsLayer({
   }),
   tooltip: rotaTuristicaTooltipHtml,
   tooltipWidth: 420,
+  legend: Object.entries(ROTA_STYLE).map(([grupo, s]) => ({ grupo, label: grupo, color: s.color })),
 });
 
 export const datageoCeasasLayer = makePointsLayer({
@@ -298,12 +341,14 @@ export const datageoCeasasLayer = makePointsLayer({
   source: 'CEASA/PR',
   url: '/data/ceasas-pr.geojson',
   styleFor: (p) => ({
+    grupo: 'ceasa',
     size: 11,
     color: cssColor('#22c55e'),
     label: p.nome,
     // So 5 unidades: label sempre visivel na visao estadual.
     labelMaxDist: 2_500_000,
   }),
+  legend: [{ grupo: 'ceasa', label: 'CEASA', color: '#22c55e' }],
 });
 
 export const DATAGEO_LOGISTICA_LAYERS = [
