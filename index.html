@@ -52,7 +52,27 @@
     <button id="reset-globe-view" type="button" aria-label="Voltar à visão geral" title="Voltar à visão geral do globo">
       <span class="material-symbols-outlined" aria-hidden="true">public</span>
     </button>
+    <button id="usuarios-btn" type="button" aria-label="Cadastrar usuários" title="Cadastrar usuários" hidden>
+      <span class="material-symbols-outlined" aria-hidden="true">manage_accounts</span>
+    </button>
+    <button id="logout-btn" type="button" aria-label="Sair" title="Sair">
+      <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+    </button>
   </nav>
+  <dialog id="usuarios-dialog" aria-labelledby="usuarios-titulo">
+    <form class="login-form" method="dialog" novalidate>
+      <p id="usuarios-titulo" class="login-title">Usuários do DataGeo</p>
+      <label class="login-field"><span>Matrícula</span><input name="matricula" inputmode="numeric" autocomplete="off" required></label>
+      <label class="login-field"><span>Nome completo (só para cadastrar)</span><input name="nome" autocomplete="off"></label>
+      <p class="login-hint">Senha inicial: a matrícula invertida. A pessoa troca no primeiro acesso.</p>
+      <p class="login-error" role="status"></p>
+      <div class="login-actions">
+        <button type="submit" value="criar">Cadastrar</button>
+        <button type="submit" value="resetar">Resetar senha</button>
+        <button type="submit" value="fechar" formnovalidate>Fechar</button>
+      </div>
+    </form>
+  </dialog>
   <div id="global-loading-status" role="status" aria-live="polite" aria-atomic="true" hidden>
     <span id="global-loading-label">CARREGANDO DADOS AO VIVO</span>
     <span id="global-loading-detail"></span>

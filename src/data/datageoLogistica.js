@@ -17,6 +17,7 @@ import * as Cesium from 'cesium';
 import { createCachedFactory } from './entityDiff.js';
 import { createEntityHoverTooltip } from './entityHoverTooltip.js';
 import { escapeHtml } from './vesselTooltip.js';
+import { dgFetchData } from './datageoClient.js';
 
 const CATEGORY = 'Logística agro';
 
@@ -84,7 +85,7 @@ export function makePointsLayer({ id, name, category = CATEGORY, icon, source, u
     async update(viewer) {
       try {
         if (!_dataSource) {
-          const resp = await fetch(url);
+          const resp = await dgFetchData(url);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const gj = await resp.json();
           _dataSource = new Cesium.CustomDataSource(id);
@@ -287,7 +288,7 @@ export const datageoAgroindustriasIdrLayer = makePointsLayer({
   name: 'Agroindústrias (cadastro IDR)',
   icon: '🧺',
   source: 'IDR-Paraná 2023',
-  url: '/data/agroindustrias-idr-pr.geojson',
+  url: '/privado/agroindustrias-idr-pr.geojson',
   styleFor: (p) => {
     const grupo = idrGrupo(p['Matéria-prima'] ?? p['GETEC · Tipo']);
     return {

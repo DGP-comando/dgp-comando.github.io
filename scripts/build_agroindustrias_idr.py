@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gera public/data/agroindustrias-idr-pr.geojson.
+"""Gera data/privado/agroindustrias-idr-pr.geojson.
 
 Fonte: diagnóstico das agroindústrias do IDR-Paraná (formulário de 2023),
 planilha `dados.xlsx`, aba Campos, uma linha por agroindústria com as
@@ -35,7 +35,7 @@ from shapely.ops import unary_union
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = Path(r'H:\IDR-PARANA\BI Agroindústria\dados.xlsx')
-OUT = ROOT / 'public' / 'data' / 'agroindustrias-idr-pr.geojson'
+OUT = ROOT / 'data' / 'privado' / 'agroindustrias-idr-pr.geojson'
 GETEC = SRC.parent / 'getec_agroindustrias_2026-09-23.json'
 MUNICIPIOS = ROOT / 'public' / 'data' / 'municipios-pr.geojson'
 

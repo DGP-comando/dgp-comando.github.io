@@ -16,9 +16,10 @@ import * as Cesium from 'cesium';
 import { createEntityHoverTooltip } from './entityHoverTooltip.js';
 import { escapeHtml } from './vesselTooltip.js';
 import { governorRequestRender } from '../renderGovernor.js';
+import { dgFetchData } from './datageoClient.js';
 
 const ID = 'datageo-estradas-conveniadas';
-const DATA_URL = '/data/estradas-conveniadas-pr.geojson';
+const DATA_URL = '/privado/estradas-conveniadas-pr.geojson';
 const DESCRICAO_MAX = 280;
 
 export const GRUPOS = Object.freeze([
@@ -130,7 +131,7 @@ function createEstradasConveniadasLayer() {
     async update() {
       if (loaded) return true;
       try {
-        const resp = await fetch(DATA_URL);
+        const resp = await dgFetchData(DATA_URL);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         features = (await resp.json()).features ?? [];
       } catch (err) {

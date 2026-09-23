@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Completa contato e endereço das rádios que ainda não têm, lendo o site delas.
 
-Para cada estação de public/data/radios-pr.json com site e sem telefone,
+Para cada estação de data/privado/radios-pr.json com site e sem telefone,
 WhatsApp ou endereço, lê a página inicial e até três páginas internas cujo
 link fala de contato ("contato", "fale conosco", "quem somos", "sobre",
 "expediente"). É nessas páginas que a rádio pequena publica o telefone do
@@ -28,7 +28,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
-RADIOS = ROOT / 'public' / 'data' / 'radios-pr.json'
+RADIOS = ROOT / 'data' / 'privado' / 'radios-pr.json'
 OUT = ROOT / 'data' / 'radios' / 'contatos-extra.json'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36'
 PHONE = re.compile(r'\(?\b(4[1-6])\)?[\s.-]?(9?\d{4})[\s.-]?(\d{4})\b')

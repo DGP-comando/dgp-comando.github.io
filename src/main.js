@@ -41,6 +41,7 @@ import {
 } from './renderGovernor.js';
 import { installScopeMask } from './scopeMask.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
+import { requireLogin } from './datageoLogin.js';
 
 initLogoGaze();
 
@@ -426,4 +427,4 @@ async function init() {
   }
 }
 
-init();
+requireLogin().then(init);

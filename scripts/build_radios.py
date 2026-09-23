@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gera public/data/radios-pr.json: rádios do PR agrupadas por município.
+"""Gera data/privado/radios-pr.json: rádios do PR agrupadas por município.
 
 Quatro fontes, na ordem de autoridade:
 
@@ -52,7 +52,7 @@ RADCOM = ROOT / 'data' / 'radios' / 'radcom-pr.json'
 RADIOGARDEN = ROOT / 'data' / 'radios' / 'radiogarden-pr.json'
 DIRETORIOS = ROOT / 'data' / 'radios' / 'diretorios-pr.json'
 EXTRAS = ROOT / 'data' / 'radios' / 'contatos-extra.json'
-OUT = ROOT / 'public' / 'data' / 'radios-pr.json'
+OUT = ROOT / 'data' / 'privado' / 'radios-pr.json'
 API = 'https://de1.api.radio-browser.info/json/stations/search?countrycode=BR&limit=100000'
 UA = 'datageo-command/1.0 (build script; github.com/DGP-comando)'
 # Apelidos de cidade que aparecem em nome de rádio. Só entra o inequívoco.

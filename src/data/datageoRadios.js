@@ -23,9 +23,10 @@ import { createEntityHoverTooltip } from './entityHoverTooltip.js';
 import { escapeHtml } from './vesselTooltip.js';
 import { contactLines, isLive, placeTooltipHtml, stationBadges } from './radioContact.js';
 import { governorRequestRender } from '../renderGovernor.js';
+import { dgFetchData } from './datageoClient.js';
 
 const ID = 'datageo-radios';
-const DATA_URL = '/data/radios-pr.json';
+const DATA_URL = '/privado/radios-pr.json';
 const GREEN = '#3ddc84';
 const DOT_COLOR = Cesium.Color.fromCssColorString(GREEN);
 const DIAL_COLOR = Cesium.Color.fromCssColorString('#94a3b8');
@@ -416,7 +417,7 @@ function createRadiosLayer() {
     async update() {
       if (!dataSource) return false;
       try {
-        const resp = await fetch(DATA_URL);
+        const resp = await dgFetchData(DATA_URL);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         places = (await resp.json()).places ?? [];
       } catch (err) {

@@ -12,3 +12,6 @@ output/
 .DS_Store
 .gstack/
 3d-models/
+
+# Estaticos nao-abertos: servidos pelo bucket privado datageo-privado (scripts/upload_privado.py)
+data/privado/

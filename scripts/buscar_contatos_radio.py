@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Busca contato (e nome no ar) das rádios que ainda não têm, via DuckDuckGo.
 
-Para cada estação sem telefone nem WhatsApp em public/data/radios-pr.json,
+Para cada estação sem telefone nem WhatsApp em data/privado/radios-pr.json,
 pesquisa no DuckDuckGo (versão HTML) pelo nome da rádio, ou, se ela só é
 conhecida como "Comunitária 87,9 FM", pela frequência e município. Dos
 resultados, só valem os que citam o município. Deles se aproveita:

@@ -7,7 +7,7 @@ import {
   GRUPOS, datageoEstradasConveniadasLayer as layer, partesDe, tooltipHtml,
 } from './datageoEstradasConveniadas.js';
 
-const raw = readFileSync(new URL('../../public/data/estradas-conveniadas-pr.geojson', import.meta.url), 'utf8');
+const raw = readFileSync(new URL('../../data/privado/estradas-conveniadas-pr.geojson', import.meta.url), 'utf8');
 const { features } = JSON.parse(raw);
 const doGrupo = (id) => features.filter((f) => f.properties.grupo === id);
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gera public/data/estradas-conveniadas-pr.geojson.
+"""Gera data/privado/estradas-conveniadas-pr.geojson.
 
 Três conjuntos de estradas rurais da SEAB, cada feição marcada em `grupo`:
   - conveniadas: convênios de 2026 (SET, preliminar), 96 trechos com
@@ -35,7 +35,7 @@ from osgeo import gdal, ogr, osr
 ogr.UseExceptions()
 ROOT = Path(__file__).resolve().parent.parent
 SRC = (ROOT / 'data' / 'estradas-conveniadas').as_posix()
-OUT = ROOT / 'public' / 'data' / 'estradas-conveniadas-pr.geojson'
+OUT = ROOT / 'data' / 'privado' / 'estradas-conveniadas-pr.geojson'
 MUNICIPIOS = ROOT / 'public' / 'data' / 'municipios-pr.geojson'
 LOST = '�'
 # Palavras das conveniadas que não estão nos municípios nem nos protocolos.

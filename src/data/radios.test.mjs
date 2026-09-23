@@ -6,7 +6,7 @@ import { LAYER_STATE_REGISTRY } from './layerState.js';
 import { datageoRadiosLayer, dotSize, flattenStations, nextLiveIndex } from './datageoRadios.js';
 import { contactLines, isLive, placeTooltipHtml, whatsappNumber } from './radioContact.js';
 
-const data = JSON.parse(readFileSync(new URL('../../public/data/radios-pr.json', import.meta.url), 'utf8'));
+const data = JSON.parse(readFileSync(new URL('../../data/privado/radios-pr.json', import.meta.url), 'utf8'));
 const stations = flattenStations(data.places).map((e) => e.station);
 
 test('todo lugar é um município do PR com ao menos uma estação', () => {

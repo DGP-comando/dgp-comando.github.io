@@ -3,11 +3,9 @@
 // Cliente PostgREST do DataGeo PR (Supabase do c2-parana). Toda camada
 // DataGeo passa por aqui — nenhuma fala com o Supabase por conta propria.
 //
-// Le direto do browser com a anon key (RLS anon-read, migration 008 do c2):
-// sem proxy, sem dev-server, deployavel estatico. A anon key e client-exposed
-// por design (a mesma vai no bundle do console React do DataGeo). Override
-// via VITE_DATAGEO_SUPABASE_URL / VITE_DATAGEO_ANON_KEY quando o projeto
-// Supabase mudar.
+// Le direto do browser com o JWT do usuario logado (datageoAuth.js; RLS da
+// migration 045 do c2 exige app_metadata.datageo). Sem sessao cai na anon
+// key, que nao le mais nada.
 
 import { cachedSource } from './sourceCache.js';
 import {
@@ -19,16 +17,22 @@ import {
   writeStoredGrid,
 } from './weatherGridStore.js';
 import { createPool } from './fetchPool.js';
+import { SUPABASE_URL, authHeaders } from './datageoAuth.js';
 
-// `import.meta.env` so existe sob Vite; no node:test (imports transitivos,
-// ex. flights.test.mjs) e undefined — dai o optional chaining.
-const SUPABASE_URL = (
-  import.meta.env?.VITE_DATAGEO_SUPABASE_URL || 'https://fialxjcsgywvvuxjxcly.supabase.co'
-).replace(/\/+$/, '');
+const PRIVADO = '/privado/';
 
-const ANON_KEY =
-  import.meta.env?.VITE_DATAGEO_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpYWx4amNzZ3l3dnZ1eGp4Y2x5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIzNjczNTMsImV4cCI6MjA4Nzk0MzM1M30.e3X-LSPVUbxl-P9KLB9TuGB0nkmZ4OrNyHL9SuxaRgM';
+/**
+ * fetch de arquivo estatico. `/privado/<arquivo>` sai do bucket privado
+ * datageo-privado (Supabase Storage, so usuario liberado); o resto e o
+ * fetch normal do public/.
+ */
+export async function dgFetchData(url) {
+  if (!url.startsWith(PRIVADO)) return fetch(url);
+  const nome = url.slice(PRIVADO.length);
+  return fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/datageo-privado/${nome}`, {
+    headers: await authHeaders(),
+  });
+}
 
 /**
  * TTLs de cache client-side (sourceCache: TTL + dedup de voos concorrentes).
@@ -75,10 +79,7 @@ export function dgSelect(table, query, {
 }
 
 async function dgSelectUncached(table, query, { range, timeoutMs }) {
-  const headers = {
-    apikey: ANON_KEY,
-    Authorization: `Bearer ${ANON_KEY}`,
-  };
+  const headers = await authHeaders();
   if (range) {
     headers['Range-Unit'] = 'items';
     headers['Range'] = `${range[0]}-${range[1]}`;
