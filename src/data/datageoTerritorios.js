@@ -18,6 +18,7 @@
 // municípios: GroundPrimitive não suporta outline) + label no centroide.
 
 import * as Cesium from 'cesium';
+import { openFichaRegiao } from '../datageoFicha.js';
 
 function centroidOf(rings) {
   // centroide simples do anel externo (suficiente para ancorar label)
@@ -31,14 +32,19 @@ function centroidOf(rings) {
   return ring.length ? [sx / ring.length, sy / ring.length] : null;
 }
 
-function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, labelMaxDist, category = 'Limites' }) {
+function makeTerritorioLayer({
+  id, name, icon, source, url, cssColor, labelOf, labelMaxDist, category = 'Limites',
+  fillAlpha = 0.25, onClick = null,
+}) {
   let _dataSource = null;
+  let _handler = null;
+  let _props = [];
   let _enabled = false;
   let _count = 0;
   let _lastUpdate = null;
   let _lastError = null;
 
-  const fill = Cesium.Color.fromCssColorString(cssColor).withAlpha(0.25);
+  const fill = Cesium.Color.fromCssColorString(cssColor).withAlpha(fillAlpha);
   const border = Cesium.Color.fromCssColorString(cssColor).withAlpha(0.75);
   // Imutaveis e iguais para todos os poligonos da camada: uma instancia so.
   const labelFill = Cesium.Color.fromCssColorString(cssColor);
@@ -78,6 +84,7 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
           const fillMaterial = new Cesium.ColorMaterialProperty(fill);
           const borderMaterial = new Cesium.ColorMaterialProperty(border);
           let n = 0;
+          _props = [];
           for (const f of gj.features ?? []) {
             const geom = f.geometry;
             if (!geom) continue;
@@ -85,12 +92,17 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
               ? [geom.coordinates]
               : geom.type === 'MultiPolygon' ? geom.coordinates : [];
             const props = f.properties ?? {};
+            _props.push(props);
             let labeled = false;
             for (const rings of polys) {
               const outer = rings[0];
               if (!outer || outer.length < 4) continue;
               const positions = outer.map(([lon, lat]) => Cesium.Cartesian3.fromDegrees(lon, lat));
-              _dataSource.entities.add({
+              // Sem preenchimento, sem polígono: um classificador transparente
+              // ainda seria "pickado" e roubaria o clique da camada de municípios.
+              if (fillAlpha > 0) _dataSource.entities.add({
+                // id para o clique (onClick): `${id}:<indice da feature>:<parte>`
+                id: `${id}:${n}:${_dataSource.entities.values.length}`,
                 polygon: {
                   hierarchy: new Cesium.PolygonHierarchy(
                     positions,
@@ -137,6 +149,20 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
           _count = n;
           _dataSource.show = _enabled;
           await viewer.dataSources.add(_dataSource);
+          if (onClick && !_handler) {
+            _handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+            _handler.setInputAction((click) => {
+              if (!_dataSource?.show) return;
+              // drillPick: o polígono do município fica por cima do da camada.
+              const pickId = viewer.scene.drillPick(click.position, 8)
+                .map((p) => p?.id?.id)
+                .find((pid) => typeof pid === 'string' && pid.startsWith(`${id}:`));
+              const props = pickId && _props[Number(pickId.split(':')[1])];
+              // Depois dos handlers síncronos: com a camada ligada, o clique é
+              // desta camada (o card dela sobrepõe a ficha do município).
+              if (props) setTimeout(() => onClick(props), 0);
+            }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+          }
         }
         _lastUpdate = Date.now();
         _lastError = null;
@@ -150,6 +176,8 @@ function makeTerritorioLayer({ id, name, icon, source, url, cssColor, labelOf, l
     },
 
     destroy(viewer) {
+      _handler?.destroy();
+      _handler = null;
       if (_dataSource) {
         viewer.dataSources.remove(_dataSource, true);
         _dataSource = null;
@@ -238,10 +266,45 @@ export const datageoUcsEstaduaisLayer = makeTerritorioLayer({
   labelMaxDist: 400_000,
 });
 
+const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+
+export const datageoRegionaisIdrLayer = makeTerritorioLayer({
+  id: 'datageo-regionais-idr',
+  name: 'Regionais do IDR',
+  icon: '🗺️',
+  source: 'IDR-Paraná',
+  url: '/data/regionais-idr-pr.geojson',
+  cssColor: '#34d399',
+  fillAlpha: 0.12,
+  labelOf: (p) => `IDR ${p.regional}`,
+  labelMaxDist: 1_800_000,
+  onClick: (p) => openFichaRegiao({
+    nome: `Regional ${p.regional}`,
+    meta: `IDR-Paraná · ${plural(p.municipios.length, 'município', 'municípios')}`,
+    ibges: p.municipios,
+  }),
+});
+
+// Só contorno: 27 municípios estão em duas associações, e os polígonos se
+// sobrepõem; preenchimento empilhado ficaria ilegível.
+export const datageoAssociacoesLayer = makeTerritorioLayer({
+  id: 'datageo-associacoes',
+  name: 'Associações de municípios',
+  icon: '🤝',
+  source: 'SECID-PR',
+  url: '/data/associacoes-pr.geojson',
+  cssColor: '#f472b6',
+  fillAlpha: 0,
+  labelOf: (p) => p.sigla,
+  labelMaxDist: 1_800_000,
+});
+
 export const DATAGEO_TERRITORIOS_LAYERS = [
   datageoTerrasIndigenasLayer,
   datageoQuilombolasLayer,
   datageoAssentamentosLayer,
   datageoUcsFederaisLayer,
   datageoUcsEstaduaisLayer,
+  datageoRegionaisIdrLayer,
+  datageoAssociacoesLayer,
 ];

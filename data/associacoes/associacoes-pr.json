@@ -1,0 +1,679 @@
+{
+ "fonte": [
+  "https://www.secid.pr.gov.br/Categoria-de-Endereco/Associacoes-Regionais-de-Municipios-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/AMCG-Associacao-dos-Municipios-da-Regiao-dos-Campos-Gerais",
+  "https://www.secid.pr.gov.br/Endereco/Amcespar-Associacao-dos-Municipios-do-Centro-Sul-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amenorte-Associacao-dos-Municipios-do-Medio-Noroeste-do-Estado-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amepar-Associacao-dos-Municipios-do-Medio-Paranapanema",
+  "https://www.secid.pr.gov.br/Endereco/Amerios-Associacao-dos-Municipios-da-Regiao-do-Entre-Rios",
+  "https://www.secid.pr.gov.br/Endereco/Amlipa-Associacao-dos-Municipios-do-Litoral-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amocentro-Associacao-dos-Municipios-do-Centro-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amop-Associacao-dos-Municipios-do-Oeste-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amsop-Associacao-dos-Municipios-do-Sudoeste-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amsulep-Associacao-dos-Municipios-da-Regiao-Suleste-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amsulpar-Associacao-dos-Municipios-do-Sul-Paranaense",
+  "https://www.secid.pr.gov.br/Endereco/Amunop-Associacao-dos-Municipios-do-Norte-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amunorpi-Associacao-dos-Municipios-do-Norte-Pioneiro",
+  "https://www.secid.pr.gov.br/Endereco/Amunpar-Associacao-dos-Municipios-do-Noroeste-do-Parana",
+  "https://www.secid.pr.gov.br/Endereco/Amusep-Associacao-dos-Municipios-do-Setentriao-Paranaense",
+  "https://www.secid.pr.gov.br/Endereco/Amuvi-Associacao-dos-Municipios-do-Vale-do-Ivai",
+  "https://www.secid.pr.gov.br/Endereco/Assomec-Associacao-dos-Municipios-da-Regiao-Metropolitana-de-Curitiba",
+  "https://www.secid.pr.gov.br/Endereco/Cantuquiriguacu-Associacao-do-Cantuquiriguacu",
+  "https://www.secid.pr.gov.br/Endereco/Comcam-Comunidade-dos-Municipios-da-Regiao-de-Campo-Mourao",
+  "https://www.parana.pr.gov.br/Pagina/Associacoes-de-Municipios-do-Parana"
+ ],
+ "consultado_em": "2026-09-23",
+ "nota": "Lista da Secretaria das Cidades (SECID-PR), uma página por associação. Há municípios filiados a mais de uma associação (ver multi_filiacao); não é erro.",
+ "multi_filiacao": {
+  "Agudos do Sul": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Altamira do Paraná": [
+   "AMOCENTRO",
+   "COMCAM"
+  ],
+  "Brasilândia do Sul": [
+   "AMERIOS",
+   "AMOP"
+  ],
+  "Campo Bonito": [
+   "AMOP",
+   "CANTUQUIRIGUAÇU"
+  ],
+  "Campo do Tenente": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Cantagalo": [
+   "AMOP",
+   "CANTUQUIRIGUAÇU"
+  ],
+  "Catanduvas": [
+   "AMOP",
+   "CANTUQUIRIGUAÇU"
+  ],
+  "Cidade Gaúcha": [
+   "AMENORTE",
+   "AMERIOS"
+  ],
+  "Contenda": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Fazenda Rio Grande": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Francisco Alves": [
+   "AMERIOS",
+   "AMOP"
+  ],
+  "Guaraniaçu": [
+   "AMOP",
+   "CANTUQUIRIGUAÇU"
+  ],
+  "Ibema": [
+   "AMOP",
+   "CANTUQUIRIGUAÇU"
+  ],
+  "Iretama": [
+   "AMOCENTRO",
+   "COMCAM"
+  ],
+  "Jussara": [
+   "AMENORTE",
+   "AMERIOS"
+  ],
+  "Lapa": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Mandirituba": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Nova Cantu": [
+   "AMOCENTRO",
+   "COMCAM"
+  ],
+  "Piên": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Quitandinha": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Rio Negro": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Roncador": [
+   "AMOCENTRO",
+   "COMCAM"
+  ],
+  "Rosário do Ivaí": [
+   "AMOCENTRO",
+   "AMUVI"
+  ],
+  "Terra Boa": [
+   "AMENORTE",
+   "COMCAM"
+  ],
+  "Tijucas do Sul": [
+   "AMSULEP",
+   "ASSOMEC"
+  ],
+  "Três Barras do Paraná": [
+   "AMOP",
+   "CANTUQUIRIGUAÇU"
+  ],
+  "Ubiratã": [
+   "AMOP",
+   "COMCAM"
+  ]
+ },
+ "associacoes": [
+  {
+   "sigla": "AMCESPAR",
+   "nome": "Associação dos Municípios do Centro Sul do Paraná",
+   "municipios": [
+    "Fernandes Pinheiro",
+    "Guamiranga",
+    "Imbituva",
+    "Inácio Martins",
+    "Irati",
+    "Mallet",
+    "Prudentópolis",
+    "Rebouças",
+    "Rio Azul",
+    "Teixeira Soares"
+   ]
+  },
+  {
+   "sigla": "AMCG",
+   "nome": "Associação dos Municípios da Região dos Campos Gerais",
+   "municipios": [
+    "Arapoti",
+    "Carambeí",
+    "Castro",
+    "Curiúva",
+    "Imbaú",
+    "Ipiranga",
+    "Ivaí",
+    "Jaguariaíva",
+    "Ortigueira",
+    "Palmeira",
+    "Piraí do Sul",
+    "Ponta Grossa",
+    "Porto Amazonas",
+    "Reserva",
+    "Sengés",
+    "São João do Triunfo",
+    "Telêmaco Borba",
+    "Tibagi",
+    "Ventania"
+   ]
+  },
+  {
+   "sigla": "AMENORTE",
+   "nome": "Associação dos Municípios do Médio Noroeste do Estado do Paraná",
+   "municipios": [
+    "Cianorte",
+    "Cidade Gaúcha",
+    "Guaporema",
+    "Indianópolis",
+    "Japurá",
+    "Jussara",
+    "Rondon",
+    "São Manoel do Paraná",
+    "São Tomé",
+    "Tapejara",
+    "Terra Boa",
+    "Tuneiras do Oeste"
+   ]
+  },
+  {
+   "sigla": "AMEPAR",
+   "nome": "Associação dos Municípios do Médio Paranapanema",
+   "municipios": [
+    "Alvorada do Sul",
+    "Arapongas",
+    "Bela Vista do Paraíso",
+    "Cafeara",
+    "Cambé",
+    "Centenário do Sul",
+    "Florestópolis",
+    "Guaraci",
+    "Ibiporã",
+    "Jaguapitã",
+    "Jataizinho",
+    "Londrina",
+    "Lupionópolis",
+    "Miraselva",
+    "Pitangueiras",
+    "Porecatu",
+    "Prado Ferreira",
+    "Primeiro de Maio",
+    "Rolândia",
+    "Sabáudia",
+    "Sertanópolis",
+    "Tamarana"
+   ]
+  },
+  {
+   "sigla": "AMERIOS",
+   "nome": "Associação dos Municípios da Região do Entre Rios",
+   "municipios": [
+    "Alto Paraíso",
+    "Alto Piquiri",
+    "Altônia",
+    "Brasilândia do Sul",
+    "Cafezal do Sul",
+    "Cidade Gaúcha",
+    "Cruzeiro do Oeste",
+    "Douradina",
+    "Esperança Nova",
+    "Francisco Alves",
+    "Icaraíma",
+    "Iporã",
+    "Ivaté",
+    "Jussara",
+    "Maria Helena",
+    "Mariluz",
+    "Nova Olímpia",
+    "Perobal",
+    "Pérola",
+    "São Jorge do Patrocínio",
+    "Tapira",
+    "Umuarama",
+    "Xambrê"
+   ]
+  },
+  {
+   "sigla": "AMLIPA",
+   "nome": "Associação dos Municípios do Litoral do Paraná",
+   "municipios": [
+    "Antonina",
+    "Guaraqueçaba",
+    "Guaratuba",
+    "Matinhos",
+    "Morretes",
+    "Paranaguá",
+    "Pontal do Paraná"
+   ]
+  },
+  {
+   "sigla": "AMOCENTRO",
+   "nome": "Associação dos Municípios do Centro do Paraná",
+   "municipios": [
+    "Altamira do Paraná",
+    "Boa Ventura de São Roque",
+    "Campina do Simão",
+    "Cândido de Abreu",
+    "Guarapuava",
+    "Iretama",
+    "Laranjal",
+    "Manoel Ribas",
+    "Mato Rico",
+    "Nova Cantu",
+    "Nova Tebas",
+    "Palmital",
+    "Pitanga",
+    "Roncador",
+    "Rosário do Ivaí",
+    "Santa Maria do Oeste",
+    "Turvo"
+   ]
+  },
+  {
+   "sigla": "AMOP",
+   "nome": "Associação dos Municípios do Oeste do Paraná",
+   "municipios": [
+    "Anahy",
+    "Assis Chateaubriand",
+    "Boa Vista da Aparecida",
+    "Braganey",
+    "Brasilândia do Sul",
+    "Cafelândia",
+    "Campo Bonito",
+    "Cantagalo",
+    "Capitão Leônidas Marques",
+    "Cascavel",
+    "Catanduvas",
+    "Corbélia",
+    "Céu Azul",
+    "Diamante D'Oeste",
+    "Diamante do Sul",
+    "Entre Rios do Oeste",
+    "Formosa do Oeste",
+    "Foz do Iguaçu",
+    "Francisco Alves",
+    "Guaraniaçu",
+    "Guaíra",
+    "Ibema",
+    "Iguatu",
+    "Iracema do Oeste",
+    "Itaipulândia",
+    "Jesuítas",
+    "Lindoeste",
+    "Marechal Cândido Rondon",
+    "Maripá",
+    "Matelândia",
+    "Medianeira",
+    "Mercedes",
+    "Missal",
+    "Nova Aurora",
+    "Nova Santa Rosa",
+    "Ouro Verde do Oeste",
+    "Palotina",
+    "Pato Bragado",
+    "Quatro Pontes",
+    "Ramilândia",
+    "Santa Helena",
+    "Santa Lúcia",
+    "Santa Tereza do Oeste",
+    "Santa Terezinha de Itaipu",
+    "Serranópolis do Iguaçu",
+    "São José das Palmeiras",
+    "São Miguel do Iguaçu",
+    "São Pedro do Iguaçu",
+    "Terra Roxa",
+    "Toledo",
+    "Três Barras do Paraná",
+    "Tupãssi",
+    "Ubiratã",
+    "Vera Cruz do Oeste"
+   ]
+  },
+  {
+   "sigla": "AMSOP",
+   "nome": "Associação dos Municípios do Sudoeste do Paraná",
+   "municipios": [
+    "Ampére",
+    "Barracão",
+    "Bela Vista da Caroba",
+    "Boa Esperança do Iguaçu",
+    "Bom Jesus do Sul",
+    "Bom Sucesso do Sul",
+    "Capanema",
+    "Chopinzinho",
+    "Clevelândia",
+    "Coronel Domingos Soares",
+    "Coronel Vivida",
+    "Cruzeiro do Iguaçu",
+    "Dois Vizinhos",
+    "Enéas Marques",
+    "Flor da Serra do Sul",
+    "Francisco Beltrão",
+    "Honório Serpa",
+    "Itapejara d'Oeste",
+    "Manfrinópolis",
+    "Mangueirinha",
+    "Mariópolis",
+    "Marmeleiro",
+    "Nova Esperança do Sudoeste",
+    "Nova Prata do Iguaçu",
+    "Palmas",
+    "Pato Branco",
+    "Pinhal de São Bento",
+    "Planalto",
+    "Pranchita",
+    "Pérola d'Oeste",
+    "Realeza",
+    "Renascença",
+    "Salgado Filho",
+    "Salto do Lontra",
+    "Santa Izabel do Oeste",
+    "Santo Antônio do Sudoeste",
+    "Saudade do Iguaçu",
+    "Sulina",
+    "São Jorge d'Oeste",
+    "São João",
+    "Verê",
+    "Vitorino"
+   ]
+  },
+  {
+   "sigla": "AMSULEP",
+   "nome": "Associação dos Municípios da Região Suleste do Paraná",
+   "municipios": [
+    "Agudos do Sul",
+    "Campo do Tenente",
+    "Contenda",
+    "Fazenda Rio Grande",
+    "Lapa",
+    "Mandirituba",
+    "Piên",
+    "Quitandinha",
+    "Rio Negro",
+    "Tijucas do Sul"
+   ]
+  },
+  {
+   "sigla": "AMSULPAR",
+   "nome": "Associação dos Municípios do Sul Paranaense",
+   "municipios": [
+    "Antônio Olinto",
+    "Bituruna",
+    "Cruz Machado",
+    "General Carneiro",
+    "Paula Freitas",
+    "Paulo Frontin",
+    "Porto Vitória",
+    "São Mateus do Sul",
+    "União da Vitória"
+   ]
+  },
+  {
+   "sigla": "AMUNOP",
+   "nome": "Associação dos Municípios do Norte do Paraná",
+   "municipios": [
+    "Abatiá",
+    "Andirá",
+    "Assaí",
+    "Bandeirantes",
+    "Congonhinhas",
+    "Cornélio Procópio",
+    "Itambaracá",
+    "Leópolis",
+    "Nova América da Colina",
+    "Nova Fátima",
+    "Nova Santa Bárbara",
+    "Rancho Alegre",
+    "Santa Amélia",
+    "Santa Cecília do Pavão",
+    "Santa Mariana",
+    "Santo Antônio do Paraíso",
+    "Sapopema",
+    "Sertaneja",
+    "São Jerônimo da Serra",
+    "São Sebastião da Amoreira",
+    "Uraí"
+   ]
+  },
+  {
+   "sigla": "AMUNORPI",
+   "nome": "Associação dos Municípios do Norte Pioneiro",
+   "municipios": [
+    "Barra do Jacaré",
+    "Cambará",
+    "Carlópolis",
+    "Conselheiro Mairinck",
+    "Figueira",
+    "Guapirama",
+    "Ibaiti",
+    "Jaboti",
+    "Jacarezinho",
+    "Japira",
+    "Joaquim Távora",
+    "Jundiaí do Sul",
+    "Pinhalão",
+    "Quatiguá",
+    "Ribeirão Claro",
+    "Ribeirão do Pinhal",
+    "Salto do Itararé",
+    "Santana do Itararé",
+    "Santo Antônio da Platina",
+    "Siqueira Campos",
+    "São José da Boa Vista",
+    "Tomazina",
+    "Wenceslau Braz"
+   ]
+  },
+  {
+   "sigla": "AMUNPAR",
+   "nome": "Associação dos Municípios do Noroeste do Paraná",
+   "municipios": [
+    "Alto Paraná",
+    "Amaporã",
+    "Cruzeiro do Sul",
+    "Diamante do Norte",
+    "Guairaçá",
+    "Inajá",
+    "Itaúna do Sul",
+    "Jardim Olinda",
+    "Loanda",
+    "Marilena",
+    "Mirador",
+    "Nova Aliança do Ivaí",
+    "Nova Londrina",
+    "Paranapoema",
+    "Paranavaí",
+    "Paraíso do Norte",
+    "Planaltina do Paraná",
+    "Porto Rico",
+    "Querência do Norte",
+    "Santa Cruz de Monte Castelo",
+    "Santa Isabel do Ivaí",
+    "Santa Mônica",
+    "Santo Antônio do Caiuá",
+    "São Carlos do Ivaí",
+    "São João do Caiuá",
+    "São Pedro do Paraná",
+    "Tamboara",
+    "Terra Rica"
+   ]
+  },
+  {
+   "sigla": "AMUSEP",
+   "nome": "Associação dos Municípios do Setentrião Paranaense",
+   "municipios": [
+    "Astorga",
+    "Atalaia",
+    "Colorado",
+    "Doutor Camargo",
+    "Floraí",
+    "Floresta",
+    "Flórida",
+    "Iguaraçu",
+    "Itaguajé",
+    "Itambé",
+    "Ivatuba",
+    "Lobato",
+    "Mandaguari",
+    "Mandaguaçu",
+    "Marialva",
+    "Maringá",
+    "Munhoz de Melo",
+    "Nossa Senhora das Graças",
+    "Nova Esperança",
+    "Ourizona",
+    "Paiçandu",
+    "Paranacity",
+    "Presidente Castelo Branco",
+    "Santa Fé",
+    "Santa Inês",
+    "Santo Inácio",
+    "Sarandi",
+    "São Jorge do Ivaí",
+    "Uniflor",
+    "Ângulo"
+   ]
+  },
+  {
+   "sigla": "AMUVI",
+   "nome": "Associação dos Municípios do Vale do Ivaí",
+   "municipios": [
+    "Apucarana",
+    "Arapuã",
+    "Ariranha do Ivaí",
+    "Bom Sucesso",
+    "Borrazópolis",
+    "Califórnia",
+    "Cambira",
+    "Cruzmaltina",
+    "Faxinal",
+    "Godoy Moreira",
+    "Grandes Rios",
+    "Ivaiporã",
+    "Jandaia do Sul",
+    "Jardim Alegre",
+    "Kaloré",
+    "Lidianópolis",
+    "Lunardelli",
+    "Marilândia do Sul",
+    "Marumbi",
+    "Mauá da Serra",
+    "Novo Itacolomi",
+    "Rio Bom",
+    "Rio Branco do Ivaí",
+    "Rosário do Ivaí",
+    "São João do Ivaí",
+    "São Pedro do Ivaí"
+   ]
+  },
+  {
+   "sigla": "ASSOMEC",
+   "nome": "Associação dos Municípios da Região Metropolitana de Curitiba",
+   "municipios": [
+    "Adrianópolis",
+    "Agudos do Sul",
+    "Almirante Tamandaré",
+    "Araucária",
+    "Balsa Nova",
+    "Bocaiúva do Sul",
+    "Campina Grande do Sul",
+    "Campo Largo",
+    "Campo Magro",
+    "Campo do Tenente",
+    "Cerro Azul",
+    "Colombo",
+    "Contenda",
+    "Curitiba",
+    "Doutor Ulysses",
+    "Fazenda Rio Grande",
+    "Itaperuçu",
+    "Lapa",
+    "Mandirituba",
+    "Pinhais",
+    "Piraquara",
+    "Piên",
+    "Quatro Barras",
+    "Quitandinha",
+    "Rio Branco do Sul",
+    "Rio Negro",
+    "São José dos Pinhais",
+    "Tijucas do Sul",
+    "Tunas do Paraná"
+   ]
+  },
+  {
+   "sigla": "CANTUQUIRIGUAÇU",
+   "nome": "Associação do Cantuquiriguaçu",
+   "municipios": [
+    "Campo Bonito",
+    "Candói",
+    "Cantagalo",
+    "Catanduvas",
+    "Espigão Alto do Iguaçu",
+    "Foz do Jordão",
+    "Goioxim",
+    "Guaraniaçu",
+    "Ibema",
+    "Laranjeiras do Sul",
+    "Marquinho",
+    "Nova Laranjeiras",
+    "Pinhão",
+    "Porto Barreiro",
+    "Quedas do Iguaçu",
+    "Reserva do Iguaçu",
+    "Rio Bonito do Iguaçu",
+    "Três Barras do Paraná",
+    "Virmond"
+   ]
+  },
+  {
+   "sigla": "COMCAM",
+   "nome": "Comunidade dos Municípios da Região de Campo Mourão",
+   "municipios": [
+    "Altamira do Paraná",
+    "Araruna",
+    "Barbosa Ferraz",
+    "Boa Esperança",
+    "Campina da Lagoa",
+    "Campo Mourão",
+    "Corumbataí do Sul",
+    "Engenheiro Beltrão",
+    "Farol",
+    "Fênix",
+    "Goioerê",
+    "Iretama",
+    "Janiópolis",
+    "Juranda",
+    "Luiziana",
+    "Mamborê",
+    "Moreira Sales",
+    "Nova Cantu",
+    "Peabiru",
+    "Quarto Centenário",
+    "Quinta do Sol",
+    "Rancho Alegre D'Oeste",
+    "Roncador",
+    "Terra Boa",
+    "Ubiratã"
+   ]
+  }
+ ]
+}

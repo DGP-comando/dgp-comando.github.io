@@ -98,6 +98,16 @@ export const DATA_CREDITS = [
       'frigoríficos e laticínios do SIGSIF/MAPA',
   },
   {
+    key: 'idr-regionais',
+    html: 'Regionais: IDR-Paraná, mapa municipal das regionais',
+  },
+  {
+    key: 'secid-associacoes',
+    html:
+      'Associações de municípios: ' +
+      '<a href="https://www.secid.pr.gov.br/Categoria-de-Endereco/Associacoes-Regionais-de-Municipios-do-Parana" target="_blank" rel="noopener">SECID-PR, Associações Regionais de Municípios</a>',
+  },
+  {
     key: 'rotas-turisticas',
     html: 'Rotas turísticas: Rota do Queijo Paranaense e Rota da Uva e do Vinho do Paraná',
   },

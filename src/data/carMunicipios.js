@@ -40,11 +40,17 @@ export function loadCarMunicipios() {
  * }|null>}
  */
 export async function getCarMunicipio(ibge) {
-  const code = String(ibge ?? '');
+  return getCarAgregado([ibge]);
+}
+
+/** Mesma distribuição, somada sobre vários municípios (ficha regional). Nunca lança. */
+export async function getCarAgregado(ibges) {
   try {
     const dados = await loadCarMunicipios();
-    const item = dados?.municipios?.[code];
-    if (!item) return null;
+    const itens = ibges.map((c) => dados?.municipios?.[String(c ?? '')]).filter(Boolean);
+    if (!itens.length) return null;
+    const somar = (campo) => dados.classes.map((_, k) => itens.reduce((a, it) => a + (it[campo][k] || 0), 0));
+    const item = { n: somar('n'), ha: somar('ha') };
     const totalImoveis = item.n.reduce((a, b) => a + b, 0);
     const totalHa = item.ha.reduce((a, b) => a + b, 0);
     if (!totalImoveis) return null;

@@ -15,7 +15,8 @@
 
 import { fetchMunicipioFicha } from './data/datageoClient.js';
 import { getClimaMunicipio } from './data/climaHistorico.js';
-import { getCarMunicipio } from './data/carMunicipios.js';
+import { getCarAgregado, getCarMunicipio } from './data/carMunicipios.js';
+import { getIndicadores } from './data/indicadoresMunicipais.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -46,7 +47,38 @@ function section(title, bodyHtml) {
 
 // --- builders (um por secao; retornar null omite) --------------------------
 
+const fmtN = (v, casas = 0) => Number(v).toLocaleString('pt-BR', {
+  minimumFractionDigits: casas, maximumFractionDigits: casas,
+});
+const fmtPct = (parte, total) => (total > 0 ? `${fmtN((parte / total) * 100, 1)}%` : '—');
+
 const SECTIONS = [
+  /**
+   * Agroindústrias, malha viária e vínculos regionais. Serve a ficha
+   * municipal e a regional (ind já vem somado por getIndicadores).
+   */
+  function territorio({ ind }) {
+    if (!ind) return null;
+    const rows = [
+      `<div>Agroindústrias: <b>${fmtN(ind.agro_total)}</b> · IDR <b>${fmtN(ind.agro_idr)}</b> ` +
+        `<span class="fx-dim">(${fmtPct(ind.agro_idr, ind.agro_total)} no cadastro IDR)</span></div>`,
+      `<div>Estradas: <b>${fmtN(ind.km_total)} km</b> · rurais <b>${fmtN(ind.km_rural)} km</b> ` +
+        `<span class="fx-dim">(${fmtPct(ind.km_rural, ind.km_total)})</span></div>`,
+      `<div>Rurais conveniadas SEAB 2026: <b>${fmtN(ind.km_conv, 1)} km</b> ` +
+        `<span class="fx-dim">(${fmtPct(ind.km_conv, ind.km_rural)} das rurais)</span></div>`,
+    ];
+    if (ind.associacoes.length) {
+      const rotulo = ind.associacoes.length > 1 ? 'Associações' : 'Associação';
+      rows.push(`<div>${rotulo}: ${ind.associacoes
+        .map((a) => `<b title="${esc(a.nome)}">${esc(a.sigla)}</b>`).join(' · ')}</div>`);
+    }
+    if (ind.n === 1 && ind.regionais.length) {
+      rows.push(`<div>Regional IDR: <b>${esc(ind.regionais[0])}</b></div>`);
+    }
+    rows.push('<div class="fx-dim">Agroindústrias: IDR + SIGSIF · estradas: OSM/DNIT/DER, convênios SEAB · associações: SECID-PR</div>');
+    return section('Território · IDR/SEAB', rows.join(''));
+  },
+
   function economia({ info }) {
     if (!info) return null;
     const rows = [];
@@ -600,6 +632,31 @@ export function closeFicha() {
  * Abre a ficha do municipio. `info` e a entrada de municipios-info.json
  * (prefeito/VBP/cadeias) que a camada ja tem em memoria.
  */
+async function renderSecoes(panel, seq, carregar) {
+  panel.querySelector('.fx-body').innerHTML =
+    '<div class="fx-loading">Consultando as bases do DataGeo…</div>';
+  try {
+    const dados = await carregar();
+    if (seq !== _requestSeq) return; // outro municipio/regiao foi clicado no meio
+    const html = SECTIONS.map((build) => {
+      try {
+        return build(dados);
+      } catch (err) {
+        console.warn('[DataGeo:ficha] secao falhou:', err);
+        return null;
+      }
+    })
+      .filter(Boolean)
+      .join('');
+    panel.querySelector('.fx-body').innerHTML =
+      html || '<div class="fx-loading">Sem dados quantificáveis para este recorte.</div>';
+  } catch (err) {
+    if (seq !== _requestSeq) return;
+    panel.querySelector('.fx-body').innerHTML =
+      `<div class="fx-loading">Falha ao consultar as bases: ${esc(err?.message)}</div>`;
+  }
+}
+
 export async function openFicha({ ibge, nome, info }) {
   const panel = ensurePanel();
   const seq = ++_requestSeq;
@@ -610,34 +667,73 @@ export async function openFicha({ ibge, nome, info }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent =
     `IBGE ${ibge}` + (info?.prefeito ? ` · Prefeito: ${info.prefeito} (${info.partido})` : '');
-  panel.querySelector('.fx-body').innerHTML =
-    '<div class="fx-loading">Consultando as bases do DataGeo…</div>';
 
-  try {
-    // Clima historico e estrutura fundiaria sao arquivos estaticos: em
-    // paralelo com o Supabase, e sem poder derrubar a ficha (nem
-    // getClimaMunicipio nem getCarMunicipio lancam).
-    const [ficha, climaHist, car] = await Promise.all([
+  // Clima historico, estrutura fundiaria e indicadores sao arquivos
+  // estaticos: em paralelo com o Supabase, e sem poder derrubar a ficha
+  // (nenhum dos tres lanca).
+  await renderSecoes(panel, seq, async () => {
+    const [ficha, climaHist, car, ind] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
+      getIndicadores([ibge]),
     ]);
-    if (seq !== _requestSeq) return; // outro municipio foi clicado no meio
-    const html = SECTIONS.map((build) => {
-      try {
-        return build({ ficha, info, climaHist, car });
-      } catch (err) {
-        console.warn('[DataGeo:ficha] secao falhou:', err);
-        return null;
-      }
-    })
-      .filter(Boolean)
-      .join('');
-    panel.querySelector('.fx-body').innerHTML =
-      html || '<div class="fx-loading">Sem dados quantificáveis para este município.</div>';
-  } catch (err) {
-    if (seq !== _requestSeq) return;
-    panel.querySelector('.fx-body').innerHTML =
-      `<div class="fx-loading">Falha ao consultar as bases: ${esc(err?.message)}</div>`;
+    return { ficha, info, climaHist, car, ind };
+  });
+}
+
+// --- ficha regional (regionais do IDR) ------------------------------------
+
+let _infoPromessa = null;
+function loadMunicipiosInfo() {
+  _infoPromessa ??= fetch('/data/municipios-info.json')
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .catch((err) => {
+      console.warn('[DataGeo:ficha] municipios-info indisponível:', err?.message);
+      _infoPromessa = null; // falha não fica em cache
+      return null;
+    });
+  return _infoPromessa;
+}
+
+/** VBP e area somados; produtos/prefeito nao somam e ficam de fora. */
+async function infoAgregada(ibges) {
+  const m = (await loadMunicipiosInfo())?.municipios ?? {};
+  const itens = ibges.map((c) => m[c]).filter((it) => it?.vbp);
+  if (!itens.length) return null;
+  const { anoA, anoB } = itens[0].vbp;
+  const valA = itens.reduce((a, it) => a + it.vbp.valA, 0);
+  const valB = itens.reduce((a, it) => a + it.vbp.valB, 0);
+  const areaKm2 = itens.reduce((a, it) => a + (Number(it.areaKm2) || 0), 0);
+  const delta = (a, b) => Math.round(((b - a) / a) * 1000) / 10;
+  const vbp = { anoA, anoB, valA, valB, deltaPct: delta(valA, valB) };
+  const ha = areaKm2 * 100;
+  const vbpHa = ha > 0 ? { anoA, anoB, valA: valA / ha, valB: valB / ha, deltaPct: vbp.deltaPct } : null;
+  return { vbp, vbpHa, areaKm2 };
+}
+
+/**
+ * Ficha de um recorte com varios municipios (regional do IDR): as secoes que
+ * somam (territorio, economia, estrutura fundiaria). As de tempo real do
+ * Supabase sao por municipio e ficam de fora.
+ */
+export async function openFichaRegiao({ nome, meta, ibges }) {
+  const panel = ensurePanel();
+  const seq = ++_requestSeq;
+  panel.classList.add('open');
+  if (_current) {
+    _current = null;
+    anunciarSelecao();
   }
+  syncWatchButton();
+  panel.querySelector('.fx-nome').textContent = nome;
+  panel.querySelector('.fx-meta').textContent = meta;
+  await renderSecoes(panel, seq, async () => {
+    const [ind, car, info] = await Promise.all([
+      getIndicadores(ibges),
+      getCarAgregado(ibges),
+      infoAgregada(ibges),
+    ]);
+    return { ficha: {}, info, car, ind };
+  });
 }
