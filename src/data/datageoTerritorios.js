@@ -20,19 +20,11 @@
 import * as Cesium from 'cesium';
 import { openFichaRegiao } from '../datageoFicha.js';
 import { createEntityHoverTooltip } from './entityHoverTooltip.js';
-import { escapeHtml as esc } from './vesselTooltip.js';
+// Rótulos, tooltips e centroide ficam num módulo sem Cesium (o protótipo
+// MapLibre usa a mesma especificação).
+import { centroidOf, fichaRegionalIdr, TERRITORIO_SPECS, tituloUc } from './territoriosSpec.js';
 
-function centroidOf(rings) {
-  // centroide simples do anel externo (suficiente para ancorar label)
-  const ring = rings[0] ?? [];
-  let sx = 0;
-  let sy = 0;
-  for (const [lon, lat] of ring) {
-    sx += lon;
-    sy += lat;
-  }
-  return ring.length ? [sx / ring.length, sy / ring.length] : null;
-}
+export { tituloUc };
 
 function makeTerritorioLayer({
   id, name, icon, source, url, cssColor, labelOf, labelMaxDist, category = 'Limites',
@@ -206,152 +198,22 @@ function makeTerritorioLayer({
   };
 }
 
-const fmtHa = (ha) => (ha ? ` · ${Math.round(ha).toLocaleString('pt-BR')} ha` : '');
-const fmtInt = (v) => Math.round(Number(v)).toLocaleString('pt-BR');
+export const datageoTerrasIndigenasLayer = makeTerritorioLayer(TERRITORIO_SPECS.terrasIndigenas);
 
-/** Tooltip padrão: título, linhas "rótulo: valor" (vazias somem) e fonte. */
-function tooltipHtml(titulo, linhas, fonte) {
-  const corpo = linhas
-    .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '')
-    .map(([k, v]) => `<div><span class="vt-dim">${esc(k)}:</span> ${esc(v)}</div>`)
-    .join('');
-  return `<div class="vt-nome">${esc(titulo)}</div>${corpo}<div class="vt-fontes">${esc(fonte)}</div>`;
-}
-const areaHa = (ha) => (Number(ha) > 0 ? `${fmtInt(ha)} ha` : '');
-const nomeTi = (p) => `${String(p.nome).startsWith('TI ') ? '' : 'TI '}${p.nome}`;
+export const datageoQuilombolasLayer = makeTerritorioLayer(TERRITORIO_SPECS.quilombolas);
 
-export const datageoTerrasIndigenasLayer = makeTerritorioLayer({
-  id: 'datageo-terras-indigenas',
-  name: 'Terras indígenas',
-  icon: '🪶',
-  source: 'FUNAI/CMR',
-  url: '/data/terras-indigenas-pr.geojson',
-  cssColor: '#fb923c',
-  // O nome da FUNAI ja vem prefixado ("TI Marrecas") — nao duplicar.
-  labelOf: (p) => `${nomeTi(p)}${fmtHa(p.area_ha)}`,
-  labelMaxDist: 600_000,
-  tooltipOf: (p) => tooltipHtml(nomeTi(p), [
-    ['Etapa', p.etapa],
-    ['Área', areaHa(p.area_ha)],
-  ], 'FUNAI/CMR'),
-});
+export const datageoAssentamentosLayer = makeTerritorioLayer(TERRITORIO_SPECS.assentamentos);
 
-export const datageoQuilombolasLayer = makeTerritorioLayer({
-  id: 'datageo-quilombolas',
-  name: 'Territórios quilombolas',
-  icon: '🏘️',
-  source: 'IBGE Censo 2022',
-  url: '/data/quilombolas-pr.geojson',
-  cssColor: '#c084fc',
-  labelOf: (p) => `TQ ${p.nome}${p.fase ? ` (${p.fase})` : ''}`,
-  labelMaxDist: 1_600_000,
-  tooltipOf: (p) => tooltipHtml(`Território quilombola ${p.nome}`, [
-    ['Município', p.municipio],
-    ['Fase', p.fase],
-  ], 'IBGE, Censo 2022'),
-});
+export const datageoUcsFederaisLayer = makeTerritorioLayer(TERRITORIO_SPECS.ucsFederais);
 
-const fmtFamilias = (n) => (Number(n) > 0 ? ` · ${Math.round(n).toLocaleString('pt-BR')} famílias` : '');
-
-export const datageoAssentamentosLayer = makeTerritorioLayer({
-  id: 'datageo-assentamentos',
-  name: 'Assentamentos (INCRA)',
-  icon: '🌾',
-  source: 'INCRA/SIPRA',
-  url: '/data/assentamentos-incra-pr.geojson',
-  cssColor: '#a3e635',
-  // 311 projetos no PR: rótulo só perto para não virar tapete de texto.
-  labelOf: (p) => `${p.nome}${fmtFamilias(p.familias)}`,
-  tooltipOf: (p) => tooltipHtml(p.nome, [
-    ['Município', p.municipio],
-    ['Área', areaHa(p.area_ha)],
-    ['Famílias', Number(p.familias) > 0 ? `${fmtInt(p.familias)} de ${fmtInt(p.capacidade)} de capacidade` : ''],
-    ['Fase', p.fase],
-    ['Criação', p.criacao],
-    ['Obtenção', p.obtencao],
-    ['Código SIPRA', p.codigo],
-  ], 'INCRA/SIPRA'),
-  labelMaxDist: 80_000,
-});
-
-/**
- * "RESERVA BIOLÓGICA DAS PEROBAS" -> "Reserva Biológica das Perobas": o CNUC
- * grava em caixa alta, e rótulo em caixa alta no globo pesa demais.
- */
-export function tituloUc(nome) {
-  const minusculas = new Set(['da', 'das', 'de', 'do', 'dos', 'e']);
-  return String(nome ?? '')
-    .toLocaleLowerCase('pt-BR')
-    .split(/\s+/)
-    .map((w, i) => (i > 0 && minusculas.has(w) ? w : w.charAt(0).toLocaleUpperCase('pt-BR') + w.slice(1)))
-    .join(' ');
-}
-
-export const datageoUcsFederaisLayer = makeTerritorioLayer({
-  id: 'datageo-ucs-federais',
-  name: 'Unidades de conservação federais',
-  icon: '🌳',
-  source: 'MMA/CNUC · ICMBio',
-  url: '/data/ucs-federais-pr.geojson',
-  cssColor: '#34d399',
-  category: 'Ambiente',
-  labelOf: (p) => `${tituloUc(p.nome)}${fmtHa(p.area_ha)}`,
-  labelMaxDist: 400_000,
-});
-
-export const datageoUcsEstaduaisLayer = makeTerritorioLayer({
-  id: 'datageo-ucs-estaduais',
-  name: 'Unidades de conservação estaduais',
-  icon: '🌲',
-  source: 'MMA/CNUC · IAT',
-  url: '/data/ucs-estaduais-pr.geojson',
-  cssColor: '#2dd4bf',
-  category: 'Ambiente',
-  labelOf: (p) => `${tituloUc(p.nome)}${fmtHa(p.area_ha)}`,
-  labelMaxDist: 400_000,
-});
-
-const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
+export const datageoUcsEstaduaisLayer = makeTerritorioLayer(TERRITORIO_SPECS.ucsEstaduais);
 
 export const datageoRegionaisIdrLayer = makeTerritorioLayer({
-  id: 'datageo-regionais-idr',
-  name: 'Regionais do IDR',
-  icon: '🗺️',
-  source: 'IDR-Paraná',
-  url: '/data/regionais-idr-pr.geojson',
-  cssColor: '#34d399',
-  fillAlpha: 0.12,
-  labelOf: (p) => `IDR ${p.regional}`,
-  labelMaxDist: 1_800_000,
-  tooltipOf: (p) => tooltipHtml(`Regional ${p.regional}`, [
-    ['Municípios', fmtInt(p.municipios.length)],
-    ['Ficha', 'clique para abrir a ficha regional'],
-  ], 'IDR-Paraná'),
-  onClick: (p) => openFichaRegiao({
-    nome: `Regional ${p.regional}`,
-    meta: `IDR-Paraná · ${plural(p.municipios.length, 'município', 'municípios')}`,
-    ibges: p.municipios,
-  }),
+  ...TERRITORIO_SPECS.regionaisIdr,
+  onClick: (p) => openFichaRegiao(fichaRegionalIdr(p)),
 });
 
-// Quase só contorno: 27 municípios estão em duas associações, e os polígonos
-// se sobrepõem; preenchimento empilhado ficaria ilegível. O alfa mínimo existe
-// para o polígono ser "pickado" pelo tooltip.
-export const datageoAssociacoesLayer = makeTerritorioLayer({
-  id: 'datageo-associacoes',
-  name: 'Associações de municípios',
-  icon: '🤝',
-  source: 'SECID-PR',
-  url: '/data/associacoes-pr.geojson',
-  cssColor: '#f472b6',
-  fillAlpha: 0.02,
-  labelOf: (p) => p.sigla,
-  labelMaxDist: 1_800_000,
-  tooltipOf: (p) => tooltipHtml(p.sigla, [
-    ['Nome', p.nome],
-    ['Municípios', fmtInt(p.municipios.length)],
-  ], 'SECID-PR'),
-});
+export const datageoAssociacoesLayer = makeTerritorioLayer(TERRITORIO_SPECS.associacoes);
 
 export const DATAGEO_TERRITORIOS_LAYERS = [
   datageoTerrasIndigenasLayer,

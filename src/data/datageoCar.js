@@ -23,26 +23,16 @@
 
 import * as Cesium from 'cesium';
 import { createSlicedLineLayer } from './slicedLineLayer.js';
+import { CAR_CLASSE_STYLES, CAR_MAX_HEIGHT } from './carClasses.js';
 
-// Escala sequencial por porte: claro e fino nos pequenos (que são a maioria e
-// virariam uma mancha se tivessem o mesmo peso), forte e grosso nos grandes.
-const CLASSE_STYLES = Object.freeze({
-  '0-4': Object.freeze({
-    color: Cesium.Color.fromCssColorString('#fef08a').withAlpha(0.45), width: 0.8,
-  }),
-  '4-10': Object.freeze({
-    color: Cesium.Color.fromCssColorString('#fde047').withAlpha(0.55), width: 1.0,
-  }),
-  '10-20': Object.freeze({
-    color: Cesium.Color.fromCssColorString('#fb923c').withAlpha(0.65), width: 1.2,
-  }),
-  '20-50': Object.freeze({
-    color: Cesium.Color.fromCssColorString('#f97316').withAlpha(0.75), width: 1.4,
-  }),
-  '>50': Object.freeze({
-    color: Cesium.Color.fromCssColorString('#ef4444').withAlpha(0.85), width: 1.8,
-  }),
-});
+// Escala sequencial por porte (cores, alfa e espessura em carClasses.js, sem
+// Cesium, para o protótipo MapLibre usar os mesmos valores).
+const CLASSE_STYLES = Object.freeze(Object.fromEntries(
+  Object.entries(CAR_CLASSE_STYLES).map(([classe, { css, alpha, width }]) => [
+    classe,
+    Object.freeze({ color: Cesium.Color.fromCssColorString(css).withAlpha(alpha), width }),
+  ]),
+));
 
 export const datageoCarLayer = createSlicedLineLayer({
   id: 'datageo-car',
@@ -55,5 +45,5 @@ export const datageoCarLayer = createSlicedLineLayer({
   styleFor: (classe) => CLASSE_STYLES[classe],
   // Mesmo teto das estradas rurais: 90 km é o enquadramento de um município,
   // então escolher um município já traz as divisas junto.
-  maxHeight: 90_000,
+  maxHeight: CAR_MAX_HEIGHT,
 });
