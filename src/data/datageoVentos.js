@@ -12,18 +12,13 @@
 import { WindLayer } from 'cesium-wind-layer';
 import { holdContinuousRender, releaseContinuousRender } from '../renderGovernor.js';
 import { fetchWindGrid } from './datageoClient.js';
+import { WIND_PARTICLE_STYLE } from './ventosOptions.js';
 
 const RENDER_HOLD_ID = 'datageo-ventos';
 
 const WIND_OPTIONS = {
-  particlesTextureSize: 64, // 4096 particulas
+  ...WIND_PARTICLE_STYLE,
   particleHeight: 120,
-  lineWidth: { min: 1, max: 2.4 },
-  lineLength: { min: 30, max: 120 },
-  speedFactor: 1.2,
-  dropRate: 0.003,
-  colors: ['#7dd3fc', '#22d3ee', '#a5f3fc', '#e0f2fe'],
-  flipY: false,
 };
 
 export const datageoVentosLayer = (() => {
