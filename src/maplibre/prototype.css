@@ -21,6 +21,8 @@
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --panel-radius: 16px;
+  --btn-radius: 10px;
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-smooth: 300ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -154,7 +156,7 @@ body.scope-off #scope { opacity: 0; }
   box-shadow: 0 0 16px rgba(0, 212, 255, .15) inset;
 }
 .toggles { display: grid; gap: 5px; margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
-.toggles label, .layer { display: flex; gap: 9px; align-items: flex-start; cursor: pointer; }
+.toggles label, .layer > label { display: flex; gap: 9px; align-items: flex-start; cursor: pointer; }
 .layer { padding: 5px 0; }
 .layer .name { display: block; font-size: 12.5px; }
 .layer .meta { display: block; color: var(--text-dim); font: 10.5px var(--font-mono); margin-top: 1px; }
@@ -169,7 +171,7 @@ dd { margin: 0; text-align: right; color: var(--text-primary); }
 
 /* Dock de estilos visuais (teclas 1-7, como no app). */
 #estilos {
-  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 100;
+  position: fixed; left: calc(50% + 150px); bottom: 42px; transform: translateX(-50%); z-index: 100;
   display: flex; gap: 6px; padding: 8px;
   background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--panel-radius);
   backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
@@ -203,3 +205,285 @@ dd { margin: 0; text-align: right; color: var(--text-primary); }
 
 /* Controles do MapLibre acima da máscara circular (#scope, z-index 3). */
 .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { z-index: 5; }
+
+/* ── Copiados do style.css do app: tela de carga/login, barra de ações, toast ── */
+#loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: var(--bg-dark);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.8s ease, visibility 0.8s ease;
+}
+
+#loading-screen.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.loader-content {
+  text-align: center;
+}
+
+.loader-logo {
+  display: block;
+  width: 128px;
+  height: auto;
+  margin: 0 auto 24px;
+  filter: drop-shadow(0 0 24px rgba(0, 246, 255, 0.42));
+  animation: logo-pulse 2s ease-in-out infinite;
+}
+
+@keyframes logo-pulse {
+  0%, 100% { opacity: 0.72; transform: scale(0.98); }
+  50% { opacity: 1; transform: scale(1.02); }
+}
+
+.loader-content h2 {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 6px;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.loader-status {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--text-dim);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(320px, calc(100vw - 32px));
+  margin: 8px auto 0;
+  text-align: left;
+}
+.login-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.login-field input {
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--btn-radius);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font: 14px var(--font-sans);
+}
+.login-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.login-error {
+  min-height: 1em;
+  font-size: 12px;
+  color: #ff6b6b;
+}
+.login-form button {
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--btn-radius);
+  background: var(--accent-dim);
+  color: var(--text-primary);
+  font: 600 13px var(--font-mono);
+  letter-spacing: 2px;
+  cursor: pointer;
+}
+.login-form button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+#usuarios-dialog {
+  margin: auto;
+  padding: 24px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--panel-radius);
+  background: var(--bg-dark);
+  color: var(--text-primary);
+}
+#usuarios-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+.login-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.login-ok {
+  color: #4ade80;
+}
+.login-actions {
+  display: flex;
+  gap: 8px;
+}
+.login-actions button {
+  flex: 1;
+  white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+#top-center-actions {
+  position: fixed;
+  top: 32px;
+  left: 50%;
+  z-index: 100;
+  display: flex;
+  gap: 8px;
+  transform: translateX(-50%);
+}
+
+#top-center-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  outline: none;
+}
+
+#top-center-actions button:hover,
+#top-center-actions button:focus-visible {
+  border-color: var(--glass-border-hover);
+  background: rgba(255, 255, 255, 0.06);
+  transform: scale(1.1);
+}
+
+#top-center-actions button:active {
+  transform: scale(0.95);
+}
+
+#top-center-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+  transform: none;
+}
+
+/* `wait` acima descreve um voo em andamento. O botão de foco fica desabilitado
+   enquanto NÃO HÁ município selecionado, que não é espera: é indisponível. */
+#focus-municipio:disabled {
+  cursor: not-allowed;
+}
+
+#top-center-actions .material-symbols-outlined {
+  font-size: 18px;
+}
+#toast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  z-index: 200;
+  padding: 10px 24px;
+  background: var(--glass-bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--accent);
+  text-transform: uppercase;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.3s ease, visibility 0.3s ease, transform 0.3s ease;
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.15);
+}
+
+#toast.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+
+/* ── Painel de camadas: grupos por categoria, legenda e chips ─────────── */
+#layers details { border-bottom: 1px dashed rgba(103, 232, 249, 0.14); padding: 2px 0; }
+#layers summary {
+  list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0; font: 600 9.5px var(--font-mono); letter-spacing: .18em; text-transform: uppercase; color: #67e8f9;
+}
+#layers summary::-webkit-details-marker { display: none; }
+#layers summary::before { content: '▸'; margin-right: 6px; transition: transform var(--transition-fast); }
+#layers details[open] summary::before { transform: rotate(90deg); }
+#layers summary .n { margin-left: auto; color: var(--text-dim); letter-spacing: 1px; }
+.layer .ic { margin-right: 6px; }
+.layer.on .name { color: var(--text-primary); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px 25px; }
+.chip {
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--glass-border); background: transparent;
+  color: var(--text-secondary); font: 10px var(--font-mono); cursor: pointer;
+}
+.chip.on { border-color: var(--accent-glow); color: var(--accent); background: var(--accent-dim); }
+.legend { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 4px 0 2px 25px; font: 10px var(--font-mono); color: var(--text-secondary); }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.legend-item i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.legend-item em { font-style: normal; color: var(--text-dim); }
+
+/* ── Busca LOCALIZAÇÃO ───────────────────────────────────────────────── */
+#location-bar {
+  position: fixed; left: calc(50% - 260px); bottom: 42px; transform: translateX(-50%); z-index: 100;
+  width: 260px; padding: 8px; background: var(--glass-bg); border: 1px solid var(--glass-border);
+  border-radius: var(--panel-radius); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+}
+#location-bar label { display: flex; align-items: center; gap: 8px; font: 10px var(--font-mono); letter-spacing: 3px; color: var(--text-secondary); }
+#location-search {
+  flex: 1; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--glass-border);
+  background: rgba(255,255,255,.03); color: var(--text-primary); font: 12px var(--font-sans); outline: none;
+}
+#location-search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+#location-suggestions {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); margin: 0; padding: 4px; list-style: none;
+  background: rgba(10, 12, 20, .95); border: 1px solid var(--glass-border); border-radius: 12px;
+}
+#location-suggestions li { padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 12.5px; display: flex; justify-content: space-between; gap: 8px; }
+#location-suggestions li span { color: var(--text-dim); font: 10px var(--font-mono); }
+#location-suggestions li.on, #location-suggestions li:hover { background: var(--accent-dim); color: var(--accent); }
+
+/* Tooltip dos municípios (classes .mt-* do municipioTooltip.js). */
+#tooltip .mt { font: 11px/1.5 var(--font-mono); color: #cbd5e1; white-space: nowrap; }
+#tooltip .mt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 4px; }
+#tooltip .mt-up { color: #22c55e; }
+#tooltip .mt-down { color: #ef4444; }
+#tooltip .mt-dim { color: #64748b; }
+#tooltip .mt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
+
+@media (max-width: 720px) {
+  #top-center-actions { top: auto; bottom: 150px; }
+  #location-bar { left: 8px; right: 8px; width: auto; transform: none; bottom: 150px; display: none; }
+}

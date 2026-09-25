@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0" rel="stylesheet" />
 </head>
 <body data-estilo="normal">
   <div id="map"></div>
@@ -20,6 +21,44 @@
     <h1><span class="title-logo" aria-hidden="true"><img src="/logo.svg" alt="" /></span> <span>DATAGEO <span class="title-accent">PR</span></span></h1>
     <p class="subtitle">Sala de situação · 399 municípios</p>
   </div>
+
+  <nav id="top-center-actions" aria-label="Ações do mapa">
+    <button id="act-clear" type="button" aria-label="Desligar todas as camadas" title="Desligar todas as camadas selecionadas">
+      <span class="material-symbols-outlined" aria-hidden="true">layers_clear</span>
+    </button>
+    <button id="act-share" type="button" aria-label="Copiar link de compartilhamento" title="Copiar link de compartilhamento">
+      <span class="material-symbols-outlined" aria-hidden="true">link</span>
+    </button>
+    <button id="act-focus" type="button" aria-label="Aproximar ao município selecionado" title="Aproximar ao município selecionado" disabled>
+      <span class="material-symbols-outlined" aria-hidden="true">zoom_in_map</span>
+    </button>
+    <button id="act-parana" type="button" aria-label="Voltar à visão do Paraná" title="Voltar à visão de todo o estado (P)">
+      <span class="material-symbols-outlined" aria-hidden="true">crop_free</span>
+    </button>
+    <button id="act-globe" type="button" aria-label="Voltar à visão geral" title="Voltar à visão geral do globo">
+      <span class="material-symbols-outlined" aria-hidden="true">public</span>
+    </button>
+    <button id="usuarios-btn" type="button" aria-label="Cadastrar usuários" title="Cadastrar usuários" hidden>
+      <span class="material-symbols-outlined" aria-hidden="true">manage_accounts</span>
+    </button>
+    <button id="logout-btn" type="button" aria-label="Sair" title="Sair">
+      <span class="material-symbols-outlined" aria-hidden="true">logout</span>
+    </button>
+  </nav>
+  <dialog id="usuarios-dialog" aria-labelledby="usuarios-titulo">
+    <form class="login-form" method="dialog" novalidate>
+      <p id="usuarios-titulo" class="login-title">Usuários do DataGeo</p>
+      <label class="login-field"><span>Matrícula</span><input name="matricula" inputmode="numeric" autocomplete="off" required></label>
+      <label class="login-field"><span>Nome completo (só para cadastrar)</span><input name="nome" autocomplete="off"></label>
+      <p class="login-hint">Senha inicial: a matrícula invertida. A pessoa troca no primeiro acesso.</p>
+      <p class="login-error" role="status"></p>
+      <div class="login-actions">
+        <button type="submit" value="criar">Cadastrar</button>
+        <button type="submit" value="resetar">Resetar senha</button>
+        <button type="submit" value="fechar" formnovalidate>Fechar</button>
+      </div>
+    </form>
+  </dialog>
 
   <div id="style-indicator">
     <span class="indicator-label">Estilo ativo</span>
@@ -54,7 +93,21 @@
     </footer>
   </aside>
 
+  <div id="location-bar">
+    <label>LOCALIZAÇÃO <input id="location-search" type="search" placeholder="Buscar município (B)" autocomplete="off" spellcheck="false" /></label>
+    <ul id="location-suggestions" role="listbox" hidden></ul>
+  </div>
   <nav id="estilos" aria-label="Estilos visuais"></nav>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <div id="loading-screen">
+    <div class="loader-content">
+      <span class="loader-logo" aria-hidden="true"><img src="/logo.svg" alt="" style="width:100%" /></span>
+      <h2>DATAGEO <span class="title-accent">PR</span></h2>
+      <p class="loader-status">Inicializando a Sala de Situação...</p>
+    </div>
+  </div>
 
   <script type="module" src="/src/maplibre/prototype.js"></script>
 </body>

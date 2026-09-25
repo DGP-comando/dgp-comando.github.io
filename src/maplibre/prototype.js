@@ -1,24 +1,29 @@
 // src/maplibre/prototype.js
 //
 // Protótipo do DataGeo PR sobre MapLibre GL JS (a engine do Osiris), para
-// comparar com a versão CesiumJS. Aberto em /maplibre.html ou por
+// comparar a fluidez com a versão CesiumJS. Aberto em /maplibre.html ou por
 // /?engine=maplibre. Não substitui nada no app principal.
 //
-// O que cobre: mapa base Satélite (Esri + rótulos) / OSM raster / OSM vetorial,
-// globo ou plano, relevo 3D opcional, e algumas camadas DataGeo representativas
-// (polígonos, linhas pesadas, pontos, células de estradas, dado vivo do
-// Supabase). O painel mede quanto cada camada leva do clique até o mapa ficar
-// ocioso com ela desenhada.
+// Traz o que o app usa em produção: login, as camadas DataGeo e as de contexto
+// (layers/), painel por categoria com legendas e chips, clique no município
+// com a ficha, aproximar ao município (com foco nas camadas por escala), busca,
+// visão do Paraná, ticker, briefing, vigilância, atalhos e link compartilhável.
+// O visual (scope, estilos, título) vem de prototype.css.
 
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './prototype.css';
+import { requireLogin } from '../datageoLogin.js';
+import { initDatageoTicker } from '../datageoTicker.js';
+import { initDatageoBriefing } from '../datageoBriefing.js';
+import { initDatageoAreaWatch } from '../datageoAreaWatch.js';
+import { initDatageoShortcuts } from '../datageoShortcuts.js';
+import { fetchActiveIncidents, fetchCemadenAlerts, fetchFiresPayload } from '../data/datageoClient.js';
 import { BASEMAPS, buildBaseStyle } from './basemaps.js';
-import { LAYERS, createEstradasLoader } from './layers.js';
+import { LAYERS } from './layers/index.js';
+import { createRegistry } from './registry.js';
+import { createNavigation, PARANA_BBOX } from './navigation.js';
 
-// Tempos medidos desde o início da navegação (performance.now() zera nela),
-// para incluir o download do bundle.
-const T0 = 0;
 const params = new URLSearchParams(location.search);
 const $ = (sel) => document.querySelector(sel);
 
@@ -49,15 +54,30 @@ const state = {
   esriLabels: params.get('rotulos') !== '0',
   globe: params.get('proj') !== '2d',
   terrain: params.get('relevo') === '1',
-  on: new Set(
-    params.has('camadas')
-      ? params.get('camadas').split(',').filter(Boolean)
-      : LAYERS.filter((l) => l.defaultOn).map((l) => l.id),
-  ),
-  timings: new Map(), // id -> {ms, info, error}
   estilo: ESTILOS.some((e) => e.id === params.get('estilo')) ? params.get('estilo') : 'normal',
   scope: params.get('scope') !== '0',
+  initialLayers: params.has('camadas')
+    ? params.get('camadas').split(',').filter(Boolean)
+    : LAYERS.filter((l) => l.defaultOn).map((l) => l.id),
 };
+
+let toastTimer = null;
+function toast(message) {
+  const el = $('#toast');
+  el.textContent = message;
+  el.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('visible'), 2600);
+}
+
+// Mesmo gate do app: sem sessão com acesso ao DataGeo, as camadas não leem nada.
+// (Função em vez de top-level await: o alvo de build do Vite não aceita TLA.)
+// `?semlogin` só no servidor de desenvolvimento, para QA de navegador sem
+// credencial (as camadas do Supabase ficam vazias; as estáticas carregam).
+const skipLogin = import.meta.env.DEV && params.has('semlogin');
+(skipLogin ? Promise.resolve() : requireLogin()).then(boot);
+
+function boot() {
 
 // O worker do MapLibre 6 é servido de public/vendor (scripts/prepare-maplibre-worker.mjs).
 maplibregl.setWorkerUrl(`/vendor/maplibre/${maplibregl.getVersion()}/maplibre-gl-worker.mjs`);
@@ -65,11 +85,11 @@ maplibregl.setWorkerUrl(`/vendor/maplibre/${maplibregl.getVersion()}/maplibre-gl
 const map = new maplibregl.Map({
   container: 'map',
   style: buildBaseStyle(state.base, { esriLabels: state.esriLabels }),
-  center: [-51.45, -24.65],
-  zoom: 6.2,
+  bounds: PARANA_BBOX,
+  fitBoundsOptions: { padding: 40 },
   maxPitch: 80,
   hash: 'vista',
-  attributionControl: { compact: true, customAttribution: 'Dados: DataGeo PR / IDR-Paraná' },
+  attributionControl: { compact: true, customAttribution: 'Dados: DataGeo PR' },
 });
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
 map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
@@ -78,62 +98,18 @@ map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
 // cada estilo carregado em vez de embutidas no estilo.
 map.on('style.load', () => {
   map.setProjection({ type: state.globe ? 'globe' : 'mercator' });
-  // Atmosfera só na visão de globo; some ao aproximar.
   map.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0] });
 });
 
 // ---------------------------------------------------------------------------
-// Camadas DataGeo
+// Camadas e navegação
 
-const estradas = createEstradasLoader(map, {
-  onStats: ({ cells, trechos }) => {
-    const t = state.timings.get('estradas') ?? {};
-    state.timings.set('estradas', { ...t, info: `${cells} células · ${trechos.toLocaleString('pt-BR')} trechos` });
-    renderPanel();
-  },
+const registry = createRegistry(map, LAYERS, {
+  tooltipEl: $('#tooltip'),
+  panelEl: $('#layers'),
+  onChange: () => syncUrl(),
 });
-
-function ensureAdded(def) {
-  for (const [id, spec] of Object.entries(def.sources)) {
-    if (!map.getSource(id)) map.addSource(id, spec);
-  }
-  for (const layer of def.layers) {
-    if (!map.getLayer(layer.id)) map.addLayer({ ...layer, layout: { ...layer.layout, visibility: 'none' } });
-  }
-}
-
-const idle = () => new Promise((resolve) => map.once('idle', resolve));
-
-async function setLayer(def, on) {
-  on ? state.on.add(def.id) : state.on.delete(def.id);
-  syncUrl();
-  const firstTime = on && !state.timings.has(def.id);
-  const t0 = performance.now();
-  if (firstTime) state.timings.set(def.id, { loading: true });
-  renderPanel();
-  ensureAdded(def);
-  for (const layer of def.layers) map.setLayoutProperty(layer.id, 'visibility', on ? 'visible' : 'none');
-  if (def.dynamic === 'estradas') {
-    if (on && map.getZoom() < 10) state.timings.set(def.id, { info: 'aproxime até o zoom 10' });
-    await estradas.setEnabled(on);
-  }
-  if (!firstTime) return renderPanel();
-  try {
-    const count = def.load ? await def.load(map) : null;
-    await idle();
-    const prev = state.timings.get(def.id) ?? {};
-    state.timings.set(def.id, {
-      ...prev,
-      loading: false,
-      ms: performance.now() - t0,
-      info: prev.info ?? (count != null ? `${count} registros` : null),
-    });
-  } catch (err) {
-    const hint = def.id === 'clima' ? ' (entre no app principal para liberar os dados)' : '';
-    state.timings.set(def.id, { loading: false, error: `${err?.message || err}${hint}` });
-  }
-  renderPanel();
-}
+const nav = createNavigation(map, registry, { toast });
 
 // ---------------------------------------------------------------------------
 // Mapa base, projeção e relevo
@@ -141,20 +117,19 @@ async function setLayer(def, on) {
 async function setBase(id) {
   state.base = id;
   syncUrl();
-  renderPanel();
+  renderControls();
   const t0 = performance.now();
   map.setStyle(buildBaseStyle(id, { esriLabels: state.esriLabels }), {
     // Transplanta as camadas DataGeo (e o relevo) para o estilo novo.
     transformStyle: (prev, style) => {
-      const keepSource = (sid) => sid.startsWith('dg-');
       const sources = { ...style.sources };
-      for (const [sid, spec] of Object.entries(prev?.sources ?? {})) if (keepSource(sid)) sources[sid] = spec;
+      for (const [sid, spec] of Object.entries(prev?.sources ?? {})) if (sid.startsWith('dg-')) sources[sid] = spec;
       const layers = [...style.layers, ...(prev?.layers ?? []).filter((l) => l.id.startsWith('dg-'))];
       return { ...style, sources, layers, terrain: prev?.terrain };
     },
   });
-  await idle();
-  $('#base-ms').textContent = `troca em ${Math.round(performance.now() - t0)} ms`;
+  await new Promise((resolve) => map.once('idle', resolve));
+  $('#base-ms').textContent = `${Math.round(performance.now() - t0)} ms`;
 }
 
 function setEsriLabels(on) {
@@ -167,7 +142,7 @@ function setGlobe(on) {
   state.globe = on;
   syncUrl();
   map.setProjection({ type: on ? 'globe' : 'mercator' });
-  renderPanel();
+  renderControls();
 }
 
 function setTerrain(on) {
@@ -180,7 +155,7 @@ function setTerrain(on) {
   } else {
     map.setTerrain(null);
   }
-  renderPanel();
+  renderControls();
 }
 
 function setEstilo(id) {
@@ -188,7 +163,7 @@ function setEstilo(id) {
   document.body.dataset.estilo = id;
   $('#active-style-name').textContent = ESTILOS.find((e) => e.id === id).label.toUpperCase();
   syncUrl();
-  renderPanel();
+  renderControls();
 }
 
 // ---------------------------------------------------------------------------
@@ -225,10 +200,13 @@ function setScope(on) {
 map.on('resize', paintScope);
 map.on('zoom', paintScope);
 
+// ---------------------------------------------------------------------------
+// Link compartilhável: camadas pelos MESMOS ids do app; vista no hash.
+
 function syncUrl() {
   const q = new URLSearchParams(location.search);
   q.set('base', state.base);
-  q.set('camadas', [...state.on].join(','));
+  q.set('camadas', registry.enabledIds().join(','));
   state.globe ? q.delete('proj') : q.set('proj', '2d');
   state.terrain ? q.set('relevo', '1') : q.delete('relevo');
   state.esriLabels ? q.delete('rotulos') : q.set('rotulos', '0');
@@ -239,89 +217,25 @@ function syncUrl() {
 }
 
 // ---------------------------------------------------------------------------
-// Tooltip e hover
+// Controles
 
-const tooltip = $('#tooltip');
-const byLayerId = new Map();
-for (const def of LAYERS) {
-  for (const lid of def.interactive ?? (def.hover ? [def.hover.layer] : [])) byLayerId.set(lid, def);
-}
-let hovered = null; // {source, id}
-
-function clearHover() {
-  if (hovered) map.setFeatureState(hovered, { hover: false });
-  hovered = null;
-}
-
-map.on('mousemove', (e) => {
-  const ids = [...byLayerId.keys()].filter((id) => map.getLayer(id) && state.on.has(byLayerId.get(id).id));
-  const [feature] = ids.length ? map.queryRenderedFeatures(e.point, { layers: ids }) : [];
-  const def = feature && byLayerId.get(feature.layer.id);
-  if (def?.hover && feature.id != null) {
-    const next = { source: def.hover.source, id: feature.id };
-    if (hovered?.id !== next.id || hovered?.source !== next.source) {
-      clearHover();
-      hovered = next;
-      map.setFeatureState(hovered, { hover: true });
-    }
-  } else {
-    clearHover();
-  }
-  if (!def?.tooltip) {
-    tooltip.hidden = true;
-    map.getCanvas().style.cursor = '';
-    return;
-  }
-  map.getCanvas().style.cursor = 'pointer';
-  tooltip.innerHTML = def.tooltip(feature.properties);
-  tooltip.style.transform = `translate(${e.point.x + 14}px, ${e.point.y + 14}px)`;
-  tooltip.hidden = false;
-});
-map.on('mouseout', () => {
-  clearHover();
-  tooltip.hidden = true;
-});
-// A troca de estilo apaga os feature-states.
-map.on('styledata', () => {
-  hovered = null;
-});
-
-// ---------------------------------------------------------------------------
-// Painel
-
-function renderPanel() {
+function renderControls() {
   $('#bases').innerHTML = BASEMAPS.map(
-    (b) =>
-      `<button type="button" data-base="${b.id}" class="${b.id === state.base ? 'on' : ''}" title="${b.hint}">${b.label}</button>`,
+    (b) => `<button type="button" data-base="${b.id}" class="${b.id === state.base ? 'on' : ''}" title="${b.hint}">${b.label}</button>`,
   ).join('');
   $('#esri-labels').closest('label').hidden = state.base !== 'esri';
   $('#esri-labels').checked = state.esriLabels;
   $('#globe').checked = state.globe;
+  $('#terrain').checked = state.terrain;
   $('#scope-toggle').checked = state.scope;
   $('#estilos').innerHTML = ESTILOS.map(
     (e, i) => `<button type="button" data-estilo="${e.id}" class="${e.id === state.estilo ? 'on' : ''}">${e.label}<kbd>${i + 1}</kbd></button>`,
   ).join('');
-  $('#terrain').checked = state.terrain;
-  $('#layers').innerHTML = LAYERS.map((def) => {
-    const t = state.timings.get(def.id);
-    let meta = def.detail;
-    if (t?.loading) meta = 'carregando…';
-    else if (t?.error) meta = `<span class="err">erro: ${t.error}</span>`;
-    else if (t && (t.ms != null || t.info)) {
-      meta = [t.ms != null ? `<b>${Math.round(t.ms)} ms</b>` : '', t.info ?? ''].filter(Boolean).join(' · ');
-    }
-    return `<label class="layer"><input type="checkbox" data-layer="${def.id}" ${state.on.has(def.id) ? 'checked' : ''}/>
-      <span><span class="name">${def.label}</span><span class="meta">${meta}</span></span></label>`;
-  }).join('');
 }
 
 $('#bases').addEventListener('click', (e) => {
   const id = e.target.closest('[data-base]')?.dataset.base;
-  if (id && id !== state.base) setBase(id).catch((err) => ($('#base-ms').textContent = `erro: ${err.message}`));
-});
-$('#layers').addEventListener('change', (e) => {
-  const def = LAYERS.find((l) => l.id === e.target.dataset.layer);
-  if (def) setLayer(def, e.target.checked);
+  if (id && id !== state.base) setBase(id).catch((err) => toast(`Mapa base: ${err.message}`));
 });
 $('#esri-labels').addEventListener('change', (e) => setEsriLabels(e.target.checked));
 $('#globe').addEventListener('change', (e) => setGlobe(e.target.checked));
@@ -332,9 +246,27 @@ $('#estilos').addEventListener('click', (e) => {
   if (id) setEstilo(id);
 });
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea')) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, select')) return;
   const estilo = ESTILOS[Number(e.key) - 1];
   if (estilo) setEstilo(estilo.id);
+});
+
+$('#act-clear').addEventListener('click', async () => {
+  const ids = registry.enabledIds();
+  await Promise.all(ids.map((id) => registry.setEnabled(id, false)));
+  toast(ids.length ? `${ids.length} camada(s) desligada(s)` : 'Nenhuma camada ligada');
+});
+$('#act-share').addEventListener('click', async () => {
+  syncUrl();
+  try {
+    await navigator.clipboard.writeText(location.href);
+    toast('Link copiado');
+  } catch {
+    toast('Não foi possível copiar o link');
+  }
+});
+$('#act-globe').addEventListener('click', () => {
+  map.flyTo({ center: [-51.5, -18], zoom: 1.6, pitch: 0, bearing: 0, duration: 2600, essential: true });
 });
 $('#engine-version').textContent = `MAPLIBRE GL ${maplibregl.getVersion()} · PROTÓTIPO`;
 
@@ -346,14 +278,46 @@ setInterval(() => {
   frames = 0;
 }, 1000);
 
+// ---------------------------------------------------------------------------
+// Chrome do DataGeo reaproveitado do app: ticker, briefing, vigilância, atalhos.
+
+initDatageoTicker();
+initDatageoBriefing();
+const areaWatch = initDatageoAreaWatch({
+  fetchers: {
+    fires: () => fetchFiresPayload().then((payload) => payload.fires),
+    cemaden: fetchCemadenAlerts,
+    incidents: fetchActiveIncidents,
+  },
+});
+window.__dgpAreaWatch = areaWatch;
+initDatageoShortcuts({
+  actions: {
+    resetCamera: () => nav.flyToParana(),
+    toggleWatch: () => areaWatch.toggle(),
+    openSearch: () => nav.openSearch(),
+    toggleLayers: () => {
+      const panel = $('#panel');
+      panel.hidden = !panel.hidden;
+    },
+  },
+});
+
+renderControls();
+registry.renderPanel();
 setEstilo(state.estilo);
 paintScope();
+$('#loading-screen').classList.add('hidden');
+
 map.once('load', async () => {
-  $('#boot-ms').textContent = `${Math.round(performance.now() - T0)} ms`;
+  $('#boot-ms').textContent = `${Math.round(performance.now())} ms`;
   if (state.terrain) setTerrain(true);
-  await Promise.all(LAYERS.filter((d) => state.on.has(d.id)).map((d) => setLayer(d, true)));
-  $('#ready-ms').textContent = `${Math.round(performance.now() - T0)} ms`;
+  const known = new Set(LAYERS.map((l) => l.id));
+  await Promise.all(state.initialLayers.filter((id) => known.has(id)).map((id) => registry.setEnabled(id, true)));
+  $('#ready-ms').textContent = `${Math.round(performance.now())} ms`;
 });
 
 // Ganchos de depuração, no mesmo espírito do __gevViewer do app Cesium.
 window.__dgMap = map;
+window.__dgRegistry = registry;
+}
