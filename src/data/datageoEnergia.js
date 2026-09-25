@@ -12,17 +12,17 @@
 // EPE). Estático, contrato earthquakes (sem CallbackProperty).
 
 import * as Cesium from 'cesium';
-import { makePointsLayer, cssColor } from './datageoLogistica.js';
+import { makePointsLayer, cssColor, cesiumStyle } from './datageoLogistica.js';
+import {
+  ENERGIA_CORES, SUBESTACAO_LEGENDA, USINA_LEGENDA, linhaTransmissaoClasse, subestacaoEstilo, usinaEstilo,
+} from './energiaLogisticaEstilos.js';
 import { datageoDistribuicaoLayer } from './datageoDistribuicao.js';
 
 const LT_URL = '/data/linhas-transmissao-pr.geojson';
 
-const cores = {
-  kv525: cssColor('#c084fc', 0.9),
-  kv230: cssColor('#38bdf8', 0.75),
-  baixa: cssColor('#94a3b8', 0.55),
-  planejada: cssColor('#fbbf24', 0.9),
-};
+const cores = Object.fromEntries(
+  Object.entries(ENERGIA_CORES).map(([k, c]) => [k, cssColor(c.css, c.alpha)]),
+);
 
 // Estilos por classe criados uma vez: as ~300 linhas compartilham o mesmo
 // material, o que tambem deixa o batch de polylines clamped do Cesium agrupa-las.
@@ -46,12 +46,7 @@ function ltStyles() {
 }
 
 function ltStyle(props) {
-  const styles = ltStyles();
-  if (props.planejada) return styles.planejada;
-  const kv = Number(props.tensao) || 0;
-  if (kv >= 500) return styles.kv525;
-  if (kv >= 230) return styles.kv230;
-  return styles.baixa;
+  return ltStyles()[linhaTransmissaoClasse(props)];
 }
 
 export const datageoLinhasTransmissaoLayer = (() => {
@@ -144,36 +139,11 @@ export const datageoSubestacoesLayer = makePointsLayer({
   icon: '🔌',
   source: 'EPE',
   url: '/data/subestacoes-pr.geojson',
-  styleFor: (p) => ({
-    grupo: p.planejada ? 'planejada' : 'existente',
-    size: p.planejada ? 9 : 7,
-    color: p.planejada ? cores.planejada : cssColor('#38bdf8', 1),
-    label: p.planejada
-      ? `${p.nome} (prevista ${p.ano ?? '?'}) · ${p.tensao ?? ''} kV`
-      : `${p.nome} · ${p.tensao ?? ''} kV`,
-    labelMaxDist: p.planejada ? 900_000 : 250_000,
-  }),
-  legend: [
-    { grupo: 'existente', label: 'Existente', color: '#38bdf8' },
-    { grupo: 'planejada', label: 'Prevista', color: '#fbbf24' },
-  ],
+  styleFor: cesiumStyle(subestacaoEstilo),
+  legend: SUBESTACAO_LEGENDA,
 });
 
-// Usinas SIGEL/ANEEL por tipo + aerogeradores individuais (torres) num
-// mesmo layer: cor por fonte, tamanho por potencia; aerogeradores so
-// aparecem de perto (sao detalhe dos parques eolicos, ja presentes como
-// usina 'eol').
-const USINA_STYLE = {
-  uhe: { cor: '#3b82f6', rotulo: 'UHE', base: 8 },
-  pch: { cor: '#7dd3fc', rotulo: 'PCH', base: 5 },
-  cgh: { cor: '#2dd4bf', rotulo: 'CGH', base: 4 },
-  ute: { cor: '#fb923c', rotulo: 'UTE', base: 5.5 },
-  eol: { cor: '#f8fafc', rotulo: 'EOL', base: 7 },
-  ufv: { cor: '#fde047', rotulo: 'UFV', base: 6 },
-};
-
-const fmtMw = (kw) => (kw ? `${(kw / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MW` : '');
-
+// Usinas SIGEL/ANEEL por tipo + aerogeradores (energiaLogisticaEstilos.js).
 export const datageoGeracaoLayer = makePointsLayer({
   id: 'datageo-geracao',
   name: 'Usinas de energia',
@@ -181,31 +151,8 @@ export const datageoGeracaoLayer = makePointsLayer({
   icon: '💡',
   source: 'SIGEL/ANEEL',
   url: '/data/usinas-pr.geojson',
-  styleFor: (p) => {
-    if (p.tipo === 'aerogerador') {
-      return {
-        grupo: 'aerogerador',
-        size: 3.5,
-        color: cssColor('#ffffff', 0.85),
-        label: `Aerogerador ${p.nome}${p.alt ? ` · ${p.alt} m` : ''}`,
-        labelMaxDist: 60_000,
-      };
-    }
-    const s = USINA_STYLE[p.tipo];
-    if (!s) return null;
-    const mw = (Number(p.pot_kw) || 0) / 1000;
-    return {
-      grupo: p.tipo,
-      size: mw >= 500 ? s.base + 5 : mw >= 50 ? s.base + 2 : s.base,
-      color: cssColor(s.cor, 0.9),
-      label: `${s.rotulo} ${p.nome}${p.pot_kw ? ` · ${fmtMw(p.pot_kw)}` : ''}`,
-      labelMaxDist: mw >= 500 ? 1_500_000 : mw >= 50 ? 400_000 : 130_000,
-    };
-  },
-  legend: [
-    ...Object.entries(USINA_STYLE).map(([grupo, s]) => ({ grupo, label: s.rotulo, color: s.cor })),
-    { grupo: 'aerogerador', label: 'Aerogerador', color: '#ffffff' },
-  ],
+  styleFor: cesiumStyle(usinaEstilo),
+  legend: USINA_LEGENDA,
 });
 
 export const DATAGEO_ENERGIA_LAYERS = [

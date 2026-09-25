@@ -16,8 +16,12 @@
 import * as Cesium from 'cesium';
 import { createCachedFactory } from './entityDiff.js';
 import { createEntityHoverTooltip } from './entityHoverTooltip.js';
-import { escapeHtml } from './vesselTooltip.js';
 import { dgFetchData } from './datageoClient.js';
+import {
+  AGRO_LEGENDA, ARMAZEM_LEGENDA, CEASA_LEGENDA, IDR_GRUPOS, ROTA_LEGENDA,
+  agroindustriaEstilo, agroindustriaIdrEstilo, agroindustriaIdrTooltipHtml, agroindustriaTooltipHtml,
+  armazemEstilo, ceasaEstilo, rotaTuristicaEstilo, rotaTuristicaTooltipHtml,
+} from './energiaLogisticaEstilos.js';
 
 const CATEGORY = 'Logística agro';
 
@@ -179,10 +183,14 @@ export function makePointsLayer({ id, name, category = CATEGORY, icon, source, u
   };
 }
 
-const fmtCap = (t) => {
-  if (!t) return '';
-  if (t >= 1000) return ` · ${Math.round(t / 1000)} mil t`;
-  return ` · ${t} t`;
+// Estilo e tooltip de cada ponto moram em energiaLogisticaEstilos.js (sem
+// Cesium, compartilhado com o protótipo MapLibre); aqui só a cor vira Cesium.
+export { agroindustriaTooltipHtml, agroindustriaIdrTooltipHtml, rotaTuristicaTooltipHtml };
+
+/** Adapta um `*Estilo` puro (cor CSS + alpha) ao `styleFor` de makePointsLayer. */
+export const cesiumStyle = (estilo) => (p) => {
+  const s = estilo(p);
+  return s && { ...s, color: cssColor(s.color, s.alpha) };
 };
 
 export const datageoArmazensLayer = makePointsLayer({
@@ -191,61 +199,9 @@ export const datageoArmazensLayer = makePointsLayer({
   icon: '🌾',
   source: 'CONAB/CDA 2023',
   url: '/data/armazens-conab-pr.geojson',
-  styleFor: (p) => {
-    if (p.kind === 'porto') {
-      return {
-        grupo: 'porto',
-        size: 12,
-        color: cssColor('#f97316'),
-        label: p.nome,
-        labelMaxDist: 2_000_000,
-      };
-    }
-    const cap = Number(p.cap_t) || 0;
-    return {
-      grupo: 'armazem',
-      // Capacidade dita o tamanho: silos grandes saltam na visão regional.
-      size: cap >= 50_000 ? 7 : cap >= 10_000 ? 5 : 3.5,
-      color: cssColor('#fbbf24', 0.85),
-      label: `${p.nome}${fmtCap(cap)}`,
-      labelMaxDist: 45_000,
-    };
-  },
-  legend: [
-    { grupo: 'armazem', label: 'Armazém', color: '#fbbf24' },
-    { grupo: 'porto', label: 'Porto', color: '#f97316' },
-  ],
+  styleFor: cesiumStyle(armazemEstilo),
+  legend: ARMAZEM_LEGENDA,
 });
-
-const AGRO_STYLE = {
-  frigorifico: { color: '#ef4444', size: 8, rotulo: 'Frigorífico', fonte: 'SIGSIF/MAPA' },
-  laticinio: { color: '#bfdbfe', size: 5.5, rotulo: 'Laticínio', fonte: 'SIGSIF/MAPA' },
-  serraria: { color: '#b45309', size: 5.5, rotulo: 'Serraria', fonte: 'OpenStreetMap' },
-};
-
-export function agroindustriaTooltipHtml(p) {
-  const s = AGRO_STYLE[p.kind];
-  if (!s) return '';
-  return [
-    `<div class="vt-nome">🏭 ${escapeHtml(p.nome)}</div>`,
-    `<div>${s.rotulo}</div>`,
-    p.municipio ? `<div>${escapeHtml(p.municipio)} - PR</div>` : '',
-    `<div class="vt-fontes">Fonte: ${s.fonte}</div>`,
-  ].join('');
-}
-
-// Cadastro IDR: cada propriedade do GeoJSON já é um rótulo legível
-// (scripts/build_agroindustrias_idr.py), então o tooltip lista todas.
-const IDR_TITULO = new Set(['id', 'Agroindústria', 'Município']);
-export function agroindustriaIdrTooltipHtml(p) {
-  const linhas = Object.entries(p)
-    .filter(([k]) => !IDR_TITULO.has(k))
-    .map(([k, v]) => `<div><span class="vt-dim">${escapeHtml(k)}:</span> ${escapeHtml(v)}</div>`);
-  return `<div class="vt-nome">🧺 ${escapeHtml(p['Agroindústria'] ?? 'Agroindústria')}</div>`
-    + `<div>${escapeHtml(p['Município'] ?? '')} - PR</div>`
-    + `<div style="columns:2;column-gap:14px;margin-top:4px;font-size:10px">${linhas.join('')}</div>`
-    + '<div class="vt-fontes">Fonte: IDR-Paraná, diagnóstico das agroindústrias 2023 e cadastro GETEC</div>';
-}
 
 export const datageoAgroindustriasLayer = makePointsLayer({
   id: 'datageo-agroindustrias',
@@ -253,35 +209,10 @@ export const datageoAgroindustriasLayer = makePointsLayer({
   icon: '🏭',
   source: 'SIGSIF/MAPA · OSM',
   url: '/privado/agroindustrias-pr.geojson',
-  styleFor: (p) => {
-    const s = AGRO_STYLE[p.kind];
-    if (!s) return null;
-    return {
-      grupo: p.kind,
-      size: s.size,
-      color: cssColor(s.color, 0.9),
-      label: `${s.rotulo}: ${p.nome}`,
-      labelMaxDist: 120_000,
-    };
-  },
+  styleFor: cesiumStyle(agroindustriaEstilo),
   tooltip: agroindustriaTooltipHtml,
-  legend: Object.entries(AGRO_STYLE).map(([grupo, s]) => ({ grupo, label: s.rotulo, color: s.color })),
+  legend: AGRO_LEGENDA,
 });
-
-const IDR_GRUPOS = [
-  { grupo: 'vegetal', label: 'Origem vegetal', color: '#4ade80' },
-  { grupo: 'animal', label: 'Origem animal', color: '#f472b6' },
-  { grupo: 'mista', label: 'Vegetal e animal', color: '#c084fc' },
-];
-const IDR_COR = Object.fromEntries(IDR_GRUPOS.map((g) => [g.grupo, g.color]));
-
-// Matéria-prima do diagnóstico ou, no ponto só do GETEC, o tipo (Vegetal/Animal/Mista).
-const idrGrupo = (mp = '') => {
-  const animal = mp.includes('Animal') || mp.includes('Mista');
-  const vegetal = mp.includes('Vegetal') || mp.includes('Mista');
-  if (animal && vegetal) return 'mista';
-  return animal ? 'animal' : 'vegetal';
-};
 
 export const datageoAgroindustriasIdrLayer = makePointsLayer({
   id: 'datageo-agroindustrias-idr',
@@ -289,33 +220,11 @@ export const datageoAgroindustriasIdrLayer = makePointsLayer({
   icon: '🧺',
   source: 'IDR-Paraná 2023',
   url: '/privado/agroindustrias-idr-pr.geojson',
-  styleFor: (p) => {
-    const grupo = idrGrupo(p['Matéria-prima'] ?? p['GETEC · Tipo']);
-    return {
-      grupo,
-      size: 6,
-      color: cssColor(IDR_COR[grupo], 0.9),
-      label: p['Agroindústria'],
-      labelMaxDist: 40_000,
-    };
-  },
+  styleFor: cesiumStyle(agroindustriaIdrEstilo),
   tooltip: agroindustriaIdrTooltipHtml,
   tooltipWidth: 720,
   legend: IDR_GRUPOS,
 });
-
-const ROTA_STYLE = {
-  'Rota do Queijo Paranaense': { color: '#facc15', icon: '🧀' },
-  'Rota da Uva e do Vinho': { color: '#a855f7', icon: '🍇' },
-};
-
-export function rotaTuristicaTooltipHtml(p) {
-  const s = ROTA_STYLE[p.rota] ?? { icon: '📍' };
-  const desc = escapeHtml(p.descricao ?? '').replace(/\n/g, '<br>');
-  return `<div class="vt-nome">${s.icon} ${escapeHtml(p.nome)}</div>`
-    + `<div class="vt-berco">${escapeHtml(p.rota)}</div>`
-    + (desc ? `<div style="margin-top:4px">${desc}</div>` : '');
-}
 
 export const datageoRotasTuristicasLayer = makePointsLayer({
   id: 'datageo-rotas-turisticas',
@@ -323,16 +232,10 @@ export const datageoRotasTuristicasLayer = makePointsLayer({
   icon: '🧀',
   source: 'Rota do Queijo · Rota da Uva e Vinho',
   url: '/data/rotas-turisticas-pr.geojson',
-  styleFor: (p) => ({
-    grupo: p.rota,
-    size: 9,
-    color: cssColor(ROTA_STYLE[p.rota]?.color ?? '#e2e8f0'),
-    label: p.nome,
-    labelMaxDist: 150_000,
-  }),
+  styleFor: cesiumStyle(rotaTuristicaEstilo),
   tooltip: rotaTuristicaTooltipHtml,
   tooltipWidth: 420,
-  legend: Object.entries(ROTA_STYLE).map(([grupo, s]) => ({ grupo, label: grupo, color: s.color })),
+  legend: ROTA_LEGENDA,
 });
 
 export const datageoCeasasLayer = makePointsLayer({
@@ -341,15 +244,8 @@ export const datageoCeasasLayer = makePointsLayer({
   icon: '🥬',
   source: 'CEASA/PR',
   url: '/data/ceasas-pr.geojson',
-  styleFor: (p) => ({
-    grupo: 'ceasa',
-    size: 11,
-    color: cssColor('#22c55e'),
-    label: p.nome,
-    // So 5 unidades: label sempre visivel na visao estadual.
-    labelMaxDist: 2_500_000,
-  }),
-  legend: [{ grupo: 'ceasa', label: 'CEASA', color: '#22c55e' }],
+  styleFor: cesiumStyle(ceasaEstilo),
+  legend: CEASA_LEGENDA,
 });
 
 export const DATAGEO_LOGISTICA_LAYERS = [

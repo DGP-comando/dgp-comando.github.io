@@ -12,16 +12,18 @@
 
 import * as Cesium from 'cesium';
 import { createSlicedLineLayer } from './slicedLineLayer.js';
+import { DISTRIBUICAO_KV } from './energiaLogisticaEstilos.js';
 
 // Reexportados porque os testes de integridade das células (e qualquer
 // consumidor externo) sempre entraram por este módulo.
 export { cellKey, decodeCell, nearestCells } from './slicedLineLayer.js';
 
-// Cor e largura por tensão nominal (kV).
-const KV_STYLES = Object.freeze({
-  34.5: Object.freeze({ color: Cesium.Color.fromCssColorString('#fb7185').withAlpha(0.8), width: 1.6 }),
-  13.8: Object.freeze({ color: Cesium.Color.fromCssColorString('#34d399').withAlpha(0.7), width: 1.1 }),
-});
+// Cor e largura por tensão nominal (kV), de energiaLogisticaEstilos.js (sem Cesium).
+const KV_STYLES = Object.freeze(Object.fromEntries(
+  Object.entries(DISTRIBUICAO_KV).map(([kv, s]) => [
+    kv, Object.freeze({ color: Cesium.Color.fromCssColorString(s.css).withAlpha(s.alpha), width: s.width }),
+  ]),
+));
 
 export const datageoDistribuicaoLayer = createSlicedLineLayer({
   id: 'datageo-distribuicao',
