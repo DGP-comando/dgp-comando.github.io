@@ -4,6 +4,7 @@ import {
   setOverlayEntries,
   setOverlaySourceVisible,
 } from '../overlays/worldOverlay.js';
+import { earthquakeDepthBand } from './earthquakeStyle.js';
 
 /**
  * USGS earthquake discs — last 24 hours, M2.5+.
@@ -43,10 +44,13 @@ const DEFAULT_OVERLAY_HOST = Object.freeze({
  *  - Intermediate (70-300km): Orange
  *  - Deep (>300km): Yellow
  */
+const DEPTH_COLORS = Object.freeze({
+  red: Cesium.Color.RED,
+  orange: Cesium.Color.ORANGE,
+  yellow: Cesium.Color.YELLOW,
+});
 function depthColor(depthKm) {
-  if (depthKm < 70) return Cesium.Color.RED;
-  if (depthKm < 300) return Cesium.Color.ORANGE;
-  return Cesium.Color.YELLOW;
+  return DEPTH_COLORS[earthquakeDepthBand(depthKm)];
 }
 
 /**

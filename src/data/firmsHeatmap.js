@@ -35,6 +35,17 @@ import {
   setOverlaySourceVisible,
 } from '../overlays/worldOverlay.js';
 import { requestWorldFocus } from '../worldFocus.js';
+import {
+  confidenceBucket,
+  detectionSeverity,
+  fireIntensity,
+  formatAge,
+  formatAgoMinutes,
+  formatFrp,
+  formatLatLon,
+  frpPixelSize,
+  heatScore,
+} from './firmsFormat.js';
 
 /** Same-origin live-fires proxy (vite.config.js firmsProxy — key stays server-side). */
 // Fusao DataGeo: os focos vem do Supabase do c2-parana via client-side
@@ -522,8 +533,7 @@ export function createFirmsHeatmapLayer({
         const latCell = Math.floor(fire.lat / gridDegrees) * gridDegrees;
         const lonCell = Math.floor(fire.lon / gridDegrees) * gridDegrees;
         const key = `${latCell.toFixed(3)}:${lonCell.toFixed(3)}`;
-        // confidence is normalized 0..1 — weight ×4 preserves the old 0..100×0.04 scale.
-        const intensity = Math.max(1, fire.frp * 0.18 + fire.confidence * 4 + fire.brightness * 0.01);
+        const intensity = fireIntensity(fire);
         const existing = cells.get(key) || {
           latCell,
           lonCell,
@@ -1242,10 +1252,6 @@ function cellIntersectsBounds(cell, gridDegrees, bounds) {
   return east >= bounds.west && west <= bounds.east;
 }
 
-function heatScore(cell) {
-  return cell.intensity + cell.count * 0.8 + cell.night * 0.6 + cell.maxFrp * 0.12;
-}
-
 function heatColor(value, alpha) {
   if (value > 0.72) return Cesium.Color.RED.withAlpha(alpha);
   if (value > 0.42) return Cesium.Color.ORANGE.withAlpha(alpha);
@@ -1259,15 +1265,8 @@ function heatColor(value, alpha) {
  * @returns {{name: string, color: Cesium.Color}}
  */
 function detectionColorStop(fire) {
-  const heat = Math.min(1, Math.sqrt(Math.max(0, fire.frp) / 150) * 0.85 + fire.confidence * 0.15);
-  if (heat > 0.72) return DETECTION_COLOR_STOPS[0];
-  if (heat > 0.42) return DETECTION_COLOR_STOPS[1];
-  return DETECTION_COLOR_STOPS[2];
-}
-
-/** FRP → core marker pixel size, clamped to 8..28px. */
-function frpPixelSize(frp) {
-  return Math.max(8, Math.min(28, Math.round(8 + Math.sqrt(Math.max(0, frp)) * 2)));
+  const severity = detectionSeverity(fire);
+  return DETECTION_COLOR_STOPS.find((stop) => stop.name === severity);
 }
 
 /** Quantize a core size to a 2px bucket so the sprite cache stays tiny. */
@@ -1559,40 +1558,4 @@ function cellAccent(normalized) {
   if (normalized > 0.72) return accentForSeverity('red');
   if (normalized > 0.42) return accentForSeverity('orange');
   return accentForSeverity('yellow');
-}
-
-/** Coordinate line like "30.512°N 75.831°E". */
-function formatLatLon(lat, lon) {
-  const latPart = `${Math.abs(lat).toFixed(3)}°${lat >= 0 ? 'N' : 'S'}`;
-  const lonPart = `${Math.abs(lon).toFixed(3)}°${lon >= 0 ? 'E' : 'W'}`;
-  return `${latPart} ${lonPart}`;
-}
-
-function formatFrp(frp) {
-  return frp >= 10 ? frp.toFixed(0) : frp.toFixed(1);
-}
-
-/** Millisecond delta → "<1h" / "Xh" / "Xd", or '' for invalid input. */
-function formatAge(deltaMs) {
-  if (!Number.isFinite(deltaMs) || deltaMs < 0) return '';
-  const hours = deltaMs / 3600000;
-  if (hours < 1) return '<1h';
-  if (hours < 48) return `${Math.round(hours)}h`;
-  return `${Math.round(hours / 24)}d`;
-}
-
-/** Millisecond delta → "<1m ago" / "Xm ago" / "Xh ago" (fresh-feed readout). */
-function formatAgoMinutes(deltaMs) {
-  if (!Number.isFinite(deltaMs) || deltaMs < 0) return 'just now';
-  const minutes = Math.floor(deltaMs / 60000);
-  if (minutes < 1) return '<1m ago';
-  if (minutes < 90) return `${minutes}m ago`;
-  return `${Math.round(minutes / 60)}h ago`;
-}
-
-/** Normalized 0..1 confidence → low/nominal/high display bucket. */
-function confidenceBucket(confidence) {
-  if (confidence >= 0.75) return 'high';
-  if (confidence >= 0.45) return 'nominal';
-  return 'low';
 }
