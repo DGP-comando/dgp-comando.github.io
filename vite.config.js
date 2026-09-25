@@ -7556,6 +7556,22 @@ export default defineConfig(({ mode }) => {
     plugins: [
       prodProxyLayerStubs(),
       cesium(),
+      // O vite-plugin-cesium injeta Cesium.js e widgets.css em TODA página;
+      // o protótipo MapLibre (maplibre.html) não usa o Cesium e não deve
+      // baixá-lo, senão a comparação de carga fica sem sentido.
+      {
+        name: 'dgp-maplibre-sem-cesium',
+        enforce: 'post',
+        transformIndexHtml: {
+          order: 'post',
+          handler(html, ctx) {
+            if (!ctx.path.endsWith('/maplibre.html')) return html;
+            return html
+              .replace(/<link[^>]*cesium\/Widgets\/widgets\.css[^>]*>\s*/g, '')
+              .replace(/<script[^>]*cesium\/Cesium\.js[^>]*><\/script>\s*/g, '');
+          },
+        },
+      },
       openSkyProxy(),
       celestrakProxy(),
       tomtomProxy(),
@@ -7594,6 +7610,13 @@ export default defineConfig(({ mode }) => {
       // The Cesium engine bundle is inherently large; raise the warning ceiling
       // so the build log isn't dominated by an expected chunk-size notice.
       chunkSizeWarningLimit: 1500,
+      rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          // Protótipo da engine MapLibre (src/maplibre/), página separada.
+          maplibre: path.resolve(__dirname, 'maplibre.html'),
+        },
+      },
     },
   };
 });

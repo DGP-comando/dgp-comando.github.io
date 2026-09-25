@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DataGeo PR — Sala de Situação</title>
+  <script>
+    // ?engine=maplibre abre o protótipo MapLibre (maplibre.html) antes de baixar o Cesium.
+    if (new URLSearchParams(location.search).get('engine') === 'maplibre') {
+      location.replace('/maplibre.html' + location.search + location.hash);
+    }
+  </script>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="stylesheet" href="/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
