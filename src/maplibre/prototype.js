@@ -309,8 +309,12 @@ setEstilo(state.estilo);
 paintScope();
 $('#loading-screen').classList.add('hidden');
 
-map.once('load', async () => {
+// As camadas iniciais entram assim que o ESTILO carrega, sem esperar o `load`
+// (que só dispara com os tiles iniciais baixados e atrasa muito com rede ruim).
+map.once('load', () => {
   $('#boot-ms').textContent = `${Math.round(performance.now())} ms`;
+});
+map.once('style.load', async () => {
   if (state.terrain) setTerrain(true);
   const known = new Set(LAYERS.map((l) => l.id));
   await Promise.all(state.initialLayers.filter((id) => known.has(id)).map((id) => registry.setEnabled(id, true)));
