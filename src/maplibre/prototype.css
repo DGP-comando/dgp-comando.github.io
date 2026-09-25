@@ -1,0 +1,205 @@
+/* src/maplibre/prototype.css
+ *
+ * Identidade visual do DGP no protótipo MapLibre: os tokens, a barra de título
+ * e o indicador de estilo vêm do style.css do app Cesium (copiados, não
+ * importados, porque o style.css inteiro traz o layout do app principal); a
+ * máscara circular (scope) e os estilos visuais são refeitos com CSS em vez de
+ * shaders de pós-processamento.
+ */
+
+:root {
+  --bg-dark: #0a0a0f;
+  --glass-bg: rgba(12, 12, 20, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(255, 255, 255, 0.15);
+  --accent: #00d4ff;
+  --accent-dim: rgba(0, 212, 255, 0.15);
+  --accent-glow: rgba(0, 212, 255, 0.4);
+  --text-primary: #e8eaed;
+  --text-secondary: rgba(232, 234, 237, 0.5);
+  --text-dim: rgba(232, 234, 237, 0.3);
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --panel-radius: 16px;
+  --transition-smooth: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+[hidden] { display: none !important; }
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font: 13px/1.4 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* Campo de estrelas: aparece em volta do globo nas vistas de longe (o
+     MapLibre limpa o canvas transparente fora da esfera). */
+  background:
+    radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,.55), transparent 60%),
+    radial-gradient(1px 1px at 72% 12%, rgba(255,255,255,.45), transparent 60%),
+    radial-gradient(1.2px 1.2px at 88% 64%, rgba(255,255,255,.5), transparent 60%),
+    radial-gradient(1px 1px at 34% 82%, rgba(255,255,255,.35), transparent 60%),
+    radial-gradient(1px 1px at 55% 45%, rgba(255,255,255,.3), transparent 60%),
+    radial-gradient(1px 1px at 6% 70%, rgba(255,255,255,.4), transparent 60%),
+    radial-gradient(1px 1px at 93% 30%, rgba(255,255,255,.35), transparent 60%),
+    radial-gradient(1px 1px at 25% 40%, rgba(255,255,255,.25), transparent 60%),
+    var(--bg-dark);
+  background-size: 420px 420px, 380px 380px, 520px 520px, 300px 300px, 460px 460px, 340px 340px, 500px 500px, 260px 260px, auto;
+}
+
+#map { position: absolute; inset: 0; }
+
+/* ── Estilos visuais ─────────────────────────────────────────────────────
+   Filtro só no canvas do mapa (os controles e o painel não mudam) e uma
+   camada de efeito por cima: linhas de varredura, ruído, tinta. */
+.maplibregl-canvas { transition: filter 400ms ease; }
+body[data-estilo="retro"] .maplibregl-canvas { filter: contrast(1.18) saturate(1.35) brightness(1.04); }
+body[data-estilo="surveillance"] .maplibregl-canvas {
+  filter: grayscale(1) brightness(1.3) contrast(1.3) sepia(1) hue-rotate(58deg) saturate(3.2);
+}
+body[data-estilo="thermal"] .maplibregl-canvas { filter: grayscale(1) contrast(1.7) brightness(1.12); }
+body[data-estilo="anime"] .maplibregl-canvas { filter: saturate(1.9) contrast(1.15) brightness(1.08); }
+body[data-estilo="noir"] .maplibregl-canvas { filter: grayscale(1) contrast(1.5) brightness(0.82); }
+body[data-estilo="snow"] .maplibregl-canvas { filter: brightness(1.28) saturate(0.35) contrast(0.92) hue-rotate(-8deg); }
+
+#fx { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+body[data-estilo="retro"] #fx {
+  background:
+    repeating-linear-gradient(0deg, rgba(0,0,0,.28) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.45) 100%);
+}
+body[data-estilo="surveillance"] #fx {
+  background:
+    repeating-linear-gradient(0deg, rgba(0,20,0,.22) 0 1px, transparent 1px 2px),
+    radial-gradient(circle at center, rgba(120,255,120,.06), rgba(0,40,0,.25) 80%);
+  mix-blend-mode: multiply;
+}
+body[data-estilo="thermal"] #fx {
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.04) 0 1px, transparent 1px 3px);
+}
+body[data-estilo="snow"] #fx { background: rgba(200, 225, 255, .10); }
+
+/* Máscara circular (scope): mesmo raio do app Cesium (keyhole = 0,5 × altura
+   × 1,05, borda com 11 % de feather), pintada por CSS e redesenhada só em
+   resize e na troca de opacidade de longe/perto. */
+#scope {
+  position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  transition: opacity 300ms ease;
+}
+body.scope-off #scope { opacity: 0; }
+
+/* ── Título e indicador (do style.css do app) ───────────────────────── */
+#title-bar {
+  position: fixed; top: 32px; left: 36px; z-index: 100;
+  pointer-events: none; user-select: none;
+}
+#title-bar .title-glow {
+  position: absolute; top: -20px; left: -20px; width: 200px; height: 80px;
+  background: radial-gradient(ellipse, var(--accent-dim) 0%, transparent 70%);
+  filter: blur(20px); opacity: 0.6;
+}
+#title-bar h1 {
+  display: flex; align-items: center; gap: 12px; margin: 0;
+  font: 600 26px var(--font-mono); letter-spacing: 8px;
+  color: var(--text-primary); text-shadow: 0 0 30px var(--accent-glow); position: relative;
+}
+#title-bar .title-logo { display: block; width: 52px; filter: drop-shadow(0 0 12px rgba(0, 246, 255, 0.5)); }
+#title-bar .title-logo img { display: block; width: 100%; }
+#title-bar .title-accent { color: var(--accent); font-weight: 300; }
+#title-bar .subtitle {
+  font: 11px var(--font-mono); letter-spacing: 5px; color: var(--text-dim);
+  margin: 8px 0 0; text-transform: uppercase;
+}
+#style-indicator {
+  position: fixed; top: 32px; right: 36px; z-index: 100;
+  pointer-events: none; user-select: none; text-align: right;
+}
+#style-indicator .indicator-label {
+  display: block; font: 10px var(--font-mono); letter-spacing: 3px;
+  color: var(--text-dim); text-transform: uppercase;
+}
+#style-indicator .indicator-value {
+  display: block; font: 500 16px var(--font-mono); letter-spacing: 5px;
+  color: var(--accent); margin-top: 4px; text-shadow: 0 0 20px var(--accent-glow);
+}
+#style-indicator .engine { display: block; margin-top: 10px; font: 10px var(--font-mono); letter-spacing: 2px; color: var(--text-dim); }
+
+/* ── Painel ─────────────────────────────────────────────────────────── */
+#panel {
+  position: fixed; top: 150px; left: 36px; z-index: 100; width: 290px;
+  max-height: calc(100% - 250px); overflow: auto;
+  background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--panel-radius);
+  backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  padding: 14px 16px; scrollbar-width: thin;
+}
+#panel h2 {
+  display: flex; align-items: center; gap: 10px;
+  font: 500 10px var(--font-mono); letter-spacing: 3px; color: var(--text-secondary);
+  margin: 16px 0 8px; text-transform: uppercase;
+}
+#panel h2:first-child { margin-top: 2px; }
+#panel h2::after { content: ''; flex: 1; height: 1px; background: var(--glass-border); }
+#bases { display: flex; gap: 4px; }
+#bases button, #estilos button {
+  flex: 1; padding: 7px 4px; background: rgba(255,255,255,.03); color: var(--text-primary);
+  border: 1px solid var(--glass-border); border-radius: 10px;
+  font: 500 11px var(--font-mono); letter-spacing: 1px; cursor: pointer; transition: var(--transition-smooth);
+}
+#bases button:hover, #estilos button:hover { border-color: var(--glass-border-hover); }
+#bases button.on, #estilos button.on {
+  background: var(--accent-dim); color: var(--accent); border-color: var(--accent-glow);
+  box-shadow: 0 0 16px rgba(0, 212, 255, .15) inset;
+}
+.toggles { display: grid; gap: 5px; margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
+.toggles label, .layer { display: flex; gap: 9px; align-items: flex-start; cursor: pointer; }
+.layer { padding: 5px 0; }
+.layer .name { display: block; font-size: 12.5px; }
+.layer .meta { display: block; color: var(--text-dim); font: 10.5px var(--font-mono); margin-top: 1px; }
+.layer .meta b { color: var(--accent); font-weight: 500; }
+.err { color: #ff6b81; }
+input[type=checkbox] { accent-color: var(--accent); margin-top: 2px; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; font: 11px var(--font-mono); }
+dt { color: var(--text-dim); }
+dd { margin: 0; text-align: right; color: var(--text-primary); }
+#panel footer { margin-top: 12px; font-size: 11px; color: var(--text-dim); }
+#panel footer a { color: var(--accent); }
+
+/* Dock de estilos visuais (teclas 1-7, como no app). */
+#estilos {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 100;
+  display: flex; gap: 6px; padding: 8px;
+  background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--panel-radius);
+  backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+}
+#estilos button { flex: none; min-width: 64px; }
+#estilos button kbd { display: block; font: 9px var(--font-mono); color: var(--text-dim); margin-top: 2px; }
+
+#tooltip {
+  position: absolute; top: 0; left: 0; pointer-events: none; max-width: 280px; z-index: 150;
+  background: rgba(10, 12, 20, .9); border: 1px solid var(--accent-glow); border-radius: 10px;
+  padding: 8px 11px; font-size: 12px; box-shadow: 0 0 24px rgba(0, 212, 255, .12);
+}
+#tooltip strong { display: block; margin-bottom: 3px; font: 600 12px var(--font-mono); letter-spacing: 1px; color: var(--accent); }
+#tooltip span { color: var(--text-secondary); }
+
+.maplibregl-ctrl-group { background: var(--glass-bg) !important; border: 1px solid var(--glass-border); }
+.maplibregl-ctrl-group button span { filter: invert(1) opacity(.8); }
+.maplibregl-ctrl-scale { background: rgba(10,10,15,.6); color: var(--text-secondary); border-color: var(--text-dim); font-family: var(--font-mono); }
+.maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(10,10,15,.7); color: var(--text-dim); }
+.maplibregl-ctrl-attrib a { color: var(--text-secondary); }
+
+@media (max-width: 720px) {
+  #title-bar { top: 14px; left: 14px; }
+  #title-bar h1 { font-size: 18px; letter-spacing: 5px; }
+  #title-bar .title-logo { width: 36px; }
+  #title-bar .subtitle { display: none; }
+  #style-indicator { top: 14px; right: 14px; }
+  #panel { top: auto; bottom: 86px; left: 8px; right: 8px; width: auto; max-height: 38%; }
+  #estilos { bottom: 8px; left: 8px; right: 8px; transform: none; overflow-x: auto; }
+}
+
+/* Controles do MapLibre acima da máscara circular (#scope, z-index 3). */
+.maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { z-index: 5; }

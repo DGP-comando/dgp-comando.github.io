@@ -12,6 +12,7 @@
 
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import './prototype.css';
 import { BASEMAPS, buildBaseStyle } from './basemaps.js';
 import { LAYERS, createEstradasLoader } from './layers.js';
 
@@ -20,6 +21,18 @@ import { LAYERS, createEstradasLoader } from './layers.js';
 const T0 = 0;
 const params = new URLSearchParams(location.search);
 const $ = (sel) => document.querySelector(sel);
+
+// Os mesmos sete estilos do dock ESTILOS VISUAIS do app (teclas 1-7). Aqui são
+// filtros CSS no canvas + uma camada de efeito (prototype.css), não shaders.
+const ESTILOS = [
+  { id: 'normal', label: 'Normal' },
+  { id: 'retro', label: 'CRT' },
+  { id: 'surveillance', label: 'NVG' },
+  { id: 'thermal', label: 'FLIR' },
+  { id: 'anime', label: 'Anime' },
+  { id: 'noir', label: 'Noir' },
+  { id: 'snow', label: 'Snow' },
+];
 
 const TERRAIN_SOURCE = 'dg-terrain';
 const TERRAIN_SPEC = {
@@ -42,6 +55,8 @@ const state = {
       : LAYERS.filter((l) => l.defaultOn).map((l) => l.id),
   ),
   timings: new Map(), // id -> {ms, info, error}
+  estilo: ESTILOS.some((e) => e.id === params.get('estilo')) ? params.get('estilo') : 'normal',
+  scope: params.get('scope') !== '0',
 };
 
 // O worker do MapLibre 6 é servido de public/vendor (scripts/prepare-maplibre-worker.mjs).
@@ -168,6 +183,48 @@ function setTerrain(on) {
   renderPanel();
 }
 
+function setEstilo(id) {
+  state.estilo = id;
+  document.body.dataset.estilo = id;
+  $('#active-style-name').textContent = ESTILOS.find((e) => e.id === id).label.toUpperCase();
+  syncUrl();
+  renderPanel();
+}
+
+// ---------------------------------------------------------------------------
+// Máscara circular (scope), mesma geometria do src/scopeMask.js do app:
+// raio = 0,5 × altura × 1,05, feather de 11 % do raio centrado na borda, fora
+// preto da página a 94 % na vista de globo inteiro e opaco ao aproximar.
+
+const SCOPE_RADIUS = 1.05;
+const SCOPE_FEATHER = 0.11;
+let scopeKey = '';
+
+function paintScope() {
+  document.body.classList.toggle('scope-off', !state.scope);
+  if (!state.scope) return;
+  const { clientWidth: w, clientHeight: h } = map.getContainer();
+  const r = h * 0.5 * SCOPE_RADIUS;
+  const half = r * SCOPE_FEATHER * 0.5;
+  // Zoom 2 ~ globo inteiro (10 Mm no Cesium); zoom 3 ~ 7 Mm, já opaco.
+  const t = Math.min(1, Math.max(0, map.getZoom() - 2));
+  const alpha = (0.94 + 0.06 * t).toFixed(3);
+  const key = `${w}x${h}:${alpha}`;
+  if (key === scopeKey) return;
+  scopeKey = key;
+  $('#scope').style.background = `radial-gradient(circle at 50% 50%, rgba(5,5,8,0) ${r - half}px, rgba(5,5,8,${alpha}) ${r + half}px)`;
+}
+
+function setScope(on) {
+  state.scope = on;
+  scopeKey = '';
+  paintScope();
+  syncUrl();
+}
+
+map.on('resize', paintScope);
+map.on('zoom', paintScope);
+
 function syncUrl() {
   const q = new URLSearchParams(location.search);
   q.set('base', state.base);
@@ -175,6 +232,8 @@ function syncUrl() {
   state.globe ? q.delete('proj') : q.set('proj', '2d');
   state.terrain ? q.set('relevo', '1') : q.delete('relevo');
   state.esriLabels ? q.delete('rotulos') : q.set('rotulos', '0');
+  state.estilo === 'normal' ? q.delete('estilo') : q.set('estilo', state.estilo);
+  state.scope ? q.delete('scope') : q.set('scope', '0');
   q.delete('engine');
   history.replaceState(null, '', `${location.pathname}?${q}${location.hash}`);
 }
@@ -238,6 +297,10 @@ function renderPanel() {
   $('#esri-labels').closest('label').hidden = state.base !== 'esri';
   $('#esri-labels').checked = state.esriLabels;
   $('#globe').checked = state.globe;
+  $('#scope-toggle').checked = state.scope;
+  $('#estilos').innerHTML = ESTILOS.map(
+    (e, i) => `<button type="button" data-estilo="${e.id}" class="${e.id === state.estilo ? 'on' : ''}">${e.label}<kbd>${i + 1}</kbd></button>`,
+  ).join('');
   $('#terrain').checked = state.terrain;
   $('#layers').innerHTML = LAYERS.map((def) => {
     const t = state.timings.get(def.id);
@@ -263,7 +326,17 @@ $('#layers').addEventListener('change', (e) => {
 $('#esri-labels').addEventListener('change', (e) => setEsriLabels(e.target.checked));
 $('#globe').addEventListener('change', (e) => setGlobe(e.target.checked));
 $('#terrain').addEventListener('change', (e) => setTerrain(e.target.checked));
-$('#engine-version').textContent = `MapLibre GL JS ${maplibregl.getVersion()}`;
+$('#scope-toggle').addEventListener('change', (e) => setScope(e.target.checked));
+$('#estilos').addEventListener('click', (e) => {
+  const id = e.target.closest('[data-estilo]')?.dataset.estilo;
+  if (id) setEstilo(id);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea')) return;
+  const estilo = ESTILOS[Number(e.key) - 1];
+  if (estilo) setEstilo(estilo.id);
+});
+$('#engine-version').textContent = `MAPLIBRE GL ${maplibregl.getVersion()} · PROTÓTIPO`;
 
 // FPS: quadros realmente desenhados pelo MapLibre (o mapa só redesenha quando algo muda).
 let frames = 0;
@@ -273,7 +346,8 @@ setInterval(() => {
   frames = 0;
 }, 1000);
 
-renderPanel();
+setEstilo(state.estilo);
+paintScope();
 map.once('load', async () => {
   $('#boot-ms').textContent = `${Math.round(performance.now() - T0)} ms`;
   if (state.terrain) setTerrain(true);

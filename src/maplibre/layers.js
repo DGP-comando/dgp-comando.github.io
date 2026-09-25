@@ -38,8 +38,20 @@ export const LAYERS = [
         type: 'fill',
         source: 'dg-municipios',
         paint: {
-          'fill-color': '#22d3ee',
+          'fill-color': '#00d4ff',
           'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.28, 0.02],
+        },
+      },
+      {
+        // Brilho sob a divisa, no lugar do bloom do app Cesium.
+        id: 'dg-municipios-glow',
+        type: 'line',
+        source: 'dg-municipios',
+        paint: {
+          'line-color': '#2ee6d6',
+          'line-opacity': 0.35,
+          'line-blur': 3,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2.5, 10, 6],
         },
       },
       {
@@ -47,8 +59,8 @@ export const LAYERS = [
         type: 'line',
         source: 'dg-municipios',
         paint: {
-          'line-color': '#7dd3fc',
-          'line-opacity': 0.75,
+          'line-color': '#5ff5e4',
+          'line-opacity': 0.9,
           'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.4, 10, 1.4],
         },
       },

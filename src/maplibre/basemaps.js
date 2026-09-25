@@ -64,7 +64,14 @@ export function buildBaseStyle(id, { esriLabels = true } = {}) {
       'esri-labels': { type: 'raster', tiles: [ESRI_LABELS_URL], tileSize: 256, maxzoom: 19 },
     },
     [
-      { id: 'base-esri', type: 'raster', source: 'esri' },
+      {
+        id: 'base-esri',
+        type: 'raster',
+        source: 'esri',
+        // Tom mais fechado, como o globo Cesium (atmosfera com saturação e
+        // brilho reduzidos): o satélite cru compete com as camadas.
+        paint: { 'raster-saturation': -0.12, 'raster-brightness-max': 0.86, 'raster-contrast': 0.08 },
+      },
       {
         id: 'base-esri-labels',
         type: 'raster',
