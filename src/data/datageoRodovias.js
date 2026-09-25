@@ -24,6 +24,7 @@
 import * as Cesium from 'cesium';
 import { governorRequestRender } from '../renderGovernor.js';
 import { createReadyPump } from './entityDiff.js';
+import { lineStringsFromGeojson } from './geojsonLines.js';
 
 const FED_URL = '/data/rodovias-federais-pr.geojson';
 const EST_URL = '/data/rodovias-estaduais-pr.geojson';
@@ -35,38 +36,9 @@ const EST_COLOR = Cesium.Color.fromCssColorString('#7dd3fc').withAlpha(0.6);
 const FED_STYLE = Object.freeze({ color: FED_COLOR, width: 2.4, arcType: Cesium.ArcType.RHUMB });
 const EST_STYLE = Object.freeze({ color: EST_COLOR, width: 1.6, arcType: Cesium.ArcType.RHUMB });
 
-/**
- * Trechos [lon, lat][] utilizaveis de um GeoJSON de linhas: LineString e
- * MultiLineString, com pelo menos dois vertices finitos e distintos.
- * @param {object} geojson
- * @returns {Array<Array<[number, number]>>}
- */
-export function lineStringsFromGeojson(geojson) {
-  const lines = [];
-  for (const feature of geojson?.features ?? []) {
-    const geom = feature?.geometry;
-    if (!geom) continue;
-    const parts = geom.type === 'LineString'
-      ? [geom.coordinates]
-      : geom.type === 'MultiLineString' ? geom.coordinates : [];
-    for (const coords of parts ?? []) {
-      if (isDrawableLine(coords)) lines.push(coords);
-    }
-  }
-  return lines;
-}
-
-function isDrawableLine(coords) {
-  if (!Array.isArray(coords) || coords.length < 2) return false;
-  const [lon0, lat0] = coords[0] ?? [];
-  let distinct = false;
-  for (const point of coords) {
-    const [lon, lat] = point ?? [];
-    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return false;
-    if (lon !== lon0 || lat !== lat0) distinct = true;
-  }
-  return distinct;
-}
+// lineStringsFromGeojson mora no modulo puro geojsonLines.js (tambem usado
+// pelo prototipo MapLibre); reexportada para quem sempre importou daqui.
+export { lineStringsFromGeojson };
 
 function toFlatDegrees(coords) {
   const flat = new Array(coords.length * 2);
