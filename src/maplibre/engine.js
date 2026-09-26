@@ -137,15 +137,22 @@ export function createEngine({
   });
 
   map.on('move', () => emit('camerachange'));
-  map.on('movestart', (e) => emit('movestart', e));
+  map.on('movestart', (e) => {
+    // Só depois do movestart DESTE voo o moveend significa "chegou": o
+    // flyTo/fitBounds para o movimento anterior e dispara um moveend antes.
+    if (state.flight) state.flight.started = true;
+    emit('movestart', e);
+  });
   map.on('moveend', (e) => {
     emit('moveend', e);
-    if (state.flight && !map.isMoving()) {
-      const { complete } = state.flight;
-      state.flight = null;
-      complete?.();
-    }
+    if (state.flight?.started && !map.isMoving()) finishFlight();
   });
+  function finishFlight() {
+    const flight = state.flight;
+    if (!flight) return;
+    state.flight = null;
+    flight.complete?.();
+  }
   map.on('render', () => emit('render'));
   map.on('resize', () => emit('resize'));
   map.on('click', (e) => emit('click', { x: e.point.x, y: e.point.y, lon: e.lngLat.lng, lat: e.lngLat.lat, originalEvent: e.originalEvent }));
@@ -198,7 +205,12 @@ export function createEngine({
       state.flight = null;
       prev.cancel?.();
     }
-    state.flight = { complete, cancel };
+    const flight = { complete, cancel, started: false };
+    state.flight = flight;
+    // Destino igual à vista atual: o MapLibre não se move e não há movestart.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (state.flight === flight && !flight.started && !map.isMoving()) finishFlight();
+    }));
   }
 
   function setCameraView(view) {
@@ -208,9 +220,14 @@ export function createEngine({
 
   function flyToCamera(view, { duration = 3, complete, cancel, easing } = {}) {
     const opts = cameraOptionsFor(view);
+    if (!(duration > 0)) {
+      cancelFlight();
+      map.jumpTo(opts);
+      queueMicrotask(() => complete?.());
+      return;
+    }
     beginFlight({ complete, cancel });
-    map.flyTo({ ...opts, duration: Math.max(0, duration) * 1000, essential: true, ...(easing ? { easing } : {}) });
-    if (!(duration > 0)) queueMicrotask(() => map.fire('moveend'));
+    map.flyTo({ ...opts, duration: duration * 1000, essential: true, ...(easing ? { easing } : {}) });
   }
 
   /** Olhar para `target` de uma distância `rangeM` (metros em linha reta). */
