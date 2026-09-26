@@ -18,7 +18,14 @@
 // Sample acceptance is sanity-gated against the DEM prior when warm (a
 // vertical probe can hit a rooftop or another aircraft instead of pavement):
 // the mesh legitimately sits ABOVE bare earth, so the window is asymmetric.
-import * as Cesium from 'cesium';
+//
+// MIGRAÇÃO MAPLIBRE (2026-09): sem Cesium. Não há malha fotorrealista no
+// MapLibre, e o `engine` não tem `sampleHeight`: chamado com o engine, isto é
+// um no-op (o piso vem só do DEM em groundFloor.js). A lógica de racionamento
+// fica para um amostrador explícito (objeto com `sampleHeight(p)`, `p` =
+// {lon, lat, longitude, latitude (rad), height: 0}; altura da câmera em
+// `camera.positionCartographic.height` ou `cameraHeightM`; malha pronta quando
+// um primitivo visível tem `tilesLoaded === true`, por duck-typing).
 import {
   coarseFloorCoord, cachedMeshFloor, reportValidatedMeshFloorCell,
   setMeshFloorPreferred, meshFloorPreferred, cachedGroundFloor,
@@ -36,8 +43,6 @@ const MAX_SAMPLE_DIST_KM = 15;
  *  streamed LOD under a high camera is coarse everywhere, so every probe
  *  would latch junk. */
 const MAX_CAMERA_HEIGHT_M = 25_000;
-/** @type {Cesium.Cartographic} Scratch for probe coordinates. */
-const _scratchProbe = new Cesium.Cartographic();
 
 // Regime tracking: mesh cells only apply while the photoreal (google-3d)
 // stack renders. main.js re-dispatches MapStackController.onChange as this
@@ -55,7 +60,7 @@ if (typeof window !== 'undefined') {
  * True when a VISIBLE 3D tileset in the scene reports its streaming queue
  * drained (tilesLoaded) — the mirror of cctv.js's projectionTilesReady.
  * Walks top-level primitives only (a handful; once per poll).
- * @param {Cesium.Scene} scene
+ * @param {object} scene
  * @returns {boolean}
  */
 function _visibleTilesetLoaded(scene) {
@@ -63,7 +68,7 @@ function _visibleTilesetLoaded(scene) {
     const prims = scene.primitives;
     for (let i = 0; i < prims.length; i++) {
       const p = prims.get(i);
-      if (p instanceof Cesium.Cesium3DTileset && p.show) {
+      if (p && typeof p.tilesLoaded === 'boolean' && p.show) {
         return !!p.tilesLoaded;
       }
     }
@@ -86,7 +91,7 @@ function _approxKm(lat1, lon1, lat2, lon2) {
  * layer poll (never per contact, never per frame). Synchronous — Cesium's
  * sampleHeight is a CPU-side query against loaded tiles.
  *
- * @param {Cesium.Scene|undefined} scene - The scene (skipped when absent/torn down).
+ * @param {object|undefined} scene Amostrador (ou o engine: no-op) - The scene (skipped when absent/torn down).
  * @param {Array<{lat: number, lon: number}>} points - Contact/waypoint coords.
  * @param {object} [options]
  * @param {Array<object>} [options.excludeObjects] - Own billboards/models to
@@ -104,7 +109,7 @@ export function sampleMeshFloorCells(scene, points, { excludeObjects = [], viewe
   // numbers, wildly wrong — and the one-shot latch made them permanent.
   // Only sample when the visible Google tileset reports tilesLoaded AND the
   // camera is low enough that the streamed LOD near it is fine-grained.
-  const camH = scene.camera?.positionCartographic?.height;
+  const camH = scene.camera?.positionCartographic?.height ?? scene.cameraHeightM;
   if (!Number.isFinite(camH) || camH > MAX_CAMERA_HEIGHT_M) return;
   if (!_visibleTilesetLoaded(scene)) return;
   let sampled = 0;
@@ -123,8 +128,11 @@ export function sampleMeshFloorCells(scene, points, { excludeObjects = [], viewe
     }
     let height;
     try {
-      const carto = Cesium.Cartographic.fromDegrees(cell.lon, cell.lat, 0, _scratchProbe);
-      height = scene.sampleHeight(carto, excludeObjects);
+      const probe = {
+        lon: cell.lon, lat: cell.lat, height: 0,
+        longitude: cell.lon * Math.PI / 180, latitude: cell.lat * Math.PI / 180,
+      };
+      height = scene.sampleHeight(probe, excludeObjects);
       sampled += 1;
     } catch {
       continue; // scene mid-teardown — try again next poll

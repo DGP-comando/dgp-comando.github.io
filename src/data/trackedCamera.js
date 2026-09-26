@@ -1,9 +1,17 @@
-import * as Cesium from 'cesium';
+// src/data/trackedCamera.js
+//
+// MIGRAÇÃO MAPLIBRE (2026-09): sem Cesium. Tipos neutros:
+//  - alvo rastreado: objeto com `getPosition()` -> {lon, lat, alt} (o contrato
+//    de `engine.track`), opcionalmente `gevDisplayPosition()` com o mesmo
+//    formato (posição já consumida pelo desenho neste quadro);
+//  - vetores de câmera em `clampTrackedCameraPosition`: {x, y, z} simples
+//    (qualquer referencial local, como antes).
+// `applyTrackedCameraFrame(engine, alvo, viewFrom)` é o equivalente 2D do
+// enquadramento ENU do Cesium: liga `engine.track(alvo)` e, uma vez, voa a
+// câmera para olhar o alvo da distância `|viewFrom|` (mínimo 150 m), com o
+// pitch do vetor. O acompanhamento contínuo é do engine (centro segue o alvo).
 
-const MAX_FRAME_ATTEMPTS = 120;
 const MIN_TRACKED_RANGE_M = 150;
-const ZOOM_INERTIA_STATES = new WeakMap();
-
 /**
  * Preserve real-world model scale except when a very close tracked camera
  * would make the selected aircraft dominate the viewport.
@@ -43,54 +51,32 @@ export function trackedModelScaleForPixelCap({
 
 /**
  * Resolve the exact position already consumed by the tracked visual whenever
- * the layer exposes one, without advancing its CallbackProperty again.
+ * the layer exposes one, without advancing its dead-reckoning again.
  *
- * @param {Cesium.Entity} entity Tracked entity.
- * @param {Cesium.JulianDate} time Current viewer time.
- * @param {Cesium.Cartesian3} result Destination.
- * @returns {Cesium.Cartesian3|undefined} Camera-frame position.
+ * @param {object} target Alvo rastreado ({gevDisplayPosition?, getPosition?} ou
+ *   legado com `position.getValue(time)`).
+ * @param {*} [time] Ignorado no MapLibre (mantido pela assinatura).
+ * @param {object} [result] Destino opcional (recebe lon/lat/alt).
+ * @returns {{lon:number, lat:number, alt:number}|undefined}
  */
-export function trackedDisplayPositionForCamera(entity, time, result) {
-  const displayedPosition = entity?.gevDisplayPosition?.();
-  return displayedPosition
-    ? Cesium.Cartesian3.clone(displayedPosition, result)
-    : entity?.position?.getValue(time, result);
+export function trackedDisplayPositionForCamera(target, time, result) {
+  const p = target?.gevDisplayPosition?.() ?? target?.getPosition?.() ?? target?.position?.getValue?.(time);
+  if (!p) return undefined;
+  if (!result) return p;
+  return Object.assign(result, p);
 }
 
-function acquireStableTrackedZoom(controller, entity) {
-  if (!controller) return () => {};
-  let state = ZOOM_INERTIA_STATES.get(controller);
-  if (!state) {
-    state = {
-      originalInertiaZoom: controller.inertiaZoom,
-      originalMinimumZoomDistance: controller.minimumZoomDistance,
-      owners: new Set(),
-    };
-    ZOOM_INERTIA_STATES.set(controller, state);
-  }
-  state.owners.add(entity);
-  controller.inertiaZoom = 0;
-  controller.minimumZoomDistance = Math.max(
-    state.originalMinimumZoomDistance,
-    MIN_TRACKED_RANGE_M,
-  );
-  return () => {
-    const current = ZOOM_INERTIA_STATES.get(controller);
-    if (!current) return;
-    current.owners.delete(entity);
-    if (current.owners.size > 0) return;
-    controller.inertiaZoom = current.originalInertiaZoom;
-    controller.minimumZoomDistance = current.originalMinimumZoomDistance;
-    ZOOM_INERTIA_STATES.delete(controller);
-  };
-}
+const v3 = {
+  dot: (a, b) => a.x * b.x + a.y * b.y + a.z * b.z,
+  mag2: (a) => a.x * a.x + a.y * a.y + a.z * a.z,
+};
 
 /**
  * Keep a tracked-frame camera on the same side of its target and outside the
- * minimum readable range.
+ * minimum readable range. Vetores {x,y,z} relativos ao alvo.
  *
- * @param {{position: Cesium.Cartesian3, direction: Cesium.Cartesian3}} camera Camera-like object.
- * @param {Cesium.Cartesian3} previousPosition Previous tracked-frame camera position.
+ * @param {{position: {x,y,z}, direction: {x,y,z}}} camera Camera-like object (mutado).
+ * @param {{x,y,z}} previousPosition Previous tracked-frame camera position.
  * @param {number} [minimumRangeM=MIN_TRACKED_RANGE_M] Minimum target range.
  * @returns {boolean} Whether the camera position was corrected.
  */
@@ -99,120 +85,77 @@ export function clampTrackedCameraPosition(
   previousPosition,
   minimumRangeM = MIN_TRACKED_RANGE_M,
 ) {
-  const crossedOrigin = Cesium.Cartesian3.dot(camera.position, previousPosition) <= 0;
-  const forwardDistance = -Cesium.Cartesian3.dot(camera.position, camera.direction);
-  const rangeSquared = Cesium.Cartesian3.magnitudeSquared(camera.position);
+  const crossedOrigin = v3.dot(camera.position, previousPosition) <= 0;
+  const forwardDistance = -v3.dot(camera.position, camera.direction);
+  const rangeSquared = v3.mag2(camera.position);
   if (crossedOrigin) {
-    Cesium.Cartesian3.normalize(previousPosition, camera.position);
-    Cesium.Cartesian3.multiplyByScalar(camera.position, minimumRangeM, camera.position);
+    const m = Math.sqrt(v3.mag2(previousPosition)) || 1;
+    camera.position.x = (previousPosition.x / m) * minimumRangeM;
+    camera.position.y = (previousPosition.y / m) * minimumRangeM;
+    camera.position.z = (previousPosition.z / m) * minimumRangeM;
     return true;
   }
-  if (
-    forwardDistance < minimumRangeM
-    || rangeSquared < minimumRangeM * minimumRangeM
-  ) {
-    Cesium.Cartesian3.multiplyByScalar(
-      camera.direction,
-      -minimumRangeM,
-      camera.position,
-    );
+  if (forwardDistance < minimumRangeM || rangeSquared < minimumRangeM * minimumRangeM) {
+    camera.position.x = camera.direction.x * -minimumRangeM + 0;
+    camera.position.y = camera.direction.y * -minimumRangeM + 0;
+    camera.position.z = camera.direction.z * -minimumRangeM + 0;
     return true;
   }
   return false;
 }
 
 /**
- * Apply an entity's requested follow offset once, then let Cesium's ENU
- * EntityView exclusively own continuous following.
- *
- * Cesium can retain the previous world-space camera position when tracking
- * switches across a large distance. The view then only rotates toward the new
- * aircraft, and the next zoom can drive the camera through the ellipsoid.
- * Applying the exact frame for the handoff makes selection deterministic. We
- * deliberately do not rebuild it every frame: Cesium's EntityView already
- * follows the same ENU entity, and two writers create sub-pixel camera jitter
- * that becomes visible at minimum range.
- *
- * @param {Cesium.Viewer} viewer Active viewer.
- * @param {Cesium.Entity} entity Newly tracked entity.
- * @param {Cesium.Cartesian3} viewFrom Desired camera offset in the tracked frame.
- * @returns {(() => void)|undefined} Disposer for this one tracked-frame owner.
+ * Converte o `viewFrom` do Cesium (deslocamento ENU da câmera em relação ao
+ * alvo: x leste, y norte, z cima) em {rangeM, heading, pitch} (graus, semântica
+ * Cesium). Exportada para teste.
+ * @param {{x:number,y:number,z:number}|{rangeM:number,heading?:number,pitch?:number}} viewFrom
  */
-export function applyTrackedCameraFrame(viewer, entity, viewFrom) {
-  if (!viewer || !entity || !viewFrom) return;
-  let attempts = 0;
-  const trackedTransform = new Cesium.Matrix4();
-  const trackedPosition = new Cesium.Cartesian3();
-  const resolvedViewFrom = new Cesium.Cartesian3();
-  const cameraOffset = new Cesium.Cartesian3();
-  const previousCameraPosition = new Cesium.Cartesian3();
-  let framed = false;
-  const restoreZoomInertia = acquireStableTrackedZoom(
-    viewer.scene.screenSpaceCameraController,
-    entity,
-  );
+export function viewFromToOrbit(viewFrom) {
+  if (!viewFrom) return null;
+  if (Number.isFinite(viewFrom.rangeM)) {
+    return { rangeM: Math.max(MIN_TRACKED_RANGE_M, viewFrom.rangeM), heading: viewFrom.heading ?? 0, pitch: viewFrom.pitch ?? -45 };
+  }
+  const { x = 0, y = 0, z = 0 } = viewFrom;
+  const range = Math.hypot(x, y, z);
+  if (!(range > 1e-6)) return null;
+  const horizontal = Math.hypot(x, y);
+  // A câmera está em (x, y, z) do alvo e olha para ele: heading = rumo do alvo
+  // visto da câmera; pitch negativo quando a câmera está acima.
+  const heading = horizontal > 1e-6 ? ((Math.atan2(-x, -y) * 180) / Math.PI + 360) % 360 : 0;
+  const pitch = -(Math.atan2(z, horizontal) * 180) / Math.PI;
+  return { rangeM: Math.max(MIN_TRACKED_RANGE_M, range), heading, pitch: Math.max(-90, Math.min(-5, pitch)) };
+}
+
+/**
+ * Enquadra o alvo recém-rastreado uma vez e entrega o acompanhamento contínuo
+ * ao engine (`engine.track`).
+ *
+ * @param {object} engine `engine` do app.
+ * @param {object} target Alvo com getPosition() -> {lon, lat, alt}.
+ * @param {{x,y,z}|{rangeM,heading?,pitch?}} viewFrom Deslocamento desejado da câmera.
+ * @param {{duration?: number}} [options] Duração do voo (s); 0 = salto.
+ * @returns {(() => void)|undefined} Disposer (cancela o enquadramento pendente).
+ */
+export function applyTrackedCameraFrame(engine, target, viewFrom, { duration = 1.2 } = {}) {
+  if (!engine || !target || !viewFrom) return undefined;
+  const orbit = viewFromToOrbit(viewFrom);
+  if (!orbit) return undefined;
   let stopped = false;
-  let remove = null;
-  const stop = () => {
+  const pos = trackedDisplayPositionForCamera(target);
+  if (engine.trackedTarget !== target) engine.track?.(target);
+  if (pos && Number.isFinite(pos.lon) && Number.isFinite(pos.lat)) {
+    const view = engine.cameraLookingAt?.(
+      { lon: pos.lon, lat: pos.lat, height: Number.isFinite(pos.alt) ? pos.alt : 0 },
+      orbit,
+    );
+    if (view) {
+      if (duration > 0) engine.flyToCamera(view, { duration });
+      else engine.setCameraView(view);
+    }
+  }
+  return () => {
     if (stopped) return;
     stopped = true;
-    remove?.();
-    restoreZoomInertia();
+    if (duration > 0 && engine.trackedTarget !== target) engine.cancelFlight?.();
   };
-
-  // preUpdate is deliberate. preRender fires after Cesium has prepared
-  // billboard/model draw state, so changing the tracked transform there makes
-  // the camera and target visual disagree for one frame (visible as a
-  // front/back oscillation). The controller then enforces the minimum range
-  // during the same update pass.
-  remove = viewer.scene.preUpdate.addEventListener(() => {
-    if (viewer.isDestroyed() || viewer.trackedEntity !== entity) {
-      stop();
-      return;
-    }
-    attempts += framed ? 0 : 1;
-    // Prefer the display cache exposed by the flight layer. Calling the
-    // CallbackProperty from preUpdate can advance dead reckoning again while
-    // Cesium's billboard/label still holds the prior visualizer sample. At a
-    // 150 m follow range that sub-frame difference becomes visible as the
-    // label swinging around the icon during an orbit, especially immediately
-    // after a 2D→3D→2D handoff.
-    if (!framed) {
-      const position = trackedDisplayPositionForCamera(
-        entity,
-        viewer.clock.currentTime,
-        trackedPosition,
-      );
-      if (!position) {
-        if (attempts >= MAX_FRAME_ATTEMPTS) stop();
-        return;
-      }
-      const transform = Cesium.Transforms.eastNorthUpToFixedFrame(
-        position,
-        Cesium.Ellipsoid.WGS84,
-        trackedTransform,
-      );
-      const offset = typeof viewFrom.getValue === 'function'
-        ? viewFrom.getValue(viewer.clock.currentTime, resolvedViewFrom)
-        : Cesium.Cartesian3.clone(viewFrom, resolvedViewFrom);
-      if (!offset || Cesium.Cartesian3.magnitudeSquared(offset) < Cesium.Math.EPSILON12) {
-        stop();
-        return;
-      }
-      viewer.camera.lookAtTransform(transform, offset);
-      Cesium.Cartesian3.clone(viewer.camera.position, previousCameraPosition);
-      framed = true;
-      return;
-    }
-
-    // Normal frames are intentionally read-only: EntityView is the sole
-    // continuous camera writer. Only a programmatic zoom that bypasses the
-    // controller's minimumZoomDistance needs correction.
-    if (clampTrackedCameraPosition(viewer.camera, previousCameraPosition)) {
-      Cesium.Cartesian3.clone(viewer.camera.position, cameraOffset);
-      viewer.camera.lookAtTransform(viewer.camera.transform, cameraOffset);
-    }
-    Cesium.Cartesian3.clone(viewer.camera.position, previousCameraPosition);
-  });
-  return stop;
 }

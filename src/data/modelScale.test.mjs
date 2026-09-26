@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLASS_SCALE_3D, CLASS_MODEL_URL, CLASS_MODEL_REAL } from './aircraftClass.js';
+import { nearFarFactorAtZoom } from './flights.js';
 import {
   MODEL_TRAIL_ANCHOR_NATIVE,
   MODEL_VISUAL_CENTER_NATIVE,
@@ -375,10 +376,16 @@ function normalBillboardScaleByDistance(sourceFile) {
   return scalar.slice(1).map(Number);
 }
 
+// MIGRAÇÃO MAPLIBRE: flights.js não desenha mais modelos glTF (a aeronave é
+// sempre o ícone), então não tem MODEL_SCALE/MODEL_BELLY_OFFSET_NATIVE. A
+// calibração de referência do airplane.glb que o militar copia (PLANE_*) fica
+// fixada aqui, com os valores que a camada civil usava.
+const AIRPLANE_GLB_CALIBRATION = Object.freeze({ modelScale: 1, bellyOffsetNative: 6.719 });
+
 const LAYERS = [
   {
     name: 'flights',
-    source: 'src/data/flights.js',
+    constants: AIRPLANE_GLB_CALIBRATION,
     // All classes share one GLB today (see CLASS_MODEL_URL) — assert that, so
     // a real per-class asset drop-in forces this test to grow with it.
     asset: (() => {
@@ -400,7 +407,7 @@ const LAYERS = [
 ];
 
 const measured = LAYERS.map((layer) => {
-  const { modelScale, bellyOffsetNative } = layerConstants(layer.source);
+  const { modelScale, bellyOffsetNative } = layer.constants || layerConstants(layer.source);
   const assetPath = path.join(ROOT, 'public', layer.asset);
   const nativeRadius = nativeBoundingRadius(assetPath);
   return {
@@ -917,7 +924,13 @@ test('real per-class models remain origin-centred for visual anchoring', () => {
 });
 
 test('civilian and military globe-view aircraft retain the established 3.0 near scale and 0.5 floor', () => {
-  for (const layer of LAYERS) {
+  // Civil (MapLibre): o NearFarScalar(1000, 3, 8e6, 0.5) virou interpolação por zoom.
+  assert.equal(nearFarFactorAtZoom(0), 0.5);
+  assert.equal(nearFarFactorAtZoom(3.6), 0.5);
+  assert.equal(nearFarFactorAtZoom(16.6), 3);
+  assert.equal(nearFarFactorAtZoom(22), 3);
+  for (const layer of LAYERS.filter((l) => l.source)) {
+    if (!/_normalBillboardScaleByDistance/.test(fs.readFileSync(path.join(ROOT, layer.source), 'utf8'))) continue;
     assert.deepEqual(
       normalBillboardScaleByDistance(layer.source),
       [1000, 3, 8000000, 0.5],

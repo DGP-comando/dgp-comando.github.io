@@ -1,4 +1,10 @@
-import * as Cesium from 'cesium';
+// MIGRAÇÃO MAPLIBRE (2026-09): sem Cesium. "scene" e "camera" passam a ser o
+// `engine` do app (src/maplibre/engine.js): projeção por engine.project e
+// distância até a posição da câmera de engine.getCameraView(). Posições são
+// {lon, lat, alt} (ECEF {x,y,z} ainda aceito). O caminho legado continua
+// valendo para quem passar um objeto com `project`/`getCameraView` próprios.
+import { cameraGeoPosition } from './iconOrientation.js';
+import { distanceM, toGeo } from './motionModel.js';
 
 /**
  * Focus-aware sprite treatment shared by the live contact layers.
@@ -30,7 +36,22 @@ export const DEFAULT_FOCUS_DEEMPHASIS_PARAMS = Object.freeze({
 let _params = { ...DEFAULT_FOCUS_DEEMPHASIS_PARAMS };
 let _focusTarget = null;
 const _spriteStates = new WeakMap();
-const _scratchScreen = new Cesium.Cartesian2();
+
+/** Projeção neutra: engine.project(lon, lat, alt) -> {x, y} ou null. */
+function projectToScreen(sceneOrEngine, position) {
+  if (!sceneOrEngine || !position || typeof sceneOrEngine.project !== 'function') return null;
+  const g = toGeo(position);
+  if (!g) return null;
+  const p = sceneOrEngine.project(g.lon, g.lat, g.alt);
+  if (!p || p.visible === false || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+  return p;
+}
+
+/** Distância (m) da câmera ao ponto; `camera` = engine, vista ou legado. */
+function cameraDistanceTo(camera, position) {
+  const cam = cameraGeoPosition(camera);
+  return cam && position ? distanceM(cam, position) : Number.NaN;
+}
 const _advanceResult = {
   factor: 1,
   changed: false,
@@ -153,9 +174,9 @@ export function resetFocusDeemphasisParams() {
  * @param {object} input
  * @param {string} input.ownerLayer
  * @param {string|number} input.id
- * @param {Cesium.Scene} input.scene
- * @param {Cesium.Camera} input.camera
- * @param {Cesium.Cartesian3} input.displayPosition Cached display position.
+ * @param {object} input.scene `engine` do app (projeção).
+ * @param {object} [input.camera] `engine` (padrão: o mesmo de `scene`).
+ * @param {{lon,lat,alt}} input.displayPosition Cached display position.
  * @param {number} [input.widthPx=24] Projected visual width before padding.
  * @param {number} [input.heightPx=24] Projected visual height before padding.
  * @param {Partial<typeof DEFAULT_FOCUS_DEEMPHASIS_PARAMS>} [input.params]
@@ -171,11 +192,12 @@ export function publishFocusTargetFromCachedPosition({
   heightPx = 24,
   params,
 }) {
+  camera ??= scene;
   if (!ownerLayer || id === null || id === undefined || !scene || !camera || !displayPosition) {
     clearFocusTarget(ownerLayer, id);
     return null;
   }
-  const screen = Cesium.SceneTransforms.worldToWindowCoordinates(scene, displayPosition, _scratchScreen);
+  const screen = projectToScreen(scene, displayPosition);
   if (!screen || !Number.isFinite(screen.x) || !Number.isFinite(screen.y)) {
     clearFocusTarget(ownerLayer, id);
     return null;
@@ -195,8 +217,8 @@ export function publishFocusTargetFromCachedPosition({
       bottom: screen.y + halfHeight + padding,
     },
     paddingPx: padding,
-    cameraDistance: Cesium.Cartesian3.distance(camera.positionWC, displayPosition),
-    frameNumber: scene.frameState?.frameNumber ?? -1,
+    cameraDistance: cameraDistanceTo(camera, displayPosition),
+    frameNumber: -1,
   };
   if (appeared) {
     for (const listener of _focusAppearListeners) {
@@ -391,9 +413,9 @@ export function advanceSpriteFocus(sprite, {
  * Project and advance one world-anchored sprite using an owning layer's
  * existing render pass.
  * @param {object} sprite Stable primitive identity.
- * @param {Cesium.Cartesian3} position Current cached/rendered world position.
- * @param {Cesium.Scene} scene
- * @param {Cesium.Camera} camera
+ * @param {{lon,lat,alt}} position Current cached/rendered position.
+ * @param {object} scene `engine` do app.
+ * @param {object} camera `engine` do app (ou vista da câmera).
  * @param {number} nowMs
  * @param {object|null} [target]
  * @param {Partial<typeof DEFAULT_FOCUS_DEEMPHASIS_PARAMS>} [params]
@@ -426,12 +448,8 @@ export function advanceProjectedSpriteFocus(
     _advanceResult.desired = 1;
     return _advanceResult;
   }
-  const screen = position && scene
-    ? Cesium.SceneTransforms.worldToWindowCoordinates(scene, position, _scratchScreen)
-    : null;
-  const cameraDistance = position && camera?.positionWC
-    ? Cesium.Cartesian3.distance(camera.positionWC, position)
-    : Number.NaN;
+  const screen = position && scene ? projectToScreen(scene, position) : null;
+  const cameraDistance = position ? cameraDistanceTo(camera ?? scene, position) : Number.NaN;
   return advanceSpriteFocus(sprite, {
     screenPosition: screen,
     cameraDistance,

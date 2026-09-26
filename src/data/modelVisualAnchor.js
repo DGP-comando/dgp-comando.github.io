@@ -1,4 +1,7 @@
-import * as Cesium from 'cesium';
+// MIGRAÇÃO MAPLIBRE (2026-09): sem Cesium. O MapLibre 2D não desenha modelos
+// glTF (as aeronaves são ícones), então estas âncoras só servem a quem ainda
+// monta matrizes de modelo (ex.: câmera de perseguição do cockpit). A
+// matemática é a mesma, com matrizes 4x4 column-major simples (arrays de 16).
 /**
  * Model-space visual centres measured from the shipped GLBs' scene-space AABBs.
  *
@@ -76,11 +79,27 @@ export const MODEL_TRAIL_ANCHOR_NATIVE = Object.freeze({
  *  renders with `modelMatrix x components.transform x axisCorrection`, and the
  *  trail anchor has to ride the same chain or it lands on a different axis than
  *  the aircraft it is supposed to be attached to. */
-const AXIS_CORRECTION = Cesium.Matrix4.multiplyTransformation(
-  Cesium.Axis.Y_UP_TO_Z_UP, Cesium.Axis.Z_UP_TO_X_UP, new Cesium.Matrix4(),
-);
-const _anchorScratch = new Cesium.Cartesian3();
-const _chainScratch = new Cesium.Matrix4();
+// Cesium.Axis.Y_UP_TO_Z_UP = rotação +90° em X; Z_UP_TO_X_UP = −90° em Y
+// (column-major, iguais às constantes do Cesium).
+const Y_UP_TO_Z_UP = Object.freeze([1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1]);
+const Z_UP_TO_X_UP = Object.freeze([0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
+const IDENTITY = Object.freeze([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
+/** a × b (4x4 column-major). */
+export function mat4Multiply(a, b, out = new Array(16)) {
+  const r = new Array(16);
+  for (let c = 0; c < 4; c++) {
+    for (let row = 0; row < 4; row++) {
+      r[c * 4 + row] = a[row] * b[c * 4] + a[4 + row] * b[c * 4 + 1] + a[8 + row] * b[c * 4 + 2] + a[12 + row] * b[c * 4 + 3];
+    }
+  }
+  for (let i = 0; i < 16; i++) out[i] = r[i];
+  return out;
+}
+
+const AXIS_CORRECTION = Object.freeze(mat4Multiply(Y_UP_TO_Z_UP, Z_UP_TO_X_UP));
+const _anchorScratch = { x: 0, y: 0, z: 0 };
+const _chainScratch = new Array(16);
 
 /**
  * World position of a model-local anchor, through the SAME transform chain
@@ -119,13 +138,9 @@ export function modelAnchorWorld(model, nativeAnchor, result) {
   // correction. Read from the instance rather than assumed, so an asset with a
   // baked root transform is carried too.
   const components = model?.sceneGraph?.components?.transform;
-  Cesium.Matrix4.multiplyTransformation(
-    model.modelMatrix,
-    components || Cesium.Matrix4.IDENTITY,
-    _chainScratch,
-  );
-  Cesium.Matrix4.multiplyTransformation(_chainScratch, AXIS_CORRECTION, _chainScratch);
-  return Cesium.Matrix4.multiplyByPoint(_chainScratch, _anchorScratch, result);
+  mat4Multiply(model.modelMatrix, components || IDENTITY, _chainScratch);
+  mat4Multiply(_chainScratch, AXIS_CORRECTION, _chainScratch);
+  return modelVisualAnchor(_chainScratch, [_anchorScratch.x, _anchorScratch.y, _anchorScratch.z], 1, result);
 }
 
 /**

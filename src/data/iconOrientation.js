@@ -21,7 +21,18 @@
  * keeps rotation continuous through tracked orbits; field evidence, not an
  * unverified math swap, decides whether exact projection becomes preferred.
  */
-import * as Cesium from 'cesium';
+//
+// MIGRAÇÃO MAPLIBRE (2026-09): sem Cesium. Tipos neutros:
+//  - posições: {lon, lat, alt} (ou ECEF {x, y, z} / [lon, lat, alt], por
+//    compatibilidade);
+//  - "scene"/"camera": o `engine` do app (src/maplibre/engine.js). O caminho
+//    antigo por base da câmera ({camera: {rightWC, upWC}} com vetores {x,y,z})
+//    continua aceito — é matemática pura e segue coberto pelos testes.
+// No MapLibre um ícone com `icon-rotation-alignment: 'map'` já gira com o
+// mapa; `screenProjectedRotation` serve a quem desenha em espaço de TELA
+// (overlays HTML, canvas) e devolve o ângulo na mesma convenção de antes
+// (radianos, anti-horário positivo, 0 = topo da tela).
+import { destinationPointDeg, ecefFromGeo, toEcef, toGeo, WGS84_A, WGS84_B } from './motionModel.js';
 
 /** Meters used to give the course vector a stable projection magnitude. */
 const FORWARD_PROBE_M = 2000;
@@ -30,53 +41,69 @@ const FORWARD_PROBE_M = 2000;
  * course points almost exactly into/out of the screen and the angle is noise.
  */
 const MIN_SCREEN_COMPONENT_M = 0.5;
+/** Minimum projected probe length (px) in the engine path. */
+const MIN_SCREEN_COMPONENT_PX = 0.5;
 /** Ignore sub-degree projection noise while retaining deliberate camera-orbit rotation. */
-const ROTATION_DEADBAND_RAD = Cesium.Math.toRadians(0.5);
+const ROTATION_DEADBAND_RAD = 0.5 * Math.PI / 180;
+const DEG = Math.PI / 180;
 
-const _scratchEnu = new Cesium.Matrix4();
-const _scratchForward = new Cesium.Cartesian3();
-const _scratchWorldForward = new Cesium.Cartesian3();
+/** Vetor de curso (ENU -> ECEF) num ponto; `out` recebe {x,y,z}. */
+function worldCourseVector(position, courseDeg, out) {
+  const g = toGeo(position);
+  if (!g) return null;
+  const c = (courseDeg || 0) * DEG;
+  const e = Math.sin(c) * FORWARD_PROBE_M;
+  const n = Math.cos(c) * FORWARD_PROBE_M;
+  const phi = g.lat * DEG;
+  const lam = g.lon * DEG;
+  out.x = -Math.sin(lam) * e - Math.sin(phi) * Math.cos(lam) * n;
+  out.y = Math.cos(lam) * e - Math.sin(phi) * Math.sin(lam) * n;
+  out.z = Math.cos(phi) * n;
+  return out;
+}
+const _worldForward = { x: 0, y: 0, z: 0 };
+const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 
 /**
- * Computes the billboard rotation (radians, CCW-positive, for
- * alignedAxis = Cartesian3.ZERO) that points an icon along its real-world
- * course in the stable camera-basis approximation described above.
+ * Computes the icon rotation (radians, CCW-positive, 0 = screen up) that
+ * points an icon along its real-world course.
  *
- * @param {Cesium.Scene} scene - The scene (projection source).
- * @param {Cesium.Cartesian3} position - Entity world position.
+ * @param {object} sceneOrEngine - `engine` do app (projeção pela câmera do
+ *   MapLibre), ou legado `{camera: {rightWC, upWC}}` (base da câmera).
+ * @param {{lon:number,lat:number,alt?:number}|{x,y,z}} position - Posição do objeto.
  * @param {number} courseDeg - Course/track in degrees clockwise from north.
- * @param {number|null} previous - Rotation to keep when projection is
- *   unavailable (off-screen/behind camera/degenerate).
+ * @param {number|null} previous - Rotation to keep when projection is unavailable.
  * @returns {number|null} Rotation in radians, or `previous` when unknown.
  */
-export function screenProjectedRotation(scene, position, courseDeg, previous = null) {
-  const camera = scene?.camera;
-  if (!camera?.rightWC || !camera?.upWC || !position) return previous;
-
-  const courseRad = Cesium.Math.toRadians(courseDeg || 0);
-  Cesium.Cartesian3.fromElements(
-    Math.sin(courseRad) * FORWARD_PROBE_M,
-    Math.cos(courseRad) * FORWARD_PROBE_M,
-    0,
-    _scratchForward
-  );
-  const enu = Cesium.Transforms.eastNorthUpToFixedFrame(position, Cesium.Ellipsoid.WGS84, _scratchEnu);
-  Cesium.Matrix4.multiplyByPointAsVector(enu, _scratchForward, _scratchWorldForward);
-
-  // Screen x follows camera-right. Window y grows downward, the opposite of
-  // camera-up. Projecting the vector itself avoids clipping/behind-camera
-  // failure modes from the old forward-point worldToWindowCoordinates probe.
-  const dx = Cesium.Cartesian3.dot(_scratchWorldForward, camera.rightWC);
-  const dy = -Cesium.Cartesian3.dot(_scratchWorldForward, camera.upWC);
-  if (
-    (dx * dx + dy * dy)
-    < MIN_SCREEN_COMPONENT_M * MIN_SCREEN_COMPONENT_M
-  ) return previous;
-
-  // Window y grows downward; rotation 0 = icon pointing screen-up.
-  // Icon direction in window coords after CCW rotation r is (-sin r, -cos r),
-  // so matching the projected course (dx, dy) gives r = atan2(-dx, -dy).
-  return Math.atan2(-dx, -dy);
+export function screenProjectedRotation(sceneOrEngine, position, courseDeg, previous = null) {
+  if (!sceneOrEngine || !position) return previous;
+  const camera = sceneOrEngine.camera;
+  if (camera?.rightWC && camera?.upWC) {
+    if (!worldCourseVector(position, courseDeg, _worldForward)) return previous;
+    // Screen x follows camera-right; window y grows downward (−camera-up).
+    const dx = dot(_worldForward, camera.rightWC);
+    const dy = -dot(_worldForward, camera.upWC);
+    if (dx * dx + dy * dy < MIN_SCREEN_COMPONENT_M * MIN_SCREEN_COMPONENT_M) return previous;
+    return Math.atan2(-dx, -dy);
+  }
+  if (typeof sceneOrEngine.project === 'function') {
+    const g = toGeo(position);
+    if (!g) return previous;
+    const a = sceneOrEngine.project(g.lon, g.lat, g.alt);
+    const tip = destinationPointDeg(g.lon, g.lat, courseDeg || 0, FORWARD_PROBE_M);
+    const b = sceneOrEngine.project(tip.lon, tip.lat, g.alt);
+    if (!a || !b) return previous;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    if (!(Number.isFinite(dx) && Number.isFinite(dy))) return previous;
+    if (dx * dx + dy * dy < MIN_SCREEN_COMPONENT_PX * MIN_SCREEN_COMPONENT_PX) {
+      // Probe degenerou (zoom muito baixo): usa o rumo em relação ao bearing do mapa.
+      const bearing = sceneOrEngine.getCameraView?.().heading;
+      return Number.isFinite(bearing) ? -((courseDeg || 0) - bearing) * DEG : previous;
+    }
+    return Math.atan2(-dx, -dy);
+  }
+  return previous;
 }
 
 /**
@@ -100,7 +127,6 @@ export function stabilizeScreenRotation(
   return Math.abs(delta) < Math.max(0, deadbandRad) ? previous : next;
 }
 
-const _occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, new Cesium.Cartesian3());
 
 /**
  * Half-width of the crossfade band centred on the ellipsoid silhouette, in
@@ -110,8 +136,10 @@ const _occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, new Ces
  * plainly over ground still gets its full treatment.
  */
 export const HORIZON_FEATHER_RAD = 0.019;
+const _skyCam = { x: 0, y: 0, z: 0 };
+const _skyPos = { x: 0, y: 0, z: 0 };
 
-const _wgs84OneOverRadii = Cesium.Ellipsoid.WGS84.oneOverRadii;
+const _wgs84OneOverRadii = Object.freeze({ x: 1 / WGS84_A, y: 1 / WGS84_A, z: 1 / WGS84_B });
 
 /**
  * How much SKY sits behind a world point from this camera: 0 (planet behind)
@@ -164,12 +192,15 @@ const _wgs84OneOverRadii = Cesium.Ellipsoid.WGS84.oneOverRadii;
  * The band absorbs that approximation — a contact just above the horizon lands
  * mid-blend, which is the honest answer when the backdrop is part sky.
  *
- * @param {Cesium.Cartesian3} cameraPosition World camera position.
- * @param {Cesium.Cartesian3} position World position of the labelled point.
+ * @param {{x,y,z}|{lon,lat,alt}} cameraPosition Posição da câmera (ECEF ou geográfica).
+ * @param {{x,y,z}|{lon,lat,alt}} position Posição do ponto rotulado.
  * @param {number} [featherRad=HORIZON_FEATHER_RAD] Half-width of the blend band.
  * @returns {number} 0 (ground behind) … 1 (sky behind).
  */
-export function skyBackdropFactor(cameraPosition, position, featherRad = HORIZON_FEATHER_RAD) {
+export function skyBackdropFactor(cameraPositionIn, positionIn, featherRad = HORIZON_FEATHER_RAD) {
+  if (!cameraPositionIn || !positionIn) return 0;
+  const cameraPosition = toEcef(cameraPositionIn, _skyCam);
+  const position = toEcef(positionIn, _skyPos);
   if (!cameraPosition || !position) return 0;
 
   const s = _wgs84OneOverRadii;
@@ -214,28 +245,74 @@ export function skyBackdropFactor(cameraPosition, position, featherRad = HORIZON
   return t * t * (3 - 2 * t);
 }
 
-/**
- * Returns the shared horizon occluder, updated to the camera's position.
- * With the Cesium globe hidden (Google 3D tiles provide the planet) nothing
- * writes far-side depth, so billboards must be horizon-culled manually.
- * Call once per tick, then test points with occluder.isPointVisible(pos).
- *
- * @param {Cesium.Camera} camera - The scene camera.
- * @returns {Cesium.EllipsoidalOccluder}
- */
-export function horizonOccluder(camera) {
-  _occluder.cameraPosition = camera.positionWC;
-  return _occluder;
+/** Posição da câmera {lon, lat, alt} a partir do engine, de uma vista ou de um Camera legado. */
+export function cameraGeoPosition(cameraOrEngine) {
+  if (!cameraOrEngine) return null;
+  if (typeof cameraOrEngine.getCameraView === 'function') {
+    const v = cameraOrEngine.getCameraView();
+    return Number.isFinite(v?.lat) && Number.isFinite(v?.lon) ? { lon: v.lon, lat: v.lat, alt: Number.isFinite(v.alt) ? v.alt : 0 } : null;
+  }
+  if (cameraOrEngine.positionWC) return toGeo(cameraOrEngine.positionWC);
+  return toGeo(cameraOrEngine);
 }
 
 /**
+ * Oclusor de horizonte (esfera de raio médio), no lugar do
+ * Cesium.EllipsoidalOccluder. `isPointVisible(pos)` é falso quando o ponto
+ * está atrás da curvatura da Terra vista da câmera: ângulo central câmera-ponto
+ * maior que a soma dos ângulos de horizonte dos dois. No MapLibre isso só pesa
+ * no globo em zoom baixo; em Mercator quase tudo é "visível".
+ *
+ * @param {object} cameraOrEngine - `engine`, vista {lat, lon, alt} da câmera,
+ *   ou legado com `positionWC`.
+ * @returns {{cameraPosition: object|null, isPointVisible: (pos: object) => boolean}}
+ */
+export function horizonOccluder(cameraOrEngine) {
+  const cam = cameraGeoPosition(cameraOrEngine);
+  _occluderState.cameraPosition = cam;
+  if (cam) {
+    const R = (WGS84_A * 2 + WGS84_B) / 3;
+    _occluderState.camHorizon = Math.acos(Math.min(1, R / (R + Math.max(0, cam.alt))));
+    _occluderState.R = R;
+  }
+  return _occluder;
+}
+const _occluderState = { cameraPosition: null, camHorizon: 0, R: WGS84_A };
+const _occluder = {
+  get cameraPosition() {
+    return _occluderState.cameraPosition;
+  },
+  isPointVisible(pos) {
+    const cam = _occluderState.cameraPosition;
+    if (!cam) return true;
+    const g = toGeo(pos);
+    if (!g) return false;
+    const { R, camHorizon } = _occluderState;
+    const p1 = cam.lat * DEG;
+    const p2 = g.lat * DEG;
+    const cosD = Math.sin(p1) * Math.sin(p2) + Math.cos(p1) * Math.cos(p2) * Math.cos((g.lon - cam.lon) * DEG);
+    const central = Math.acos(Math.max(-1, Math.min(1, cosD)));
+    const ptHorizon = Math.acos(Math.min(1, R / (R + Math.max(0, g.alt || 0))));
+    return central <= camHorizon + ptHorizon;
+  },
+};
+
+/**
  * Cheap camera pose signature for "did the camera move" gating of rotation
- * passes (position quantized to ~10m, angles to ~0.06 deg).
- * @param {Cesium.Camera} camera - The scene camera.
+ * passes (position quantized to ~10 m, angles to ~0.06°).
+ * @param {object} cameraOrEngine - `engine` (usa getCameraView), vista
+ *   {lat, lon, alt, heading, pitch, roll} (graus) ou Camera legado.
  * @returns {string}
  */
-export function cameraPoseSignature(camera) {
-  const p = camera.positionWC;
-  return `${Math.round(p.x / 10)}:${Math.round(p.y / 10)}:${Math.round(p.z / 10)}:` +
-    `${camera.heading.toFixed(3)}:${camera.pitch.toFixed(3)}:${camera.roll.toFixed(3)}`;
+export function cameraPoseSignature(cameraOrEngine) {
+  if (!cameraOrEngine) return '';
+  if (cameraOrEngine.positionWC) {
+    const p = cameraOrEngine.positionWC;
+    return `${Math.round(p.x / 10)}:${Math.round(p.y / 10)}:${Math.round(p.z / 10)}:`
+      + `${cameraOrEngine.heading.toFixed(3)}:${cameraOrEngine.pitch.toFixed(3)}:${cameraOrEngine.roll.toFixed(3)}`;
+  }
+  const v = typeof cameraOrEngine.getCameraView === 'function' ? cameraOrEngine.getCameraView() : cameraOrEngine;
+  const p = ecefFromGeo(Number(v.lon) || 0, Number(v.lat) || 0, Number.isFinite(v.alt) ? v.alt : 0);
+  const r = (deg) => ((Number(deg) || 0) * DEG).toFixed(3);
+  return `${Math.round(p.x / 10)}:${Math.round(p.y / 10)}:${Math.round(p.z / 10)}:${r(v.heading)}:${r(v.pitch)}:${r(v.roll)}:${(Number(v.zoom) || 0).toFixed(3)}`;
 }

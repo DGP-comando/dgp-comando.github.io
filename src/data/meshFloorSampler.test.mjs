@@ -19,7 +19,6 @@
 // real-vs-fallback bookkeeping is exercised rather than stubbed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as Cesium from 'cesium';
 import { sampleMeshFloorCells } from './meshFloorSampler.js';
 import { resolveEllipsoidalGround } from './terrainHeights.js';
 import {
@@ -51,9 +50,7 @@ async function seedDem(cell, ellipsoid) {
 function fakeScene(sampleHeight, { cameraHeightM = 900, tilesLoaded = true, show = true } = {}) {
   // instanceof-compatible without running Cesium's constructor; `tilesLoaded` is
   // a prototype getter, so it has to be shadowed with an own data property.
-  const tileset = Object.create(Cesium.Cesium3DTileset.prototype);
-  Object.defineProperty(tileset, 'tilesLoaded', { value: tilesLoaded, configurable: true });
-  Object.defineProperty(tileset, 'show', { value: show, configurable: true });
+  const tileset = { tilesLoaded, show };
   return {
     sampleHeight,
     camera: { positionCartographic: { height: cameraHeightM } },

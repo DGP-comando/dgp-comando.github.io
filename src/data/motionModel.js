@@ -6,11 +6,118 @@
  * Turn-rate estimation + constant-rate-turn arc integration are adapted from
  * skylight (https://github.com/cpaczek/skylight, MIT) shared/src/aim.ts.
  */
-import * as Cesium from 'cesium';
+//
+// MIGRAÇÃO MAPLIBRE (2026-09): sem Cesium. Posições são objetos NEUTROS
+// {lon, lat, alt} (graus, metros sobre o elipsoide); por compatibilidade toda
+// função que recebia um Cesium.Cartesian3 aceita também um ECEF {x, y, z}
+// (e devolve no mesmo formato que recebeu). Tempos: número (ms epoch), Date,
+// ou qualquer objeto com `epochMs`; JulianDate-like {dayNumber, secondsOfDay}
+// ainda é lido. Os auxiliares de geodésia (WGS84) moram aqui e são exportados
+// para as outras camadas (iconOrientation, focusDeemphasis, trailRenderer).
 
 const DEG = Math.PI / 180;
-const _mmCarto = new Cesium.Cartographic();
-const _mmCandidateCarto = new Cesium.Cartographic();
+
+// ------------------------------------------------------------ geodésia WGS84
+
+export const WGS84_A = 6378137.0;
+export const WGS84_B = 6356752.314245179;
+const WGS84_E2 = 1 - (WGS84_B * WGS84_B) / (WGS84_A * WGS84_A);
+const WGS84_EP2 = (WGS84_A * WGS84_A) / (WGS84_B * WGS84_B) - 1;
+
+/** ECEF {x,y,z} (m) de lon/lat (graus) e altura elipsoidal (m). */
+export function ecefFromGeo(lon, lat, alt = 0, result = {}) {
+  const phi = lat * DEG;
+  const lam = lon * DEG;
+  const sPhi = Math.sin(phi);
+  const cPhi = Math.cos(phi);
+  const n = WGS84_A / Math.sqrt(1 - WGS84_E2 * sPhi * sPhi);
+  const h = Number.isFinite(alt) ? alt : 0;
+  result.x = (n + h) * cPhi * Math.cos(lam);
+  result.y = (n + h) * cPhi * Math.sin(lam);
+  result.z = (n * (1 - WGS84_E2) + h) * sPhi;
+  return result;
+}
+
+/** {lon, lat, alt} de um ECEF {x,y,z} (Bowring, precisão sub-milimétrica). */
+export function geoFromEcef(p, result = {}) {
+  const { x, y, z } = p;
+  const r = Math.hypot(x, y);
+  if (!(r > 0) && !(Math.abs(z) > 0)) return null;
+  const theta = Math.atan2(z * WGS84_A, r * WGS84_B);
+  const st = Math.sin(theta);
+  const ct = Math.cos(theta);
+  const phi = Math.atan2(z + WGS84_EP2 * WGS84_B * st * st * st, r - WGS84_E2 * WGS84_A * ct * ct * ct);
+  const sPhi = Math.sin(phi);
+  const n = WGS84_A / Math.sqrt(1 - WGS84_E2 * sPhi * sPhi);
+  const cPhi = Math.cos(phi);
+  const alt = Math.abs(cPhi) > 1e-9 ? r / cPhi - n : Math.abs(z) - WGS84_B;
+  result.lon = Math.atan2(y, x) / DEG;
+  result.lat = phi / DEG;
+  result.alt = alt;
+  return result;
+}
+
+const isGeo = (p) => p && Number.isFinite(p.lon ?? p.lng) && Number.isFinite(p.lat);
+const isEcef = (p) => p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z);
+
+/**
+ * Qualquer posição -> {lon, lat, alt}. Aceita {lon|lng, lat, alt|height},
+ * [lon, lat, alt?] e ECEF {x, y, z}. null quando inválida.
+ */
+export function toGeo(p) {
+  if (!p) return null;
+  if (Array.isArray(p)) {
+    return Number.isFinite(p[0]) && Number.isFinite(p[1]) ? { lon: p[0], lat: p[1], alt: Number.isFinite(p[2]) ? p[2] : 0 } : null;
+  }
+  if (isGeo(p)) {
+    const alt = Number.isFinite(p.alt) ? p.alt : Number.isFinite(p.height) ? p.height : 0;
+    return { lon: p.lon ?? p.lng, lat: p.lat, alt };
+  }
+  if (isEcef(p)) return geoFromEcef(p);
+  return null;
+}
+
+/** Qualquer posição -> ECEF {x, y, z}. */
+export function toEcef(p, result = {}) {
+  if (isEcef(p) && !isGeo(p)) {
+    result.x = p.x; result.y = p.y; result.z = p.z;
+    return result;
+  }
+  const g = toGeo(p);
+  return g ? ecefFromGeo(g.lon, g.lat, g.alt, result) : null;
+}
+
+/** Ponto a `distM` metros de (lon, lat) no rumo `bearingDeg` (esfera). */
+export function destinationPointDeg(lon, lat, bearingDeg, distM) {
+  const R = 6_371_008.8;
+  const d = distM / R;
+  const b = bearingDeg * DEG;
+  const p1 = lat * DEG;
+  const l1 = lon * DEG;
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
+  const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+  return { lon: ((l2 / DEG + 540) % 360) - 180, lat: p2 / DEG };
+}
+
+/** Distância em linha reta (m) entre duas posições em qualquer formato. */
+export function distanceM(a, b) {
+  const pa = toEcef(a);
+  const pb = toEcef(b);
+  if (!pa || !pb) return Number.NaN;
+  return Math.hypot(pa.x - pb.x, pa.y - pb.y, pa.z - pb.z);
+}
+
+/** Tempo -> ms epoch (número, Date, {epochMs}, JulianDate-like). */
+export function timeToMs(t) {
+  if (t == null) return Number.NaN;
+  if (typeof t === 'number') return t;
+  if (t instanceof Date) return t.getTime();
+  if (Number.isFinite(t.epochMs)) return t.epochMs;
+  if (Number.isFinite(t.dayNumber) && Number.isFinite(t.secondsOfDay)) {
+    return (t.dayNumber - 2440587.5) * 86400000 + t.secondsOfDay * 1000;
+  }
+  return Number.NaN;
+}
 
 export function norm360(deg) {
   return ((deg % 360) + 360) % 360;
@@ -21,28 +128,31 @@ export function norm360(deg) {
  * manufacturing a new source timestamp or changing its reported lat/lon.
  * Airborne fixes and downward candidates are deliberately left untouched.
  *
- * @param {{position: Cesium.Cartesian3}|null} newest
- * @param {Cesium.Cartesian3|null} candidatePosition
+ * @param {{position: {lon,lat,alt}|{x,y,z}}|null} newest
+ * @param {{lon,lat,alt}|{x,y,z}|null} candidatePosition
  * @param {boolean} onGround
- * @returns {boolean} True when the stored position was lifted.
+ * @returns {boolean} True when the stored position was lifted (in place).
  */
 export function liftRepeatedGroundFix(newest, candidatePosition, onGround) {
   if (!onGround || !newest?.position || !candidatePosition) return false;
-  const stored = Cesium.Cartographic.fromCartesian(
-    newest.position, Cesium.Ellipsoid.WGS84, _mmCarto,
-  );
-  const candidate = Cesium.Cartographic.fromCartesian(
-    candidatePosition, Cesium.Ellipsoid.WGS84, _mmCandidateCarto,
-  );
-  if (!stored || !candidate || candidate.height <= stored.height) return false;
-  Cesium.Cartesian3.fromRadians(
-    stored.longitude,
-    stored.latitude,
-    candidate.height,
-    Cesium.Ellipsoid.WGS84,
-    newest.position,
-  );
+  const stored = toGeo(newest.position);
+  const candidate = toGeo(candidatePosition);
+  if (!stored || !candidate || candidate.alt <= stored.alt) return false;
+  const pos = newest.position;
+  if (isGeo(pos)) {
+    if ('height' in pos && !('alt' in pos)) pos.height = candidate.alt;
+    else pos.alt = candidate.alt;
+  } else if (Array.isArray(pos)) {
+    pos[2] = candidate.alt;
+  } else {
+    ecefFromGeo(stored.lon, stored.lat, candidate.alt, pos);
+  }
   return true;
+}
+
+/** Nome neutro de courseBetweenCartesians (posições {lon,lat,alt} ou ECEF). */
+export function courseBetweenPositions(from, to, minChordM = 25) {
+  return courseBetweenCartesians(from, to, minChordM);
 }
 
 /** Normalize to (−180, 180]. */
@@ -58,16 +168,19 @@ export function norm180(deg) {
  * callers fall back to the reported track).
  */
 export function courseBetweenCartesians(from, to, minChordM = 25) {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const dz = to.z - from.z;
+  const a = toEcef(from);
+  const b = toEcef(to);
+  if (!a || !b) return null;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dz = b.z - a.z;
   if (dx * dx + dy * dy + dz * dz < minChordM * minChordM) return null;
-  const carto = Cesium.Cartographic.fromCartesian(from, Cesium.Ellipsoid.WGS84, _mmCarto);
+  const carto = toGeo(from);
   if (!carto) return null;
-  const sLat = Math.sin(carto.latitude);
-  const cLat = Math.cos(carto.latitude);
-  const sLon = Math.sin(carto.longitude);
-  const cLon = Math.cos(carto.longitude);
+  const sLat = Math.sin(carto.lat * DEG);
+  const cLat = Math.cos(carto.lat * DEG);
+  const sLon = Math.sin(carto.lon * DEG);
+  const cLon = Math.cos(carto.lon * DEG);
   const e = -sLon * dx + cLon * dy;
   const n = -sLat * cLon * dx - sLat * sLon * dy + cLat * dz;
   if (e * e + n * n < 1) return null; // < 1 m horizontal — vertical-only motion
@@ -219,17 +332,18 @@ export function estimateTurnRateDps(samples, noiseFloorDps = 0.4, maxDps = 4, mi
   return Math.max(-maxDps, Math.min(maxDps, rate));
 }
 
-/** Adapter: fix history [{time: JulianDate, track, velocity}] →
+/** Adapter: fix history [{time|epochMs, track, velocity}] →
  *  estimateTurnRateDps, guarded by TURN_MIN_SPEED_MPS (low-speed fix-track
  *  jitter must not manufacture a turn rate). */
 export function turnRateFromFixHistory(history) {
   if (!history || history.length < 2) return 0;
-  const t0 = history[0].time;
+  const fixMs = (s) => (Number.isFinite(s.epochMs) ? s.epochMs : timeToMs(s.time));
+  const t0 = fixMs(history[0]);
   const samples = [];
   for (const s of history) {
     if (!Number.isFinite(s.track)) continue;
     samples.push({
-      tSec: Cesium.JulianDate.secondsDifference(s.time, t0),
+      tSec: (fixMs(s) - t0) / 1000,
       trackDeg: s.track,
       speedMps: s.velocity,
     });
@@ -367,8 +481,6 @@ export function arcOffsetEnu(speedMps, trackDeg, turnRateDps, dtSec, result) {
 }
 
 const _forwardFixArc = { east: 0, north: 0, endCourseDeg: 0 };
-const _forwardFixEnu = new Cesium.Matrix4();
-const _forwardFixOffset = new Cesium.Cartesian3();
 
 /**
  * Create a forward-only synthetic fix when a repeated position epoch carries
@@ -377,18 +489,17 @@ const _forwardFixOffset = new Cesium.Cartesian3();
  * kinematics. This prevents a late course change from reprojecting the entire
  * stale interval and snapping the rendered contact by kilometres.
  *
- * @param {{time: Cesium.JulianDate, epochMs?: number, position: Cesium.Cartesian3,
+ * @param {{time?: number|Date, epochMs?: number, position: {lon,lat,alt}|{x,y,z},
  *   velocity?: number, track?: number}} newest Existing immutable history fix.
  * @param {{epochMs: number, velocity: number, track: number, turnRateDps?: number}} next
  *   New kinematics and the wall/source epoch at which they become authoritative.
- * @returns {{time: Cesium.JulianDate, epochMs: number, position: Cesium.Cartesian3,
- *   velocity: number, track: number}|null} Forward synthetic fix, or null.
+ * @returns {{time: number, epochMs: number, position: object,
+ *   velocity: number, track: number}|null} Forward synthetic fix (position in
+ *   the same shape as `newest.position`; `time` = epochMs), or null.
  */
 export function synthesizeForwardKinematicsFix(newest, next = {}) {
-  if (!newest?.position || !newest?.time || !Number.isFinite(next.epochMs)) return null;
-  const startEpochMs = Number.isFinite(newest.epochMs)
-    ? newest.epochMs
-    : Cesium.JulianDate.toDate(newest.time).getTime();
+  if (!newest?.position || !Number.isFinite(next.epochMs)) return null;
+  const startEpochMs = Number.isFinite(newest.epochMs) ? newest.epochMs : timeToMs(newest.time);
   if (!Number.isFinite(startEpochMs) || next.epochMs <= startEpochMs) return null;
 
   const previousVelocity = Number.isFinite(newest.velocity) ? Math.max(0, newest.velocity) : 0;
@@ -401,24 +512,29 @@ export function synthesizeForwardKinematicsFix(newest, next = {}) {
     dtSec,
     _forwardFixArc,
   );
-  Cesium.Cartesian3.fromElements(
-    _forwardFixArc.east,
-    _forwardFixArc.north,
-    0,
-    _forwardFixOffset,
-  );
-  const enu = Cesium.Transforms.eastNorthUpToFixedFrame(
-    newest.position,
-    Cesium.Ellipsoid.WGS84,
-    _forwardFixEnu,
-  );
-  const position = Cesium.Matrix4.multiplyByPoint(
-    enu,
-    _forwardFixOffset,
-    new Cesium.Cartesian3(),
-  );
+  const start = toGeo(newest.position);
+  if (!start) return null;
+  // Deslocamento ENU (leste, norte, 0) no plano tangente do fix, como o
+  // eastNorthUpToFixedFrame do Cesium fazia.
+  const phi = start.lat * DEG;
+  const lam = start.lon * DEG;
+  const e = _forwardFixArc.east;
+  const n = _forwardFixArc.north;
+  const base = ecefFromGeo(start.lon, start.lat, start.alt);
+  const ecef = {
+    x: base.x - Math.sin(lam) * e - Math.sin(phi) * Math.cos(lam) * n,
+    y: base.y + Math.cos(lam) * e - Math.sin(phi) * Math.sin(lam) * n,
+    z: base.z + Math.cos(phi) * n,
+  };
+  let position;
+  if (isGeo(newest.position) || Array.isArray(newest.position)) {
+    const g = geoFromEcef(ecef);
+    position = { lon: g.lon, lat: g.lat, alt: g.alt };
+  } else {
+    position = ecef;
+  }
   return {
-    time: Cesium.JulianDate.fromDate(new Date(next.epochMs)),
+    time: next.epochMs,
     epochMs: next.epochMs,
     position,
     velocity: Number.isFinite(next.velocity) ? Math.max(0, next.velocity) : previousVelocity,

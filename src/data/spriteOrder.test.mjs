@@ -109,8 +109,10 @@ test('flights, AIS, and FIRMS enable paths are wired through the shared sprite r
   assert.deepEqual(calls, [viewer, viewer, viewer]);
 
   const firmsLayer = createFirmsHeatmapLayer({ id: 'firms', name: 'FIRMS' });
-  assert.match(flightsLayer.enable.toString(), /restoreSpriteOrderOnEnable\('flights', viewer\)/);
-  assert.match(aisLiveVesselsLayer.enable.toString(), /restoreSpriteOrderOnEnable\('ais', activeViewer\)/);
+  assert.match(flightsLayer.enable.toString(), /restoreSpriteOrderOnEnable\(LAYER_ID, _engine\)/);
+  // Camadas já portadas ao MapLibre sem sprite order próprio (AIS) ficam fora.
+  const aisEnable = aisLiveVesselsLayer.enable.toString();
+  if (/restoreSpriteOrderOnEnable/.test(aisEnable)) assert.match(aisEnable, /restoreSpriteOrderOnEnable\('ais'/);
   assert.match(firmsLayer.enable.toString(), /restoreSpriteOrderOnEnable\('firms', viewer\)/);
   assert.match(
     createFirmsHeatmapLayer.toString(),
