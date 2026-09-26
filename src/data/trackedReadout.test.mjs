@@ -275,3 +275,11 @@ test('tracking layers that feed the readout write gevLabelModel and a display po
 // 3D-model trail-head anchor and MODEL_COLOR_BLEND_AMOUNT tint described
 // Cesium model rendering, which the MapLibre layers no longer have.)
 
+
+test('alvo que desenha o próprio cartão (mapLabel) não é publicado de novo', async () => {
+  const { createTrackedOverlayEntry } = await import('./trackedReadout.js');
+  const model = { title: 'AZU4567', details: ['FL350'], accent: '#00d4ff' };
+  assert.ok(createTrackedOverlayEntry({ id: 'x', gevLabelModel: model, getPosition: () => ({ lon: -49, lat: -25, height: 10000 }) }) !== undefined);
+  const src = (await import('node:fs')).readFileSync(new URL('./trackedReadout.js', import.meta.url), 'utf8');
+  assert.match(src, /entity\?\.mapLabel \? null/);
+});

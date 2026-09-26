@@ -177,7 +177,9 @@ export function createTrackedOverlayEntry(entity) {
 }
 
 function publishEntity(entity) {
-  const entry = createTrackedOverlayEntry(entity);
+  // Alvo com `mapLabel: true` (voos) desenha o próprio cartão no mapa: publicar
+  // aqui mostraria o cartão em dobro.
+  const entry = entity?.mapLabel ? null : createTrackedOverlayEntry(entity);
   if (!entry) {
     clearTrackedSource();
     return;
