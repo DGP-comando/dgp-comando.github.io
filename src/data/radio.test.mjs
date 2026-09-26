@@ -32,6 +32,8 @@ import {
   rankRadioStationsForRequest,
   radioRequestIsCurrent,
   radioLayer,
+  _attachRadioMapForTest,
+  radioClusterCategoryExpression,
   reconcileRadioClusterCandidates,
   retainRadioClusterIdentitiesForStations,
   radioStationIdFromPick,
@@ -934,7 +936,7 @@ test('failed exact tuner release cannot consume a stale playback fallback', asyn
 test('tuner cancellation restores the frozen start marker after catalog removal', async () => {
   const originalFetch = globalThis.fetch;
   const originalAudio = globalThis.Audio;
-  const selectedEntities = new Map();
+  const sources = new Map();
   let playCalls = 0;
   let flyToCalls = 0;
   globalThis.Audio = class FakeAudio {
@@ -948,20 +950,32 @@ test('tuner cancellation restores the frozen start marker after catalog removal'
     removeAttribute() {}
     load() {}
   };
+  // Fake engine + map: the selected-station source is what the test observes
+  // (it replaced the Cesium selected entity).
+  const map = {
+    getSource: (id) => ({ setData: (data) => sources.set(id, data) }),
+    getLayer: () => null,
+    hasImage: () => true,
+    on() {},
+    queryRenderedFeatures: () => [],
+  };
   const viewer = {
-    camera: {
-      positionWC: { x: 7_000_000, y: 0, z: 0 },
-      flyTo() { flyToCalls += 1; },
+    map,
+    flyToCamera() { flyToCalls += 1; },
+    cancelFlight() {},
+    getCameraView: () => ({ lat: 0, lon: 0, alt: 7_000_000, heading: 0, pitch: -90, zoom: 4, targetLat: 0, targetLon: 0 }),
+    on: () => () => {},
+    trackedTarget: null,
+  };
+  const host = { register() {}, ensureAdded() {}, setVisible() {} };
+  const selectedEntities = {
+    get(pickId) {
+      const feature = sources.get('dg-radio-sel')?.features?.[0];
+      return feature?.properties?.pickId === pickId
+        ? { id: pickId, position: feature.geometry.coordinates }
+        : undefined;
     },
-    scene: {
-      canvas: { disableRootEvents: true, onwheel: null, addEventListener() {}, removeEventListener() {} },
-      requestRender() {},
-    },
-    dataSources: { add() {}, remove() {} },
-    entities: {
-      add(entity) { selectedEntities.set(entity.id, entity); return entity; },
-      remove(entity) { return selectedEntities.delete(entity?.id); },
-    },
+    has(pickId) { return Boolean(this.get(pickId)); },
   };
   const stationA = {
     id: '00000000-0000-4000-8000-000000000051',
@@ -1002,6 +1016,7 @@ test('tuner cancellation restores the frozen start marker after catalog removal'
   radioLayer.destroy();
   try {
     radioLayer.init(viewer);
+    _attachRadioMapForTest(viewer, host);
     radioLayer.enable();
     radioLayer.setLifecyclePresentation({
       lifecycleState: 'enabled', enabled: true, uncertain: false,
@@ -1656,19 +1671,64 @@ test('Radio recovery preserves closer altitude and caps extreme full-globe zoom'
   assert.equal(radioGlobeRecenterHeight(Number.NaN, true), null);
 });
 
-test('Radio camera navigation yields to every live tracked-entity owner', () => {
-  const viewer = { camera: {} };
-  assert.equal(radioCameraNavigationAllowed(viewer), true);
-  for (const gevTrackedId of ['flights:abc123', 'military:def456']) {
-    const trackedEntity = { gevTrackedId };
-    viewer.trackedEntity = trackedEntity;
-    assert.equal(radioCameraNavigationAllowed(viewer), false, gevTrackedId);
-    assert.equal(viewer.trackedEntity, trackedEntity);
+test('Radio camera navigation yields to every live tracked-target owner', () => {
+  const engine = { flyToCamera() {}, trackedTarget: null };
+  assert.equal(radioCameraNavigationAllowed(engine), true);
+  for (const layerId of ['flights', 'military', 'ais-live-vessels']) {
+    const target = { layerId, id: 'abc123', getPosition: () => null };
+    engine.trackedTarget = target;
+    assert.equal(radioCameraNavigationAllowed(engine), false, layerId);
+    assert.equal(engine.trackedTarget, target);
   }
-  viewer.trackedEntity = undefined;
-  assert.equal(radioCameraNavigationAllowed(viewer), true);
-  assert.equal(radioCameraNavigationAllowed({ trackedEntity: {} }), false);
+  engine.trackedTarget = null;
+  assert.equal(radioCameraNavigationAllowed(engine), true);
+  assert.equal(radioCameraNavigationAllowed({ trackedTarget: {} }), false);
   assert.equal(radioCameraNavigationAllowed(null), false);
+});
+
+test('cluster category expression mirrors radioClusterCategoryId', () => {
+  // Evaluate the generated MapLibre expression with a tiny interpreter over
+  // the per-category counts a cluster carries.
+  const evaluate = (expr, props) => {
+    if (!Array.isArray(expr)) return expr;
+    const [op, ...args] = expr;
+    const v = (e) => evaluate(e, props);
+    switch (op) {
+      case 'get': return props[args[0]] ?? 0;
+      case 'max': return Math.max(...args.map(v));
+      case '>': return v(args[0]) > v(args[1]);
+      case '<': return v(args[0]) < v(args[1]);
+      case '==': return v(args[0]) === v(args[1]);
+      case 'all': return args.every((a) => v(a));
+      case 'case': {
+        for (let i = 0; i + 1 < args.length; i += 2) if (v(args[i])) return v(args[i + 1]);
+        return v(args[args.length - 1]);
+      }
+      default: throw new Error(`op ${op}`);
+    }
+  };
+  const tagsFor = {
+    news: ['news'], 'public-safety': ['police scanner'], weather: ['weather'], talk: ['talk'],
+    music: ['jazz'], other: ['community'], 'aviation-marine': ['air traffic'], 'traffic-transit': ['transit'],
+  };
+  const cases = [
+    { news: 2, music: 2 },
+    { music: 3, news: 1 },
+    { other: 4, news: 3 },
+    { other: 2, news: 2 },
+    { talk: 1, weather: 1, 'public-safety': 1 },
+    { other: 3 },
+  ];
+  const expr = radioClusterCategoryExpression('all');
+  for (const counts of cases) {
+    const clusterStations = Object.entries(counts).flatMap(([cat, n]) => (
+      Array.from({ length: n }, (_, i) => ({ id: `${cat}-${i}`, tags: tagsFor[cat] }))
+    ));
+    const props = Object.fromEntries(Object.entries(counts).map(([cat, n]) => [`n_${cat.replace(/[^a-z0-9]/gi, '_')}`, n]));
+    assert.equal(evaluate(expr, props), radioClusterCategoryId(clusterStations, 'all'), JSON.stringify(counts));
+  }
+  assert.equal(radioClusterCategoryExpression('news'), 'news');
+  assert.equal(radioClusterCategoryExpression('genre:jazz'), 'genre:jazz');
 });
 
 test('tuner static spans drag and broadcaster handoff but voice ducking silences it', () => {
