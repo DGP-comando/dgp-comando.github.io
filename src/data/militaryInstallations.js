@@ -1,4 +1,50 @@
-import * as Cesium from 'cesium';
+/**
+ * @module militaryInstallations
+ * @description Camada INSTALAÇÕES MAPEADAS (id `military-installations`)
+ * desenhada no MapLibre GL.
+ *
+ * DESLIGADA EM PRODUÇÃO: depende dos proxies do dev-server
+ * (`/api/military-installations` → Overpass/OSM com cache em disco, e
+ * `/api/google/text-search` → Google Places), então só é registrada no dev.
+ *
+ * DADOS (inalterados): a cada fim de movimento da câmera (debounce 500 ms)
+ * pede o retângulo visível (≤ 10° de lado; mais que isso → "zoom-in"), refaz
+ * com `exact=1` quando o bloco encaixado veio saturado, normaliza
+ * (militaryInstallationData.js) e descarta o que está fora do retângulo
+ * pedido. `searchNearby()` acrescenta uma busca única no Google Places.
+ * Falha → "unavailable" com nova tentativa em 30 s → 240 s.
+ *
+ * DESENHO (MIGRAÇÃO MAPLIBRE 2026-09, substitui a CustomDataSource)
+ *  - Fonte GeoJSON `dg-milinst`: polígono de pegada (preenchimento 12 %,
+ *    contorno 65 % na cor da classe) e ponto de 9 px com contorno preto; o
+ *    selecionado fica branco e maior (13 px). Rótulo com o nome a partir do
+ *    zoom 9 (sempre no selecionado). Cores por classe: airfield #5aa9ff,
+ *    naval_base #48c7d5, range #d9a85d, military_land #9ca6b0,
+ *    places_candidate #c58cff.
+ *  - Hover: tooltip (nome, classe, fonte, validação). Clique: seleciona e
+ *    publica no contextStore (`gev:entity-selected`), que o painel CONTATOS
+ *    (militaryAwareness) usa como sujeito.
+ *  - No máximo 700 desenhadas (as mais próximas na ordem do feed) + a
+ *    selecionada, como antes.
+ *
+ * O QUE ERA 3D E DEGRADA NO 2D: o encaixe dos pontos/pegadas no piso do
+ * relevo (groundFloor/fireAnchors, com re-render quando o piso chegava
+ * atrasado) não tem efeito num mapa 2D e saiu; `installationSurfaceHeightM`
+ * continua exportada e dá a altura dos pontos neutros de `getNearby` a partir
+ * do cache de piso já aquecido (0 quando frio).
+ *
+ * API PÚBLICA (mesmos nomes)
+ *  - init(engine)/enable/disable/update/destroy/getStats, searchNearby(),
+ *    focusById(id) (seleciona e voa até a instalação: engine.flyToTarget).
+ *  - getNearby(center, rangeM, maxCount): `center` em qualquer formato aceito
+ *    por geoPoint.toGeoPoint (neutro, {lon,lat}, ECEF); cada item traz
+ *    `position` = ponto neutro {lon, lat, height, x, y, z} e `distanceM`
+ *    (distância de superfície).
+ *  - Exports puros: approximateSurfaceDistanceM, classifyGoogleMilitaryPlace,
+ *    installationSourceLabel, installationSurfaceHeightM,
+ *    installationWithinViewport, installationResponseSaturated,
+ *    installationRetryDelayMs.
+ */
 import { governorRequestRender } from '../renderGovernor.js';
 import {
   clearSelectedEntityContextForLayer,
@@ -6,18 +52,11 @@ import {
   removeEntityContextsForLayer,
   selectEntityContext,
 } from './contextStore.js';
-import {
-  cachedGroundFloor,
-  floorAltitudeM,
-  resolveGroundFloorCellsBounded,
-} from './groundFloor.js';
-// The shared batched/chunked/session-cached DEM warm chain. The module name is
-// historical (it shipped with the FIRMS fire anchors); the mechanism itself is
-// generic — cold coarse floor cells for a rendered point set, resolved strictly
-// sequentially so overlapping renders cannot stack requests on the proxy.
-import { warmFireAnchorFloors } from './fireAnchors.js';
+import { cachedGroundFloor, floorAltitudeM } from './groundFloor.js';
 import { normalizeMilitaryInstallations } from './militaryInstallationData.js';
-import { registerPickOwner, unregisterPickOwner } from './pickRegistry.js';
+import { geoPoint, toGeoPoint } from './geoPoint.js';
+import { getActiveLayerHost } from '../maplibre/layerHost.js';
+import { EMPTY_FC, LABEL_PAINT, TEXT_FONT, defineLayer, esc, matchColor, row } from '../maplibre/kit.js';
 
 const LAYER_ID = 'military-installations';
 const REQUEST_DEBOUNCE_MS = 500;
@@ -31,18 +70,20 @@ const COLOR_BY_CLASS = {
   military_land: '#9ca6b0',
   places_candidate: '#c58cff',
 };
+const DEFAULT_COLOR = '#9ca6b0';
 const EARTH_MEAN_RADIUS_M = 6371008.8;
 const DISTANCE_PREFILTER_MARGIN_M = 5000;
-const distanceEndpointScratch = new Cesium.Cartographic();
-const distanceGeodesicScratch = new Cesium.EllipsoidGeodesic();
+/** Enquadramento do focusById: o antigo flyToBoundingSphere de raio 18 km. */
+const FOCUS_RANGE_M = 40000;
+const DEG = Math.PI / 180;
 
 /**
- * Allocation-free spherical distance used only as a conservative rejection
- * pass before the exact ellipsoidal geodesic calculation.
+ * Distância esférica sem alocação, usada só como pré-filtro conservador.
+ * (latitude/longitude A em RADIANOS; B em graus.)
  */
 export function approximateSurfaceDistanceM(latitudeARad, longitudeARad, latitudeBDeg, longitudeBDeg) {
-  const latitudeBRad = Cesium.Math.toRadians(latitudeBDeg);
-  const longitudeBRad = Cesium.Math.toRadians(longitudeBDeg);
+  const latitudeBRad = latitudeBDeg * DEG;
+  const longitudeBRad = longitudeBDeg * DEG;
   const latitudeDelta = latitudeBRad - latitudeARad;
   const longitudeDelta = Math.atan2(
     Math.sin(longitudeBRad - longitudeARad),
@@ -55,42 +96,80 @@ export function approximateSurfaceDistanceM(latitudeARad, longitudeARad, latitud
   return 2 * EARTH_MEAN_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(haversine)));
 }
 
+/**
+ * Distância de superfície no elipsoide WGS84 (Vincenty inverso, com recuo
+ * para a esférica quando não converge). Substitui o Cesium.EllipsoidGeodesic.
+ */
+export function ellipsoidSurfaceDistanceM(lat1Deg, lon1Deg, lat2Deg, lon2Deg) {
+  const a = 6378137;
+  const f = 1 / 298.257223563;
+  const b = a * (1 - f);
+  const L = (lon2Deg - lon1Deg) * DEG;
+  const U1 = Math.atan((1 - f) * Math.tan(lat1Deg * DEG));
+  const U2 = Math.atan((1 - f) * Math.tan(lat2Deg * DEG));
+  const sinU1 = Math.sin(U1); const cosU1 = Math.cos(U1);
+  const sinU2 = Math.sin(U2); const cosU2 = Math.cos(U2);
+  let lambda = L;
+  let iter = 0;
+  let sinSigma; let cosSigma; let sigma; let cosSqAlpha; let cos2SigmaM;
+  do {
+    const sinLambda = Math.sin(lambda);
+    const cosLambda = Math.cos(lambda);
+    sinSigma = Math.sqrt((cosU2 * sinLambda) ** 2 + (cosU1 * sinU2 - sinU1 * cosU2 * cosLambda) ** 2);
+    if (sinSigma === 0) return 0;
+    cosSigma = sinU1 * sinU2 + cosU1 * cosU2 * cosLambda;
+    sigma = Math.atan2(sinSigma, cosSigma);
+    const sinAlpha = (cosU1 * cosU2 * sinLambda) / sinSigma;
+    cosSqAlpha = 1 - sinAlpha * sinAlpha;
+    cos2SigmaM = cosSqAlpha !== 0 ? cosSigma - (2 * sinU1 * sinU2) / cosSqAlpha : 0;
+    const C = (f / 16) * cosSqAlpha * (4 + f * (4 - 3 * cosSqAlpha));
+    const prev = lambda;
+    lambda = L + (1 - C) * f * sinAlpha
+      * (sigma + C * sinSigma * (cos2SigmaM + C * cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM)));
+    if (Math.abs(lambda - prev) < 1e-12) break;
+  } while (++iter < 200);
+  if (iter >= 200) return approximateSurfaceDistanceM(lat1Deg * DEG, lon1Deg * DEG, lat2Deg, lon2Deg);
+  const uSq = (cosSqAlpha * (a * a - b * b)) / (b * b);
+  const A = 1 + (uSq / 16384) * (4096 + uSq * (-768 + uSq * (320 - 175 * uSq)));
+  const B = (uSq / 1024) * (256 + uSq * (-128 + uSq * (74 - 47 * uSq)));
+  const deltaSigma = B * sinSigma * (cos2SigmaM + (B / 4) * (cosSigma * (-1 + 2 * cos2SigmaM * cos2SigmaM)
+    - (B / 6) * cos2SigmaM * (-3 + 4 * sinSigma * sinSigma) * (-3 + 4 * cos2SigmaM * cos2SigmaM)));
+  return b * A * (sigma - deltaSigma);
+}
+
 const state = {
-  viewer: null,
-  dataSource: null,
+  engine: null,
   enabled: false,
   records: [],
   recordById: new Map(),
+  /** id -> portador de contexto (substitui a Cesium.Entity) */
+  entities: new Map(),
   selectedId: null,
   lastUpdate: null,
   error: null,
   status: 'idle',
   stale: false,
-  /** Whether the upstream truncated at its element cap for the current view. */
+  /** Se o upstream truncou no teto de elementos para a vista atual. */
   saturated: false,
   loading: false,
   abort: null,
-  /** Pending timed retry while status is 'unavailable' (see scheduleUnavailableRetry). */
+  /** Nova tentativa agendada enquanto o status é 'unavailable'. */
   retryTimer: null,
-  /** Current backoff step for that retry; 0 = next failure starts at the minimum. */
+  /** Passo atual do backoff; 0 = a próxima falha começa no mínimo. */
   retryDelayMs: 0,
   moveEndRemove: null,
-  clickHandler: null,
   timer: null,
   googleSearchRequested: false,
+  host: null,
+  defRegistered: false,
 };
 
-function colorFor(record) {
-  return Cesium.Color.fromCssColorString(COLOR_BY_CLASS[record.class] || '#9ca6b0');
-}
-
 /**
- * Classify a Places text-search result without turning a name match into a
- * mapped military-land claim. Google currently has no documented military
- * Places type, so ordinary results remain visually distinct candidates; the
- * explicit branch is retained for any source response that does carry one.
- * @param {object} place Google Places result.
- * @returns {string|null} Installation class, or null when not authoritative.
+ * Classifica um resultado do Places sem transformar um nome em "terreno
+ * militar": sem tipo militar documentado, fica como candidato visualmente
+ * distinto.
+ * @param {object} place Resultado do Google Places.
+ * @returns {string}
  */
 export function classifyGoogleMilitaryPlace(place) {
   const types = new Set([
@@ -102,7 +181,7 @@ export function classifyGoogleMilitaryPlace(place) {
     : 'places_candidate';
 }
 
-/** @param {object} record @returns {string} Human-readable source attribution. */
+/** @param {object} record @returns {string} Atribuição legível da fonte. */
 export function installationSourceLabel(record) {
   const names = [...new Set((Array.isArray(record?.sources) ? record.sources : [])
     .map((source) => String(source?.name || '').trim())
@@ -111,9 +190,10 @@ export function installationSourceLabel(record) {
 }
 
 /**
- * Shared rendered-surface height for an installation anchor or footprint.
- * @param {{latitude:number, longitude:number}} record Installation record.
- * @returns {number} Ellipsoidal render height in metres.
+ * Altura de superfície (m) de uma instalação a partir do cache de piso
+ * compartilhado (0 quando frio). No 2D é só o `height` do ponto neutro.
+ * @param {{latitude:number, longitude:number}} record
+ * @returns {number}
  */
 export function installationSurfaceHeightM(record) {
   return floorAltitudeM(
@@ -123,28 +203,11 @@ export function installationSurfaceHeightM(record) {
 }
 
 /**
- * Whether a mapped record belongs to the REQUESTED viewport.
- *
- * The proxy snaps the request bbox outward onto a shared cache grid, so a
- * response is a SUPERSET of what was asked for, and rendering that superset
- * would put off-screen sites into the map and into the "CURRENT VIEWPORT ONLY"
- * context claim. What may be tested depends on how much of a feature's geometry
- * we actually hold:
- *
- *  - A NODE is a point: its centre IS its whole geometry, so an exact
- *    containment test is correct and loses nothing.
- *  - A record WITH a footprint is tested by bounding-box overlap. Overpass bbox
- *    queries return features that merely INTERSECT the box, so centre-testing
- *    these would drop large bases whose centre sits just outside.
- *  - A way or relation WITHOUT a footprint is KEPT. Relations carry geometry on
- *    their members and ways beyond MAX_FOOTPRINT_POINTS are normalized without
- *    one, so their true extent is unknown here — and Overpass already proved
- *    they intersect the queried bbox. Centre-testing them would erase exactly
- *    the biggest installations. The honest cost is slight over-inclusion,
- *    bounded by one snap cell (~5.5 km) around the viewport.
- *
+ * Se um registro pertence ao retângulo PEDIDO (o proxy devolve um superconjunto
+ * encaixado na grade do cache): nó por centro; com pegada, por sobreposição
+ * de caixas; way/relation sem pegada é mantido (extensão desconhecida).
  * @param {{latitude:number, longitude:number, footprint:?Array, osmType:?string}} record
- * @param {{south:number, west:number, north:number, east:number}} box Requested viewport.
+ * @param {{south:number, west:number, north:number, east:number}} box
  * @returns {boolean}
  */
 export function installationWithinViewport(record, box) {
@@ -165,17 +228,12 @@ export function installationWithinViewport(record, box) {
     return maxLat >= box.south && minLat <= box.north
       && maxLon >= box.west && minLon <= box.east;
   }
-  // Unknown extent: inclusive. Only a point feature may be excluded on centre.
   return record.osmType !== 'node';
 }
 
 /**
- * Whether a response was truncated at the upstream element cap.
- *
- * The proxy states this outright, but a `saturated`-less payload is NOT
- * evidence of a complete answer: entries cached before the saturation guard
- * shipped predate the field and live for 30 days. Fall back to deriving it from
- * the element count against the cap the payload itself reports.
+ * Se a resposta foi truncada no teto do upstream (flag explícita, ou derivada
+ * da contagem contra o teto informado para entradas antigas do cache).
  * @param {{saturated?: boolean, elements?: Array, elementCap?: number}} payload
  * @returns {boolean}
  */
@@ -186,15 +244,7 @@ export function installationResponseSaturated(payload) {
   return Array.isArray(payload?.elements) && payload.elements.length >= cap;
 }
 
-/**
- * Commit a status/error transition and buy the one frame it needs.
- *
- * With the render governor idle — Contacts has released its hold and nothing
- * else animates — no frame would otherwise arrive to re-read this, so a load
- * that fails after the scene went quiet would leave the last healthy readout on
- * screen indefinitely.
- * @param {string} status @param {?string} error
- */
+/** Registra a transição de status e pede o quadro que ela precisa. */
 function setInstallationStatus(status, error = null) {
   if (state.status === status && state.error === error) return;
   state.status = status;
@@ -202,35 +252,137 @@ function setInstallationStatus(status, error = null) {
   governorRequestRender('installations-status');
 }
 
-function viewportBox(viewer) {
-  const rectangle = viewer?.camera?.computeViewRectangle(viewer.scene.globe.ellipsoid);
-  if (!rectangle) return null;
-  const south = Cesium.Math.toDegrees(rectangle.south);
-  const north = Cesium.Math.toDegrees(rectangle.north);
-  const west = Cesium.Math.toDegrees(rectangle.west);
-  const east = Cesium.Math.toDegrees(rectangle.east);
-  // Cross-dateline/global views require a zoom before a bounded request.
-  if (!Number.isFinite(south + north + west + east) || east <= west || north - south > MAX_VIEWPORT_DEGREES || east - west > MAX_VIEWPORT_DEGREES) return null;
+/** Retângulo visível {south, west, north, east}, ou null (vista global / antimeridiano). */
+function viewportBox(engine) {
+  let bounds = null;
+  try { bounds = engine?.map?.getBounds?.() ?? null; } catch { bounds = null; }
+  if (!bounds) return null;
+  const south = bounds.getSouth();
+  const north = bounds.getNorth();
+  const west = bounds.getWest();
+  const east = bounds.getEast();
+  if (!Number.isFinite(south + north + west + east) || east <= west || west < -180 || east > 180
+    || north - south > MAX_VIEWPORT_DEGREES || east - west > MAX_VIEWPORT_DEGREES) return null;
   return { south, west, north, east };
 }
 
+// ---------------------------------------------------------------------------
+// MapLibre
+// ---------------------------------------------------------------------------
+
+const SRC = 'dg-milinst';
+const L_FILL = 'dg-milinst-fill';
+const L_LINE = 'dg-milinst-line';
+const L_PT = 'dg-milinst-pt';
+const L_LABEL = 'dg-milinst-label';
+const CLASS_COLOR = matchColor('class', COLOR_BY_CLASS, DEFAULT_COLOR);
+const IS_POLY = ['==', ['geometry-type'], 'Polygon'];
+const IS_POINT = ['==', ['geometry-type'], 'Point'];
+
+function tooltipHtml(props) {
+  const record = state.recordById.get(props?.rid);
+  if (!record) return '';
+  return `<div><strong>⌖ ${esc(record.name || 'Instalação mapeada')}</strong>`
+    + row('Classe', String(record.class || 'installation').replaceAll('_', ' '))
+    + row('Fonte', installationSourceLabel(record))
+    + row('Validação', record.validation)
+    + '</div>';
+}
+
+/** Definição da camada no contrato do anfitrião (kit.js). */
+export const militaryInstallationsMapDef = defineLayer({
+  id: LAYER_ID,
+  name: 'Mapped Installations',
+  category: 'Infraestrutura',
+  icon: '⌖',
+  source: 'OpenStreetMap + optional Google Maps Places',
+  sources: { [SRC]: { type: 'geojson', data: EMPTY_FC } },
+  layers: [
+    {
+      id: L_FILL, type: 'fill', source: SRC, filter: IS_POLY,
+      paint: { 'fill-color': CLASS_COLOR, 'fill-opacity': ['case', ['get', 'sel'], 0.22, 0.12] },
+    },
+    {
+      id: L_LINE, type: 'line', source: SRC, filter: IS_POLY,
+      paint: { 'line-color': ['case', ['get', 'sel'], '#ffffff', CLASS_COLOR], 'line-opacity': 0.65, 'line-width': 1.2 },
+    },
+    {
+      id: L_PT, type: 'circle', source: SRC, filter: IS_POINT,
+      paint: {
+        'circle-radius': ['case', ['get', 'sel'], 6.5, 4.5],
+        'circle-color': ['case', ['get', 'sel'], '#ffffff', CLASS_COLOR],
+        'circle-stroke-color': 'rgba(0,0,0,0.8)',
+        'circle-stroke-width': 1,
+      },
+    },
+    {
+      id: L_LABEL, type: 'symbol', source: SRC,
+      filter: ['all', IS_POINT, ['any', ['get', 'sel'], ['>=', ['zoom'], 9]]],
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': TEXT_FONT,
+        'text-size': 11,
+        'text-offset': [0, 1.1],
+        'text-anchor': 'top',
+        'text-max-width': 12,
+        'text-optional': true,
+      },
+      paint: { ...LABEL_PAINT },
+    },
+  ],
+  interactive: [L_PT, L_FILL],
+  tooltip: (props) => tooltipHtml(props),
+  click: (props) => {
+    if (!state.enabled) return;
+    if (props?.rid && state.recordById.has(props.rid)) selectRecord(props.rid);
+  },
+});
+
+function ensureMapLayers() {
+  const map = state.engine?.map;
+  if (!map) return false;
+  state.host = state.host || getActiveLayerHost();
+  try {
+    if (state.host) {
+      if (!state.defRegistered || !state.host.ctx?.getLayer?.(LAYER_ID)) {
+        state.host.register(militaryInstallationsMapDef);
+        state.defRegistered = true;
+      }
+      state.host.ensureAdded(militaryInstallationsMapDef);
+    } else if (typeof map.addSource === 'function') {
+      for (const [id, spec] of Object.entries(militaryInstallationsMapDef.sources)) if (!map.getSource(id)) map.addSource(id, spec);
+      for (const layer of militaryInstallationsMapDef.layers) if (!map.getLayer(layer.id)) map.addLayer(layer);
+    }
+    return true;
+  } catch (err) {
+    console.warn('[Data:Installations] layers', err);
+    return false;
+  }
+}
+
+function setMapVisible(visible) {
+  const map = state.engine?.map;
+  if (!map) return;
+  if (state.host) {
+    state.host.setVisible(LAYER_ID, visible);
+    return;
+  }
+  for (const layer of militaryInstallationsMapDef.layers) {
+    if (map.getLayer?.(layer.id)) map.setLayoutProperty(layer.id, 'visibility', visible ? 'visible' : 'none');
+  }
+}
+
+function setSourceData(data) {
+  try { state.engine?.map?.getSource?.(SRC)?.setData(data); } catch { /* estilo trocando */ }
+}
+
 function clearRendered() {
-  if (state.dataSource?.entities) state.dataSource.entities.removeAll();
+  state.entities = new Map();
+  setSourceData(EMPTY_FC);
   removeEntityContextsForLayer(LAYER_ID);
 }
 
-/**
- * The records that get entities this paint: the nearest `MAX_RENDERED`, plus
- * the selected one when it falls outside that window.
- *
- * Context navigation walks the FULL nearby cohort, which is not bounded by the
- * render cap, so selecting item 701+ used to produce no entity at all — the
- * camera flew, `getById` returned null, and the selection was silently dropped
- * on the floor, leaving the Context subject stale so NEXT offered the same
- * installation forever. One extra entity keeps every cohort item selectable
- * and the cohort count honest.
- * @returns {Array<object>} Records to render this paint.
- */
+/** As 700 primeiras + a selecionada quando fica fora dessa janela. */
 function renderableRecords() {
   const rendered = state.records.slice(0, MAX_RENDERED);
   if (!state.selectedId) return rendered;
@@ -239,44 +391,47 @@ function renderableRecords() {
   return selected ? [...rendered, selected] : rendered;
 }
 
+function recordPosition(record) {
+  return geoPoint(record.longitude, record.latitude, installationSurfaceHeightM(record));
+}
+
 function renderRecords() {
-  // Post-moveEnd debounced fetches commit after the camera settles; the
-  // rebuilt entities need one frame in idle mode. (perf wave 2 fix)
   governorRequestRender('installations-render');
   clearRendered();
+  const features = [];
+  const polygons = [];
   for (const record of renderableRecords()) {
-    const color = colorFor(record);
-    const surfaceHeightM = installationSurfaceHeightM(record);
-    const displayPosition = Cesium.Cartesian3.fromDegrees(
-      record.longitude,
-      record.latitude,
-      surfaceHeightM,
-    );
-    const entity = state.dataSource.entities.add({
-      id: record.id,
-      position: displayPosition,
-      point: {
-        pixelSize: record.id === state.selectedId ? 13 : 9,
-        color: record.id === state.selectedId ? Cesium.Color.WHITE : color,
-        outlineColor: Cesium.Color.BLACK.withAlpha(0.8),
-        outlineWidth: 1,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      },
-      polygon: record.footprint ? {
-        hierarchy: new Cesium.PolygonHierarchy(record.footprint.map(([longitude, latitude]) => Cesium.Cartesian3.fromDegrees(longitude, latitude))),
-        material: color.withAlpha(0.12),
-        outline: true,
-        outlineColor: color.withAlpha(0.65),
-        height: surfaceHeightM,
-      } : undefined,
-    });
-    entity.gevTrackedId = `installations:${record.id}`;
-    entity.gevDisplayPosition = () => displayPosition;
-    entity.gevLabelModel = {
-      title: record.name || 'MAPPED INSTALLATION',
-      details: [String(record.class || 'installation').replaceAll('_', ' ').toUpperCase()],
-      accent: COLOR_BY_CLASS[record.class] || '#9ca6b0',
+    const selected = record.id === state.selectedId;
+    const props = {
+      rid: record.id,
+      name: record.name || '',
+      class: record.class || 'military_land',
+      sel: selected,
     };
+    if (Array.isArray(record.footprint) && record.footprint.length >= 3) {
+      const ring = record.footprint.map(([lon, lat]) => [lon, lat]);
+      const [fx, fy] = ring[0];
+      const [lx, ly] = ring[ring.length - 1];
+      if (fx !== lx || fy !== ly) ring.push([fx, fy]);
+      polygons.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [ring] }, properties: props });
+    }
+    features.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [record.longitude, record.latitude] }, properties: props });
+
+    const displayPosition = recordPosition(record);
+    // Portador de contexto (o que era a Cesium.Entity): identidade, rótulo e
+    // posição que o contextStore, o leitor de alvo e CONTATOS consultam.
+    const entity = {
+      id: record.id,
+      show: true,
+      gevTrackedId: `installations:${record.id}`,
+      gevDisplayPosition: () => displayPosition,
+      gevLabelModel: {
+        title: record.name || 'MAPPED INSTALLATION',
+        details: [String(record.class || 'installation').replaceAll('_', ' ').toUpperCase()],
+        accent: COLOR_BY_CLASS[record.class] || DEFAULT_COLOR,
+      },
+    };
+    state.entities.set(record.id, entity);
     registerEntityContext(entity, {
       id: record.id,
       layerId: LAYER_ID,
@@ -296,68 +451,24 @@ function renderRecords() {
       },
     });
   }
-  const selectedEntity = state.selectedId
-    ? state.dataSource.entities.getById(state.selectedId)
-    : null;
+  // Polígonos antes dos pontos (o selecionado por último, por cima).
+  features.sort((a, b) => Number(a.properties.sel) - Number(b.properties.sel));
+  setSourceData({ type: 'FeatureCollection', features: [...polygons, ...features] });
+  const selectedEntity = state.selectedId ? state.entities.get(state.selectedId) : null;
   if (selectedEntity) selectEntityContext(selectedEntity);
   else state.selectedId = null;
 }
 
-/**
- * Second paint for floors that missed the bounded pre-render deadline.
- *
- * `resolveGroundFloorCellsBounded` gives up after FLOOR_RESOLVE_DEADLINE_MS so
- * a cold DEM can never hold the dots hostage — but the resolve keeps running
- * and lands seconds later, and without this the records it covers stay pinned
- * at ellipsoid height 0, sitting visibly under the 3D tiles (field test
- * 2026-08-18: "orange dots at the bottom").
- *
- * This is the render -> warm -> re-render chain FIRMS already uses, with one
- * difference the installations path forces: the trigger is whether a cell that
- * was COLD AT PAINT TIME is warm now, not whether this particular batch warmed
- * it. The bounded resolve above is still running against the same cells, so
- * asking "did MY batch warm anything" would answer false exactly when the other
- * resolve won the race — the common case. Still terminating: a set that is
- * wholly cold afterwards re-renders zero times and the next camera-driven load
- * retries.
- * @param {Array<object>} records Records just rendered.
- * @returns {void}
- */
-function warmInstallationFloors(records) {
-  const cold = records
-    .filter((record) => cachedGroundFloor(record.latitude, record.longitude) == null)
-    .map((record) => ({ lat: record.latitude, lon: record.longitude }));
-  if (!cold.length) return;
-  warmFireAnchorFloors(cold).then(() => {
-    if (!state.enabled || !state.dataSource) return;
-    if (!cold.some((point) => cachedGroundFloor(point.lat, point.lon) != null)) return;
-    renderRecords();
-  });
-}
-
 function selectRecord(id) {
   const record = state.recordById.get(id);
-  if (!record || !state.dataSource) return false;
+  if (!record || !state.engine) return false;
   state.selectedId = id;
   renderRecords();
-  // renderRecords drops selectedId when the record produced no entity.
   return state.selectedId === id;
 }
 
-function installInteraction(viewer) {
-  if (state.clickHandler) return;
-  state.clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  state.clickHandler.setInputAction((click) => {
-    if (!state.enabled) return;
-    const picked = viewer.scene.pick(click.position);
-    const id = typeof picked?.id?.id === 'string' ? picked.id.id : null;
-    if (id && state.recordById.has(id)) selectRecord(id);
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-}
-
 /**
- * Backoff progression for the unavailable-state retry: 30 s, doubling to a
- * 240 s ceiling. Pure so the progression is pinnable without booting the layer.
+ * Progressão do backoff do estado 'unavailable': 30 s, dobrando até 240 s.
  */
 export function installationRetryDelayMs(prevDelayMs) {
   const RETRY_MIN_MS = 30000;
@@ -367,13 +478,9 @@ export function installationRetryDelayMs(prevDelayMs) {
 }
 
 /**
- * 'Temporarily unavailable' must mean temporarily: fetches otherwise fire only
- * on enable and on camera moveEnd, so a parked camera whose first request died
- * (one flaky Overpass mirror is enough) stayed unavailable forever while the
- * proxy sat healthy while the layer refused to show its features. While the
- * layer is enabled and
- * unavailable, retry on a 30 s → 240 s backoff; any success, user-driven load,
- * zoom-out, or disable cancels it.
+ * "Temporariamente indisponível" tem de ser temporário: com a câmera parada
+ * não há moveend, então, enquanto ligada e indisponível, tenta de novo em
+ * 30 s → 240 s; sucesso, carga do usuário, afastar o zoom ou desligar cancelam.
  */
 function scheduleUnavailableRetry() {
   if (!state.enabled) return;
@@ -393,16 +500,15 @@ function clearUnavailableRetry({ resetBackoff = true } = {}) {
 
 function scheduleLoad() {
   if (!state.enabled) return;
-  // A user-driven load supersedes any pending retry; the load reschedules on
-  // failure, so the backoff step is kept rather than reset.
+  // Uma carga do usuário substitui a nova tentativa (mantendo o passo do backoff).
   clearUnavailableRetry({ resetBackoff: false });
   clearTimeout(state.timer);
   state.timer = setTimeout(() => { loadInstallations(); }, REQUEST_DEBOUNCE_MS);
 }
 
 async function loadInstallations() {
-  if (!state.enabled || !state.viewer) return;
-  const box = viewportBox(state.viewer);
+  if (!state.enabled || !state.engine) return;
+  const box = viewportBox(state.engine);
   if (!box) {
     state.abort?.abort();
     state.abort = null;
@@ -426,18 +532,13 @@ async function loadInstallations() {
     };
 
     let payload = await fetchInstallations(false);
-    // A SATURATED snapped tile was truncated upstream, so features from the
-    // snap's extra ring may have crowded out sites actually on screen. Re-ask
-    // for the exact viewport (separately keyed and cached) before rendering.
+    // Bloco encaixado SATURADO: refaz para o retângulo exato antes de desenhar.
     let saturated = installationResponseSaturated(payload);
     if (saturated) {
       payload = await fetchInstallations(true);
       saturated = installationResponseSaturated(payload);
     }
     const normalized = normalizeMilitaryInstallations(payload, payload.retrievedAt || new Date().toISOString());
-    // The proxy answers a bbox at least as large as the viewport; keep only what
-    // was actually asked for so nothing off-screen reaches the map or the
-    // "current viewport only" context claim.
     const records = normalized.records.filter((record) => installationWithinViewport(record, box));
     let placesError = null;
     if (state.googleSearchRequested) {
@@ -479,17 +580,12 @@ async function loadInstallations() {
         placesError = 'Google Places search unavailable; showing mapped sites';
       }
     }
-    await resolveGroundFloorCellsBounded(records.map((record) => ({
-      lat: record.latitude,
-      lon: record.longitude,
-    })));
     if (requestAbort.signal.aborted || state.abort !== requestAbort || !state.enabled) return;
     state.records = records;
     state.recordById = new Map(state.records.map((record) => [record.id, record]));
     state.lastUpdate = Date.now();
     state.stale = payload.status === 'stale';
-    // Even the exact-viewport retry can saturate in a dense area. Say so rather
-    // than implying the view is completely surveyed.
+    // Mesmo o pedido exato pode saturar numa área densa: dizer isso.
     state.saturated = saturated;
     clearUnavailableRetry();
     setInstallationStatus(
@@ -499,13 +595,12 @@ async function loadInstallations() {
         : (saturated ? 'Too many mapped sites in view to list them all' : placesError),
     );
     renderRecords();
-    warmInstallationFloors(state.records);
   } catch (error) {
     if (error?.name === 'AbortError') return;
     setInstallationStatus('unavailable', error?.message || 'Installation context unavailable');
     scheduleUnavailableRetry();
   } finally {
-    // An older aborted request must not clear a newer request's busy state.
+    // Um pedido antigo abortado não limpa o "ocupado" de um mais novo.
     if (state.abort === requestAbort) {
       state.abort = null;
       state.loading = false;
@@ -520,106 +615,87 @@ const militaryInstallationsLayer = {
   source: 'OpenStreetMap + optional Google Maps Places',
   updateInterval: 0,
   statsRefreshInterval: 1000,
-  init(viewer) {
-    state.viewer = viewer;
-    state.dataSource = new Cesium.CustomDataSource('military-installations');
-    viewer.dataSources.add(state.dataSource);
-    state.moveEndRemove = viewer.camera.moveEnd.addEventListener(scheduleLoad);
-    installInteraction(viewer);
+  maplibre: true,
+  /** Definição MapLibre (contrato kit.js), para depuração e testes. */
+  mapDef: militaryInstallationsMapDef,
+  /** @param {object} engine motor do app (src/maplibre/engine.js) */
+  init(engine) {
+    state.engine = engine || null;
+    state.host = getActiveLayerHost();
+    state.moveEndRemove?.();
+    state.moveEndRemove = typeof engine?.on === 'function' ? engine.on('moveend', scheduleLoad) : null;
+    ensureMapLayers();
   },
   enable() {
     state.enabled = true;
-    registerPickOwner(LAYER_ID, (id) => state.recordById.has(id));
-    state.dataSource.show = true;
-    // DataLayerManager invokes update() immediately after enable(), which owns
-    // the first fetch. Avoid racing it with a second aborting request here.
+    ensureMapLayers();
+    setMapVisible(true);
+    // O DataLayerManager chama update() logo depois de enable(); ele é dono
+    // do primeiro pedido.
   },
   disable() {
     state.enabled = false;
-    unregisterPickOwner(LAYER_ID);
     clearUnavailableRetry();
     clearTimeout(state.timer);
     state.abort?.abort();
     state.abort = null;
     state.loading = false;
-    if (state.dataSource) state.dataSource.show = false;
+    setMapVisible(false);
+    for (const entity of state.entities.values()) entity.show = false;
     clearSelectedEntityContextForLayer(LAYER_ID);
     state.selectedId = null;
   },
   update() { return loadInstallations(); },
-  /** Request a one-shot Google Maps Places search around the current map view. */
+  /** Pede uma busca única no Google Maps Places em volta da vista atual. */
   searchNearby() {
     state.googleSearchRequested = true;
     return loadInstallations();
   },
-  destroy(viewer) {
+  destroy() {
     this.disable();
     state.moveEndRemove?.();
-    state.clickHandler?.destroy();
-    state.clickHandler = null;
+    state.moveEndRemove = null;
     clearRendered();
-    if (state.dataSource && viewer) viewer.dataSources.remove(state.dataSource, true);
-    state.dataSource = null;
+    state.engine = null;
   },
+  /**
+   * Instalações (não candidatos do Places) a até `rangeM` de `center`
+   * (qualquer formato aceito por toGeoPoint), por distância de superfície.
+   */
   getNearby(center, rangeM, maxCount = 50) {
     if (!center) return [];
+    const c = toGeoPoint(center);
+    if (!c) return [];
     const range = Number.isFinite(rangeM) ? rangeM : Infinity;
-    const centerCartographic = Cesium.Cartographic.fromCartesian(center);
-    if (!centerCartographic) return [];
+    const latRad = c.lat * DEG;
+    const lonRad = c.lon * DEG;
+    const approximateLimit = Number.isFinite(range) ? range * 1.03 + DISTANCE_PREFILTER_MARGIN_M : Infinity;
     const nearby = [];
-    const approximateLimit = Number.isFinite(range)
-      ? range * 1.03 + DISTANCE_PREFILTER_MARGIN_M
-      : Infinity;
     for (const record of state.records) {
       if (record.kind !== 'installation') continue;
-      if (approximateSurfaceDistanceM(
-        centerCartographic.latitude,
-        centerCartographic.longitude,
-        record.latitude,
-        record.longitude,
-      ) > approximateLimit) continue;
-      // The awareness disk is projected onto the ground. Confirm candidates
-      // with an exact ellipsoidal surface distance and reusable scratch state.
-      distanceEndpointScratch.longitude = Cesium.Math.toRadians(record.longitude);
-      distanceEndpointScratch.latitude = Cesium.Math.toRadians(record.latitude);
-      distanceEndpointScratch.height = 0;
-      distanceGeodesicScratch.setEndPoints(centerCartographic, distanceEndpointScratch);
-      const distanceM = distanceGeodesicScratch.surfaceDistance;
+      if (approximateSurfaceDistanceM(latRad, lonRad, record.latitude, record.longitude) > approximateLimit) continue;
+      const distanceM = ellipsoidSurfaceDistanceM(c.lat, c.lon, record.latitude, record.longitude);
       if (!Number.isFinite(distanceM) || distanceM > range) continue;
-      nearby.push({
-        ...record,
-        position: Cesium.Cartesian3.fromDegrees(
-          record.longitude,
-          record.latitude,
-          installationSurfaceHeightM(record),
-        ),
-        distanceM,
-      });
+      nearby.push({ ...record, position: recordPosition(record), distanceM });
     }
     nearby.sort((a, b) => a.distanceM - b.distanceM);
     return nearby.slice(0, Number.isFinite(maxCount) ? Math.max(1, Math.floor(maxCount)) : 50);
   },
   /**
-   * Select and frame a mapped installation from another contextual UI.
-   * @param {string} id Source-backed installation id.
-   * @returns {boolean} True when an available installation was focused.
+   * Seleciona e enquadra uma instalação a partir de outra interface (CONTATOS).
+   * @param {string} id
+   * @returns {boolean} true quando a instalação foi de fato selecionada.
    */
   focusById(id) {
     const record = state.recordById.get(String(id));
-    if (!record || !state.viewer) return false;
-    // No camera flight without a real selection: a flight plus a stale subject
-    // reads as success to Context navigation and strands NEXT on this item.
+    if (!record || !state.engine) return false;
+    // Sem voo sem seleção real (NEXT ficaria preso nesta instalação).
     if (!selectRecord(record.id)) return false;
-    state.viewer.camera.flyToBoundingSphere(
-      new Cesium.BoundingSphere(
-        Cesium.Cartesian3.fromDegrees(
-          record.longitude,
-          record.latitude,
-          installationSurfaceHeightM(record),
-        ),
-        18000,
-      ),
-      { duration: 1.4 },
+    let heading = 0;
+    try { heading = state.engine.getCameraView?.()?.heading ?? 0; } catch { heading = 0; }
+    state.engine.flyToTarget?.(
+      { lat: record.latitude, lon: record.longitude, height: installationSurfaceHeightM(record) },
+      { rangeM: FOCUS_RANGE_M, heading, pitch: -90, duration: 1.4 },
     );
     return true;
   },
@@ -636,5 +712,10 @@ const militaryInstallationsLayer = {
     };
   },
 };
+
+/** Portadores de contexto desenhados (na ordem de desenho), para testes. */
+export function _renderedInstallationsForTest() {
+  return [...state.entities.values()];
+}
 
 export default militaryInstallationsLayer;

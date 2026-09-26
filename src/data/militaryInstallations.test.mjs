@@ -8,28 +8,64 @@ import {
   installationSurfaceHeightM,
   installationWithinViewport,
 } from './militaryInstallations.js';
-import militaryInstallationsLayer from './militaryInstallations.js';
+import militaryInstallationsLayer, {
+  _renderedInstallationsForTest,
+  militaryInstallationsMapDef,
+} from './militaryInstallations.js';
 import {
   _clearMeshFloorCellsForTest,
-  cachedGroundFloor,
-  FLOOR_RESOLVE_DEADLINE_MS,
   reportMeshFloorCell,
   setMeshFloorPreferred,
 } from './groundFloor.js';
-import { _resetFireAnchorsForTest } from './fireAnchors.js';
 import {
   _resetRenderGovernorForTest,
   getRenderGovernorDiagnostics,
   installRenderGovernor,
 } from '../renderGovernor.js';
-import * as Cesium from 'cesium';
+
+// MIGRAÇÃO MAPLIBRE (2026-09): o motor é um dublê com a API de
+// src/maplibre/engine.js (map.getBounds, getSource().setData, on('moveend'),
+// flyToTarget); as "entidades" desenhadas são os portadores de contexto que a
+// camada expõe em _renderedInstallationsForTest(). O teste "a floor that lands
+// after the render deadline lifts the dots off the ellipsoid" SAIU: ele fixava
+// o re-render que erguia os pontos Cesium sobre o piso de relevo 3D quando o
+// piso chegava atrasado — no mapa 2D os pontos não têm altura e a camada não
+// aquece mais o piso.
+const toRad = (deg) => (deg * Math.PI) / 180;
+
+/** Dublê do motor: devolve `box()` como retângulo visível (null = vista global). */
+function fakeEngine(box) {
+  const sourceData = [];
+  const flights = [];
+  const map = {
+    getBounds() {
+      const b = typeof box === 'function' ? box() : box;
+      const v = b || { south: -85, north: 85, west: -180, east: 180 };
+      return { getSouth: () => v.south, getNorth: () => v.north, getWest: () => v.west, getEast: () => v.east };
+    },
+    getSource(id) { return id === 'dg-milinst' ? { setData(data) { sourceData.push(data); } } : null; },
+    addSource() {},
+    addLayer() {},
+    getLayer() { return null; },
+    setLayoutProperty() {},
+  };
+  return {
+    map,
+    sourceData,
+    flights,
+    on() { return () => {}; },
+    flyToTarget(target, options) { flights.push({ target, options }); },
+    getCameraView: () => ({ heading: 0 }),
+    requestRender() {},
+  };
+}
 
 test('cheap installation distance prefilter is local and antimeridian-safe', () => {
   const oneDegree = approximateSurfaceDistanceM(0, 0, 0, 1);
   assert.ok(oneDegree > 111000 && oneDegree < 111300);
   const acrossDateline = approximateSurfaceDistanceM(
-    Cesium.Math.toRadians(10),
-    Cesium.Math.toRadians(179.9),
+    toRad(10),
+    toRad(179.9),
     10,
     -179.9,
   );
@@ -56,88 +92,43 @@ test('places installation anchors on the shared cached rendered floor', () => {
   _clearMeshFloorCellsForTest();
 });
 
-test('real enabled installation entities carry no native label graphics', async () => {
-  const originalDocument = globalThis.document;
-  const originalWindow = globalThis.window;
-  const originalFetch = globalThis.fetch;
-  const canvas = {
-    addEventListener() {},
-    removeEventListener() {},
-  };
-  globalThis.document = {
-    addEventListener() {},
-    removeEventListener() {},
-  };
-  globalThis.window = { dispatchEvent() {} };
-  globalThis.fetch = async (url) => {
-    if (String(url).includes('/api/terrain/heights')) {
-      return { ok: true, status: 200, json: async () => ({ results: [{ ellipsoid: 100 }] }) };
-    }
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        status: 'fresh',
-        retrievedAt: '2026-08-02T00:00:00.000Z',
-        elements: [{
-          type: 'node',
-          id: 42,
-          lat: 30.2,
-          lon: -97.7,
-          tags: { military: 'base', name: 'Runtime Installation' },
-        }],
-      }),
-    };
-  };
-  const moveEndListeners = new Set();
-  const dataSources = [];
-  const viewer = {
-    camera: {
-      moveEnd: {
-        addEventListener(listener) {
-          moveEndListeners.add(listener);
-          return () => moveEndListeners.delete(listener);
-        },
+test('a real enabled load paints points and footprints into the MapLibre source', async () => {
+  const run = await runInstallationLoad({
+    elements: [
+      { type: 'node', id: 42, lat: 30.2, lon: -97.7, tags: { military: 'base', name: 'Runtime Installation' } },
+      {
+        type: 'way', id: 43, center: { lat: 30.5, lon: -97.5 }, tags: { military: 'airfield', name: 'Runtime Field' },
+        geometry: [{ lat: 30.4, lon: -97.6 }, { lat: 30.4, lon: -97.4 }, { lat: 30.6, lon: -97.4 }],
       },
-      computeViewRectangle() {
-        return {
-          south: Cesium.Math.toRadians(30),
-          west: Cesium.Math.toRadians(-98),
-          north: Cesium.Math.toRadians(31),
-          east: Cesium.Math.toRadians(-97),
-        };
-      },
-    },
-    scene: {
-      canvas,
-      globe: { ellipsoid: Cesium.Ellipsoid.WGS84 },
-      pick() { return null; },
-    },
-    dataSources: {
-      add(dataSource) { dataSources.push(dataSource); return dataSource; },
-      remove(dataSource) {
-        const index = dataSources.indexOf(dataSource);
-        if (index >= 0) dataSources.splice(index, 1);
-        return index >= 0;
-      },
-    },
-  };
-
+    ],
+  });
   try {
-    militaryInstallationsLayer.init(viewer);
-    militaryInstallationsLayer.enable();
-    await militaryInstallationsLayer.update();
-    const entities = dataSources[0].entities.values;
-    assert.ok(entities.length > 0, 'runtime guard requires rendered installation records');
-    assert.ok(entities.every((entity) => entity.label === undefined));
+    const entities = run.entities();
+    assert.deepEqual(entities.map((entity) => entity.gevLabelModel.title), ['Runtime Installation', 'Runtime Field']);
+    assert.ok(entities.every((entity) => entity.gevTrackedId.startsWith('installations:')));
+    const painted = run.engine.sourceData.at(-1);
+    const kinds = painted.features.map((feature) => feature.geometry.type).sort();
+    assert.deepEqual(kinds, ['Point', 'Point', 'Polygon']);
+    const ring = painted.features.find((feature) => feature.geometry.type === 'Polygon').geometry.coordinates[0];
+    assert.deepEqual(ring[0], ring.at(-1), 'the footprint ring is closed for MapLibre');
+    assert.equal(painted.features.find((f) => f.properties.rid === 'osm:way:43').properties.class, 'airfield');
+    const position = entities[0].gevDisplayPosition();
+    assert.equal(position.lon, -97.7);
+    assert.ok(Number.isFinite(position.x), 'display positions are neutral points');
   } finally {
-    militaryInstallationsLayer.destroy(viewer);
-    globalThis.fetch = originalFetch;
-    if (originalDocument === undefined) delete globalThis.document;
-    else globalThis.document = originalDocument;
-    if (originalWindow === undefined) delete globalThis.window;
-    else globalThis.window = originalWindow;
+    run.restore();
   }
+});
+
+test('map definition follows the host contract with hover and click on points and footprints', () => {
+  for (const id of Object.keys(militaryInstallationsMapDef.sources)) assert.ok(id.startsWith('dg-'));
+  assert.deepEqual(
+    militaryInstallationsMapDef.layers.map((layer) => layer.type),
+    ['fill', 'line', 'circle', 'symbol'],
+  );
+  assert.deepEqual(militaryInstallationsMapDef.interactive, ['dg-milinst-pt', 'dg-milinst-fill']);
+  assert.equal(typeof militaryInstallationsMapDef.tooltip, 'function');
+  assert.equal(typeof militaryInstallationsMapDef.click, 'function');
 });
 
 const VIEWPORT = { south: 30, west: -98, north: 31, east: -97 };
@@ -161,7 +152,7 @@ test('Context focus past the render cap selects for real instead of flying blind
     assert.equal(renderedIds.size, 700, 'the ambient paint stays capped');
 
     const cohort = militaryInstallationsLayer.getNearby(
-      Cesium.Cartesian3.fromDegrees(-97.8, 30.15, 0),
+      { lon: -97.8, lat: 30.15 },
       Number.POSITIVE_INFINITY,
       5000,
     );
@@ -180,6 +171,8 @@ test('Context focus past the render cap selects for real instead of flying blind
       beyondCap.name,
       'the selection reached the context store',
     );
+    assert.equal(run.engine.flights.length, 1, 'and only then the camera frames it');
+    assert.equal(run.engine.flights[0].target.lat, beyondCap.latitude);
   } finally {
     void flights;
     run.restore();
@@ -231,55 +224,22 @@ async function runInstallationLoad({
     if (!legacyPayload) payload.saturated = exact ? exactSaturated : saturated;
     return { ok: true, status: 200, json: async () => payload };
   };
-  const dataSources = [];
-  const cameraFlights = [];
-  const viewer = {
-    camera: {
-      moveEnd: { addEventListener() { return () => {}; } },
-      flyToBoundingSphere(sphere, options) { cameraFlights.push({ sphere, options }); },
-      computeViewRectangle() {
-        return {
-          south: Cesium.Math.toRadians(VIEWPORT.south),
-          west: Cesium.Math.toRadians(VIEWPORT.west),
-          north: Cesium.Math.toRadians(VIEWPORT.north),
-          east: Cesium.Math.toRadians(VIEWPORT.east),
-        };
-      },
-    },
-    scene: {
-      canvas: { addEventListener() {}, removeEventListener() {} },
-      globe: { ellipsoid: Cesium.Ellipsoid.WGS84 },
-      pick() { return null; },
-      // Enough surface for the real render governor to drive this viewer, so
-      // one-shot render requests are observable.
-      requestRenderMode: false,
-      maximumRenderTimeChange: 0,
-      requestRender() {},
-    },
-    dataSources: {
-      add(dataSource) { dataSources.push(dataSource); return dataSource; },
-      remove(dataSource) {
-        const index = dataSources.indexOf(dataSource);
-        if (index >= 0) dataSources.splice(index, 1);
-        return index >= 0;
-      },
-    },
-  };
+  const engine = fakeEngine(VIEWPORT);
 
-  militaryInstallationsLayer.init(viewer);
-  installRenderGovernor(viewer);
+  militaryInstallationsLayer.init(engine);
+  installRenderGovernor(engine);
   militaryInstallationsLayer.enable();
   await militaryInstallationsLayer.update();
 
   return {
     requests,
-    cameraFlights,
-    entities: () => dataSources[0]?.entities?.values || [],
+    engine,
+    entities: () => _renderedInstallationsForTest(),
     contextLabels: () => contextEvents,
     stats: () => militaryInstallationsLayer.getStats(),
     renderRequests: () => getRenderGovernorDiagnostics().recentRequests.map((item) => item.reason),
     restore() {
-      militaryInstallationsLayer.destroy(viewer);
+      militaryInstallationsLayer.destroy();
       _resetRenderGovernorForTest();
       globalThis.fetch = originalFetch;
       if (originalDocument === undefined) delete globalThis.document;
@@ -482,104 +442,6 @@ test('a still-saturated exact viewport is reported honestly instead of implied c
   }
 });
 
-test('a floor that lands after the render deadline lifts the dots off the ellipsoid', async () => {
-  const originalDocument = globalThis.document;
-  const originalWindow = globalThis.window;
-  const originalFetch = globalThis.fetch;
-  // A cell no other test in this file warms, so the assertion is about THIS
-  // load, not a cache another test left behind.
-  const lat = 44.123;
-  const lon = -110.456;
-  let terrainCalls = 0;
-  setMeshFloorPreferred(false);
-  _clearMeshFloorCellsForTest();
-  _resetFireAnchorsForTest();
-  globalThis.document = { addEventListener() {}, removeEventListener() {} };
-  globalThis.window = { dispatchEvent() {} };
-  globalThis.fetch = async (url) => {
-    if (String(url).includes('/api/terrain/heights')) {
-      terrainCalls += 1;
-      // The production failure: the bounded pre-render resolve gives up before
-      // Re:Earth answers, so the first paint has no floor to stand on.
-      if (terrainCalls === 1) {
-        await new Promise((resolve) => setTimeout(resolve, FLOOR_RESOLVE_DEADLINE_MS + 200));
-      }
-      return { ok: true, status: 200, json: async () => ({ results: [{ ellipsoid: 2400 }] }) };
-    }
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        status: 'fresh',
-        retrievedAt: '2026-08-18T00:00:00.000Z',
-        elements: [{ type: 'node', id: 77, lat, lon, tags: { military: 'range' } }],
-      }),
-    };
-  };
-  const dataSources = [];
-  const viewer = {
-    camera: {
-      moveEnd: { addEventListener() { return () => {}; } },
-      computeViewRectangle() {
-        return {
-          south: Cesium.Math.toRadians(44),
-          west: Cesium.Math.toRadians(-111),
-          north: Cesium.Math.toRadians(45),
-          east: Cesium.Math.toRadians(-110),
-        };
-      },
-    },
-    scene: {
-      canvas: { addEventListener() {}, removeEventListener() {} },
-      globe: { ellipsoid: Cesium.Ellipsoid.WGS84 },
-      pick() { return null; },
-    },
-    dataSources: {
-      add(dataSource) { dataSources.push(dataSource); return dataSource; },
-      remove(dataSource) {
-        const index = dataSources.indexOf(dataSource);
-        if (index >= 0) dataSources.splice(index, 1);
-        return index >= 0;
-      },
-    },
-  };
-
-  const heightOf = (entity) => Cesium.Cartographic.fromCartesian(
-    entity.position.getValue(Cesium.JulianDate.now()),
-  ).height;
-
-  try {
-    militaryInstallationsLayer.init(viewer);
-    militaryInstallationsLayer.enable();
-    await militaryInstallationsLayer.update();
-
-    const buried = dataSources[0].entities.values[0];
-    assert.ok(buried, 'the cold-floor pass still renders the record');
-    assert.ok(Math.abs(heightOf(buried)) < 1, 'a cold floor anchors at the ellipsoid, as before');
-
-    // The warm chain resolves out of band; wait for the floor to land.
-    for (let attempt = 0; attempt < 50 && cachedGroundFloor(lat, lon) == null; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(cachedGroundFloor(lat, lon), 2400, 'the late floor landed in the shared cache');
-
-    const lifted = dataSources[0].entities.values[0];
-    assert.ok(
-      Math.abs(heightOf(lifted) - 2401.5) < 0.5,
-      `re-render must lift the dot onto the resolved floor, got ${heightOf(lifted)}`,
-    );
-  } finally {
-    militaryInstallationsLayer.destroy(viewer);
-    _resetFireAnchorsForTest();
-    setMeshFloorPreferred(true);
-    globalThis.fetch = originalFetch;
-    if (originalDocument === undefined) delete globalThis.document;
-    else globalThis.document = originalDocument;
-    if (originalWindow === undefined) delete globalThis.window;
-    else globalThis.window = originalWindow;
-  }
-});
-
 test('reports bounded installation requests as loading and clears on settlement', async () => {
   const originalDocument = globalThis.document;
   const originalWindow = globalThis.window;
@@ -594,25 +456,8 @@ test('reports bounded installation requests as loading and clears on settlement'
     }
     return installationsResponse;
   };
-  const viewer = {
-    camera: {
-      moveEnd: { addEventListener() { return () => {}; } },
-      computeViewRectangle() {
-        return {
-          south: Cesium.Math.toRadians(30),
-          west: Cesium.Math.toRadians(-98),
-          north: Cesium.Math.toRadians(31),
-          east: Cesium.Math.toRadians(-97),
-        };
-      },
-    },
-    scene: {
-      canvas: { addEventListener() {}, removeEventListener() {} },
-      globe: { ellipsoid: Cesium.Ellipsoid.WGS84 },
-      pick() { return null; },
-    },
-    dataSources: { add(value) { return value; }, remove() { return true; } },
-  };
+  const viewer = fakeEngine({ south: 30, west: -98, north: 31, east: -97 });
+
 
   try {
     militaryInstallationsLayer.init(viewer);
@@ -658,25 +503,8 @@ test('zoom-out aborts an active installation request and returns non-loading gui
       }, { once: true });
     });
   };
-  const viewer = {
-    camera: {
-      moveEnd: { addEventListener() { return () => {}; } },
-      computeViewRectangle() {
-        return globalView ? null : {
-          south: Cesium.Math.toRadians(30),
-          west: Cesium.Math.toRadians(-98),
-          north: Cesium.Math.toRadians(31),
-          east: Cesium.Math.toRadians(-97),
-        };
-      },
-    },
-    scene: {
-      canvas: { addEventListener() {}, removeEventListener() {} },
-      globe: { ellipsoid: Cesium.Ellipsoid.WGS84 },
-      pick() { return null; },
-    },
-    dataSources: { add(value) { return value; }, remove() { return true; } },
-  };
+  const viewer = fakeEngine(() => (globalView ? null : { south: 30, west: -98, north: 31, east: -97 }));
+
 
   try {
     militaryInstallationsLayer.init(viewer);
@@ -705,7 +533,7 @@ test('zoom-out aborts an active installation request and returns non-loading gui
 // sat healthy — observed in the field as a layer stuck reporting unavailable
 // while its own endpoint served hundreds of features. The backoff progression
 // is a pure exported helper so it pins without booting the layer (the full
-// layer needs a Cesium viewer and interaction handlers); the wiring is pinned
+// layer needs an engine and interaction handlers); the wiring is pinned
 // by source probes against the shipped file, the same technique the HUD datum
 // tests use where a full boot is impractical.
 import { installationRetryDelayMs } from './militaryInstallations.js';

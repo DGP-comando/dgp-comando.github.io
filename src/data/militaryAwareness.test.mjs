@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import * as Cesium from 'cesium';
+import { geoDistanceM, geoPoint } from './geoPoint.js';
+
+// MIGRAÇÃO MAPLIBRE (2026-09): o "viewer" destes testes é um dublê do motor
+// (src/maplibre/engine.js): trackedTarget, getCameraView() em semântica
+// Cesium (graus), flyToTarget, on('render'), requestRender. Posições são o
+// ponto neutro de geoPoint.js.
+const samePosition = (a, b) => geoDistanceM(a, b) < 1e-3;
 import militaryAwarenessLayer, {
   _getAwarenessNavigationStateForTest,
   awarenessClearMatchesSubject,
@@ -127,29 +133,22 @@ function installAwarenessRuntime({
   const renderRequests = [];
   const cameraFlights = [];
   const viewer = {
-    camera: {
-      flyToBoundingSphere(sphere, options) {
-        cameraFlights.push({ sphere, options });
-      },
-      cancelFlight() {},
+    trackedTarget: null,
+    /** Vista da câmera em semântica Cesium (graus); null = câmera ainda sem pose. */
+    cameraView: null,
+    getCameraView() { return this.cameraView; },
+    flyToTarget(target, options) { cameraFlights.push({ target, options }); },
+    cancelFlight() {},
+    // Superfície suficiente para o render governor real dirigir este motor.
+    requestRender() { renderRequests.push(Date.now()); },
+    on(type, listener) {
+      if (type !== 'render') return () => {};
+      preRenderListener = listener;
+      return () => { preRenderListener = null; };
     },
-    scene: {
-      // Enough surface for the real render governor to drive this viewer.
-      requestRenderMode: false,
-      maximumRenderTimeChange: 0,
-      requestRender() { renderRequests.push(Date.now()); },
-      preRender: {
-        addEventListener(listener) {
-          preRenderListener = listener;
-          return () => { preRenderListener = null; };
-        },
-      },
-    },
-    entities: {
-      add(entity) { return entity; },
-      remove() {},
-    },
+    map: null,
     container: new FakeElement(),
+    canvas: new FakeElement(),
   };
   const layers = new Map(AWARENESS_DEPENDENCIES.map((layerId) => [layerId, {
     module: {
@@ -346,7 +345,7 @@ test('operational awareness becomes ready after aircraft while deferred sources 
 });
 
 test('pending mapped installations render as unknown instead of a false zero', async () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1_000);
+  const position = geoPoint(-97.74, 30.27, 1_000);
   const restoreCollections = stubAwarenessCollections({});
   const runtime = installAwarenessRuntime({
     // Deliberately inconsistent visibility intent exercises the defensive
@@ -449,7 +448,7 @@ test('the first-connect readout is the real one, and is exactly what the predica
 });
 
 test('a vessel feed still connecting after the lifecycle settles reads as unknown, not an all-clear', async () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1_000);
+  const position = geoPoint(-97.74, 30.27, 1_000);
   const restoreCollections = stubAwarenessCollections({});
   // The window this pins: enable() and the first poll have RESOLVED, so the
   // manager reports a fully settled `enabled` lifecycle, while the socket has
@@ -489,7 +488,7 @@ test('a vessel feed still connecting after the lifecycle settles reads as unknow
 });
 
 test('a settled vessel feed reporting a real empty viewport recovers to 0', async () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1_000);
+  const position = geoPoint(-97.74, 30.27, 1_000);
   const restoreCollections = stubAwarenessCollections({});
   // Same lifecycle, but the socket answered: `lastUpdate` is set and the module
   // is no longer busy, so this zero is an OBSERVATION and must be shown as one.
@@ -519,7 +518,7 @@ test('a settled vessel feed reporting a real empty viewport recovers to 0', asyn
 });
 
 test('a still-answered feed keeps its count through later polls that set loading again', async () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1_000);
+  const position = geoPoint(-97.74, 30.27, 1_000);
   const restoreCollections = stubAwarenessCollections({});
   // A refresh poll sets `loading` true again while `lastUpdate` stays set. The
   // guard is deliberately "never answered", not "busy": blanking to ? on every
@@ -544,7 +543,7 @@ test('a still-answered feed keeps its count through later polls that set loading
 });
 
 test('voice reports a still-connecting vessel feed as unknown rather than zero', async () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1_000);
+  const position = geoPoint(-97.74, 30.27, 1_000);
   const restoreCollections = stubAwarenessCollections({});
   // The same real first-connect readout the panel pins above. The voice surface
   // reads the same cohort the panel does, so it inherited the same fabricated
@@ -598,7 +597,7 @@ for (const fixture of [
   { name: 'military', layerId: 'military', layer: militaryFlightsLayer, other: flightsLayer },
 ]) {
   test(`Contacts activation adopts an already tracked ${fixture.name} flight`, async () => {
-    const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
+    const position = geoPoint(-97.74, 30.27, 1000);
     const subject = awarenessSubject(fixture.layerId, `${fixture.name}-tracked`, position);
     const runtime = installAwarenessRuntime();
     const restores = [];
@@ -606,7 +605,7 @@ for (const fixture of [
 
     try {
       const trackedEntity = { gevTrackedId: `${subject.layerId}:${subject.id}` };
-      runtime.viewer.trackedEntity = trackedEntity;
+      runtime.viewer.trackedTarget = trackedEntity;
       replaceMethod(fixture.layer, 'getTrackedSubject', () => subject, restores);
       replaceMethod(fixture.other, 'getTrackedSubject', () => null, restores);
       replaceMethod(flightsLayer, 'trackById', () => { retrackCalls += 1; return true; }, restores);
@@ -622,7 +621,7 @@ for (const fixture of [
       assert.equal(snapshot?.navigation.canNext, false);
       assert.equal(retrackCalls, 0, 'adoption must not recreate the existing track');
       assert.equal(
-        runtime.viewer.trackedEntity,
+        runtime.viewer.trackedTarget,
         trackedEntity,
         'adoption must not replace the source-owned tracked entity',
       );
@@ -635,7 +634,7 @@ for (const fixture of [
 
 test('Contacts activation adopts the production military tracked-subject descriptor', async () => {
   const id = 'ae01ce';
-  const position = Cesium.Cartesian3.fromDegrees(-97.03, 31.05, 8_534.4);
+  const position = geoPoint(-97.03, 31.05, 8_534.4);
   const sourceViewer = { scene: { primitives: { remove() {} } } };
   const runtime = installAwarenessRuntime();
   const restores = [];
@@ -644,10 +643,7 @@ test('Contacts activation adopts the production military tracked-subject descrip
   try {
     _setTrackedMilitaryRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, show: true },
-      billboardCollection: { show: true, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta: {
         callsign: 'RCH451 ',
         altitudeFt: 28_000,
@@ -661,23 +657,16 @@ test('Contacts activation adopts the production military tracked-subject descrip
     assert.equal(accessorSubject?.layerId, 'military');
     assert.equal(accessorSubject?.id, id);
     assert.equal(accessorSubject?.label, 'RCH451');
-    assert.notEqual(
+    assert.ok(Object.isFrozen(accessorSubject?.position), 'the production accessor returns an immutable neutral point');
+    assert.ok(samePosition(
       accessorSubject?.position,
       position,
-      'the production accessor must detach its Cartesian position',
-    );
-    assert.ok(Cesium.Cartesian3.equalsEpsilon(
-      accessorSubject?.position,
-      position,
-      Cesium.Math.EPSILON7,
     ));
-    accessorSubject.position.x += 100;
-    assert.ok(Cesium.Cartesian3.equalsEpsilon(
+    assert.ok(samePosition(
       militaryFlightsLayer.getTrackedSubject()?.position,
       position,
-      Cesium.Math.EPSILON7,
     ), 'mutating one accessor result must not alter the tracked source position');
-    runtime.viewer.trackedEntity = { gevTrackedId: `military:${id}` };
+    runtime.viewer.trackedTarget = { gevTrackedId: `military:${id}` };
     replaceMethod(flightsLayer, 'getTrackedSubject', () => null, restores);
     replaceMethod(flightsLayer, 'trackById', () => { retrackCalls += 1; return true; }, restores);
     replaceMethod(militaryFlightsLayer, 'trackById', () => { retrackCalls += 1; return true; }, restores);
@@ -689,20 +678,16 @@ test('Contacts activation adopts the production military tracked-subject descrip
     assert.equal(snapshot?.subject.layerId, 'military');
     assert.equal(snapshot?.subject.id, id);
     assert.equal(snapshot?.subject.label, 'RCH451');
-    assert.ok(Cesium.Cartesian3.equalsEpsilon(
+    assert.ok(samePosition(
       snapshot?.subject.position,
       position,
-      Cesium.Math.EPSILON7,
     ));
     assert.equal(retrackCalls, 0, 'production military adoption must preserve tracker ownership');
   } finally {
     restores.reverse().forEach((restore) => restore());
     _setTrackedMilitaryRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, show: true },
-      billboardCollection: { show: true, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta: {},
       tracked: false,
     });
@@ -718,7 +703,7 @@ test('Contacts activation adopts the production military tracked-subject descrip
 
 test('production military tracked-subject label falls back to registration before the ICAO hex', async () => {
   const id = 'ae02df';
-  const position = Cesium.Cartesian3.fromDegrees(-97.03, 31.05, 6_400);
+  const position = geoPoint(-97.03, 31.05, 6_400);
   const sourceViewer = { scene: { primitives: { remove() {} } } };
   const runtime = installAwarenessRuntime();
   const restores = [];
@@ -726,10 +711,7 @@ test('production military tracked-subject label falls back to registration befor
   try {
     _setTrackedMilitaryRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, show: true },
-      billboardCollection: { show: true, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta: {
         callsign: '   ',
         registration: 'N123AB ',
@@ -749,7 +731,7 @@ test('production military tracked-subject label falls back to registration befor
     assert.equal(snapshotRow?.label, 'N123AB', 'getAllPositions label must use the same chain');
     assert.equal(snapshotRow?.id, id, 'getAllPositions id stays the identity hex');
 
-    runtime.viewer.trackedEntity = { gevTrackedId: `military:${id}` };
+    runtime.viewer.trackedTarget = { gevTrackedId: `military:${id}` };
     replaceMethod(flightsLayer, 'getTrackedSubject', () => null, restores);
     replaceMethod(flightsLayer, 'trackById', () => true, restores);
     replaceMethod(militaryFlightsLayer, 'trackById', () => true, restores);
@@ -768,10 +750,7 @@ test('production military tracked-subject label falls back to registration befor
     restores.reverse().forEach((restore) => restore());
     _setTrackedMilitaryRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, show: true },
-      billboardCollection: { show: true, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta: {},
       tracked: false,
     });
@@ -791,7 +770,7 @@ test('a cached Context subject re-reads its label when enrichment lands after se
   // ICAO hex into Context while every other surface later swapped to the
   // registration. The refresh path must re-resolve the label, never the id.
   const id = 'ae1fa4';
-  const position = Cesium.Cartesian3.fromDegrees(-97.71, 30.21, 10_668);
+  const position = geoPoint(-97.71, 30.21, 10_668);
   const sourceViewer = { camera: { positionCartographic: null }, scene: {} };
   const runtime = installAwarenessRuntime();
   const restores = [];
@@ -814,14 +793,11 @@ test('a cached Context subject re-reads its label when enrichment lands after se
   try {
     _setTrackedFlightRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, color: Cesium.Color.WHITE, show: true },
-      billboardCollection: { show: true, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta,
     });
 
-    runtime.viewer.trackedEntity = { gevTrackedId: `flights:${id}` };
+    runtime.viewer.trackedTarget = { gevTrackedId: `flights:${id}` };
     replaceMethod(militaryFlightsLayer, 'getTrackedSubject', () => null, restores);
     replaceMethod(flightsLayer, 'trackById', () => true, restores);
     replaceMethod(militaryFlightsLayer, 'trackById', () => true, restores);
@@ -846,7 +822,14 @@ test('a cached Context subject re-reads its label when enrichment lands after se
 
     // Enrichment answers. The contact has NOT moved and no source revision
     // changed, so the label is the only thing making this render-worthy.
+    // (The MapLibre flights seam copies `meta`, so the enrichment is replayed
+    // through the same seed — same identity, same position.)
     meta.registration = 'N123AB ';
+    _setTrackedFlightRefreshStateForTest({
+      icao24: id,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
+      meta,
+    });
     await militaryAwarenessLayer.update();
 
     const snapshot = militaryAwarenessLayer.getContextSnapshot();
@@ -879,10 +862,7 @@ test('a cached Context subject re-reads its label when enrichment lands after se
     restores.reverse().forEach((restore) => restore());
     _setTrackedFlightRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, show: true },
-      billboardCollection: { show: false, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta: {},
       tracked: false,
     });
@@ -892,7 +872,7 @@ test('a cached Context subject re-reads its label when enrichment lands after se
 
 test('Contacts activation adopts the production civilian tracked-subject descriptor', async () => {
   const id = 'a1b2c3';
-  const position = Cesium.Cartesian3.fromDegrees(-97.67, 30.19, 10_668);
+  const position = geoPoint(-97.67, 30.19, 10_668);
   const sourceViewer = { scene: { primitives: { remove() {} } } };
   const runtime = installAwarenessRuntime();
   const restores = [];
@@ -901,10 +881,7 @@ test('Contacts activation adopts the production civilian tracked-subject descrip
   try {
     _setTrackedFlightRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, show: true },
-      billboardCollection: { show: true, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta: {
         callsign: 'DAL123 ',
         altitude: 10_668,
@@ -920,23 +897,16 @@ test('Contacts activation adopts the production civilian tracked-subject descrip
     assert.equal(accessorSubject?.layerId, 'flights');
     assert.equal(accessorSubject?.id, id);
     assert.equal(accessorSubject?.label, 'DAL123');
-    assert.notEqual(
+    assert.ok(Object.isFrozen(accessorSubject?.position), 'the production accessor returns an immutable neutral point');
+    assert.ok(samePosition(
       accessorSubject?.position,
       position,
-      'the production accessor must detach its Cartesian position',
-    );
-    assert.ok(Cesium.Cartesian3.equalsEpsilon(
-      accessorSubject?.position,
-      position,
-      Cesium.Math.EPSILON7,
     ));
-    accessorSubject.position.x += 100;
-    assert.ok(Cesium.Cartesian3.equalsEpsilon(
+    assert.ok(samePosition(
       flightsLayer.getTrackedSubject()?.position,
       position,
-      Cesium.Math.EPSILON7,
     ), 'mutating one accessor result must not alter the tracked source position');
-    runtime.viewer.trackedEntity = { gevTrackedId: `flights:${id}` };
+    runtime.viewer.trackedTarget = { gevTrackedId: `flights:${id}` };
     replaceMethod(militaryFlightsLayer, 'getTrackedSubject', () => null, restores);
     replaceMethod(flightsLayer, 'trackById', () => { retrackCalls += 1; return true; }, restores);
     replaceMethod(militaryFlightsLayer, 'trackById', () => { retrackCalls += 1; return true; }, restores);
@@ -948,20 +918,16 @@ test('Contacts activation adopts the production civilian tracked-subject descrip
     assert.equal(snapshot?.subject.layerId, 'flights');
     assert.equal(snapshot?.subject.id, id);
     assert.equal(snapshot?.subject.label, 'DAL123');
-    assert.ok(Cesium.Cartesian3.equalsEpsilon(
+    assert.ok(samePosition(
       snapshot?.subject.position,
       position,
-      Cesium.Math.EPSILON7,
     ));
     assert.equal(retrackCalls, 0, 'production civilian adoption must preserve tracker ownership');
   } finally {
     restores.reverse().forEach((restore) => restore());
     _setTrackedFlightRefreshStateForTest({
       icao24: id,
-      entity: null,
-      billboard: { position, show: true },
-      billboardCollection: { show: true, remove() {} },
-      viewer: sourceViewer,
+      position: { lon: position.lon, lat: position.lat, alt: position.height },
       meta: {},
       tracked: false,
     });
@@ -979,8 +945,8 @@ test('Contacts activation reconciles to a newer cross-layer tracked flight after
   let releaseDependencies;
   const dependencyGate = new Promise((resolve) => { releaseDependencies = resolve; });
   const positions = {
-    first: Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000),
-    latest: Cesium.Cartesian3.fromDegrees(-97.70, 30.30, 1200),
+    first: geoPoint(-97.74, 30.27, 1000),
+    latest: geoPoint(-97.70, 30.30, 1200),
   };
   let civilianTracked = awarenessSubject('flights', 'first', positions.first);
   let militaryTracked = null;
@@ -994,7 +960,7 @@ test('Contacts activation reconciles to a newer cross-layer tracked flight after
   const restores = [];
 
   try {
-    runtime.viewer.trackedEntity = { gevTrackedId: 'flights:first' };
+    runtime.viewer.trackedTarget = { gevTrackedId: 'flights:first' };
     replaceMethod(flightsLayer, 'getTrackedSubject', () => civilianTracked, restores);
     replaceMethod(militaryFlightsLayer, 'getTrackedSubject', () => militaryTracked, restores);
 
@@ -1004,7 +970,7 @@ test('Contacts activation reconciles to a newer cross-layer tracked flight after
 
     civilianTracked = null;
     militaryTracked = awarenessSubject('military', 'latest', positions.latest);
-    runtime.viewer.trackedEntity = { gevTrackedId: 'military:latest' };
+    runtime.viewer.trackedTarget = { gevTrackedId: 'military:latest' };
     releaseDependencies();
     await nextTurn();
     await nextTurn();
@@ -1021,8 +987,8 @@ test('Contacts activation reconciles to a newer cross-layer tracked flight after
 test('tracked flight cleared during Contacts activation suppresses fallback autofocus', async () => {
   let releaseDependencies;
   const dependencyGate = new Promise((resolve) => { releaseDependencies = resolve; });
-  const selectedPosition = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const fallbackPosition = Cesium.Cartesian3.fromDegrees(-97.70, 30.30, 1200);
+  const selectedPosition = geoPoint(-97.74, 30.27, 1000);
+  const fallbackPosition = geoPoint(-97.70, 30.30, 1200);
   let tracked = awarenessSubject('flights', 'selected', selectedPosition);
   const restoreCollections = stubAwarenessCollections({
     flights: [{ icao24: 'fallback', position: fallbackPosition, distanceM: 1000 }],
@@ -1038,7 +1004,7 @@ test('tracked flight cleared during Contacts activation suppresses fallback auto
   const focused = [];
 
   try {
-    runtime.viewer.trackedEntity = { gevTrackedId: 'flights:selected' };
+    runtime.viewer.trackedTarget = { gevTrackedId: 'flights:selected' };
     replaceMethod(flightsLayer, 'getTrackedSubject', () => tracked, restores);
     replaceMethod(militaryFlightsLayer, 'getTrackedSubject', () => null, restores);
     replaceMethod(flightsLayer, 'trackById', (id) => focused.push(id) > 0, restores);
@@ -1048,7 +1014,7 @@ test('tracked flight cleared during Contacts activation suppresses fallback auto
     assert.equal(militaryAwarenessLayer.getContextSnapshot()?.subject.id, 'selected');
 
     tracked = null;
-    runtime.viewer.trackedEntity = undefined;
+    runtime.viewer.trackedTarget = undefined;
     // Deliberately untagged: this is the DESELECT case, and an untagged clear
     // must default to deliberate. An eviction (`reason: 'evicted'`) instead
     // keeps the subject as CONTACT LOST — see the eviction tests below — but
@@ -1095,7 +1061,7 @@ test('a fast-culled subject is reported absent so the readout can hold last-know
   // The Contact panel keeps a culled subject on screen as CONTACT LOST rather
   // than collapsing, so it needs the snapshot to say whether the subject is
   // still carried by its source.
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 0);
+  const position = geoPoint(-97.74, 30.27, 0);
   const runtime = installAwarenessRuntime();
   const restores = [];
   let present = true;
@@ -1147,7 +1113,7 @@ test('a fast-culled subject is reported absent so the readout can hold last-know
 });
 
 test('a layer that cannot answer is never read as a cull', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 0);
+  const position = geoPoint(-97.74, 30.27, 0);
   const runtime = installAwarenessRuntime();
   const restores = [];
 
@@ -1182,7 +1148,7 @@ test('a layer that cannot answer is never read as a cull', () => {
 test('presence never comes from the capped position rows', () => {
   // getAllPositions(limit) breaks at its cap and the live flights layer runs
   // ~11k contacts against a 1,000 cap, so "not in the rows" is not "gone".
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 0);
+  const position = geoPoint(-97.74, 30.27, 0);
   const runtime = installAwarenessRuntime();
   const restores = [];
   const saturated = Array.from({ length: 1000 }, (unused, index) => ({
@@ -1218,7 +1184,7 @@ test('presence never comes from the capped position rows', () => {
 });
 
 test('a mapped installation subject is always present — static data is never culled', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.78, 31.13, 0);
+  const position = geoPoint(-97.78, 31.13, 0);
   const runtime = installAwarenessRuntime();
   const restores = [];
 
@@ -1260,9 +1226,9 @@ test('hasContact declines while a layer is disabled, whatever its maps still hol
   // alone would report a preserved subject as FRESH from hidden stale data.
   for (const [name, source, guard] of [
     ['flights', fs.readFileSync(new URL('./flights.js', import.meta.url), 'utf8'),
-      /hasContact\(icao24\) \{\s*\n\s*if \(!_billboardCollection \|\| !_billboardCollection\.show \|\| _billboards\.size === 0\) return null;/],
+      /hasContact\(icao24\) \{\s*\n\s*if \(!_enabled \|\| _contacts\.size === 0\) return null;/],
     ['militaryFlights', fs.readFileSync(new URL('./militaryFlights.js', import.meta.url), 'utf8'),
-      /hasContact\(icao24\) \{\s*\n\s*if \(!_billboardCollection \|\| !_billboardCollection\.show \|\| _billboards\.size === 0\) return null;/],
+      /hasContact\(icao24\) \{\s*\n\s*if \(!_enabled \|\| _contacts\.size === 0\) return null;/],
     ['aisLiveVessels', fs.readFileSync(new URL('./aisLiveVessels.js', import.meta.url), 'utf8'),
       /hasContact\(mmsi\) \{\s*\n\s*if \(!state\.enabled \|\| !state\.vesselMap \|\| state\.vesselMap\.size === 0\) return null;/],
   ]) {
@@ -1271,7 +1237,7 @@ test('hasContact declines while a layer is disabled, whatever its maps still hol
 });
 
 test('a disabled layer leaves the presence verdict untouched', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 0);
+  const position = geoPoint(-97.74, 30.27, 0);
   const runtime = installAwarenessRuntime();
   const restores = [];
   let verdict = true;
@@ -1313,7 +1279,7 @@ test('a disabled layer leaves the presence verdict untouched', () => {
 // the snapshot, the panel collapses before the lost-state resolver ever runs.
 
 function selectFlightSubject(runtime, restores, id = 'ab4991') {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 5000);
+  const position = geoPoint(-97.74, 30.27, 5000);
   replaceMethod(flightsLayer, 'getNearby', () => [], restores);
   replaceMethod(militaryFlightsLayer, 'getNearby', () => [], restores);
   replaceMethod(aisLiveVesselsLayer, 'getNearby', () => [], restores);
@@ -1355,7 +1321,7 @@ test('an evicted aircraft becomes CONTACT LOST instead of collapsing the panel',
 });
 
 test('an evicted vessel becomes CONTACT LOST instead of collapsing the panel', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 0);
+  const position = geoPoint(-97.74, 30.27, 0);
   const runtime = installAwarenessRuntime();
   const restores = [];
   try {
@@ -1408,7 +1374,7 @@ test('a deliberate clear still fully clears the subject', () => {
 });
 
 test('a deliberate source clear still fully clears the subject', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 0);
+  const position = geoPoint(-97.74, 30.27, 0);
   const runtime = installAwarenessRuntime();
   const restores = [];
   try {
@@ -1441,7 +1407,7 @@ test('production eviction sites actually tag their clears', () => {
   for (const [name, source] of [['flights', flightsSource], ['militaryFlights', militarySource]]) {
     assert.match(
       source,
-      /if \(icao24 === _trackedIcao\) \{\s*\n\s*_clearTracking\(false, \{ evicted: true \}\);/,
+      /if \(icao24 === _trackedIcao\)\s*\{?\s*_clearTracking\(false, \{ evicted: true \}\);/,
       `${name} must mark its aged-out cull as an eviction`,
     );
     assert.match(
@@ -1455,26 +1421,10 @@ test('production eviction sites actually tag their clears', () => {
     /clearVesselInspection\(\{ evicted: true \}\)/,
     'aisLiveVessels must mark its aged-out selected vessel as an eviction',
   );
-  // Fourth cull site: a FIRMS refresh whose new payload no longer carries the
-  // selected fire. The fire did not get deselected — it left the feed.
-  // The tag alone is not enough — see the behavioral test in
-  // firmsInteraction.test.mjs. The clear must also run BEFORE renderCurrentLod,
-  // whose registration sweep deletes the record the clear needs to see.
-  const firmsSource = fs.readFileSync(new URL('./firmsHeatmap.js', import.meta.url), 'utf8');
-  const evictedClear = firmsSource.indexOf('clearSelectedEntityContextForLayer(id, { evicted: true });');
-  const lodRebuild = firmsSource.indexOf('renderCurrentLod(true);\n      if (reselected) selectFire(reselected);');
-  assert.ok(evictedClear > 0, 'FIRMS must mark a refresh-vanished selection as an eviction');
-  assert.ok(lodRebuild > 0, 'the FIRMS refresh must settle its selection before rebuilding');
-  assert.ok(
-    evictedClear < lodRebuild,
-    'the eviction clear must precede the LOD rebuild or it emits nothing at all',
-  );
-  // …and the deliberate FIRMS paths (layer disable, destroy, deselect) stay untagged.
-  assert.equal(
-    (firmsSource.match(/clearSelectedEntityContextForLayer\(id\);/g) || []).length,
-    3,
-    'only the refresh-vanish site is an eviction; disable/destroy/deselect stay deliberate',
-  );
+  // MIGRAÇÃO MAPLIBRE: o quarto ponto de corte era o FIRMS (firmsHeatmap.js,
+  // removido). Os focos agora são a camada MapLibre `local-firms`
+  // (src/maplibre/layers/contextoGev.js), que não publica seleção no
+  // contextStore — não há mais seleção de foco para despejar.
   assert.match(
     militaryAwarenessSource,
     /awarenessClearIsEviction/,
@@ -1497,7 +1447,7 @@ test('cockpit blocks only non-aircraft Context camera flights', () => {
 test('vessel entry and selection framing both use the 3 km focus radius', () => {
   assert.match(militaryAwarenessSource, /const VESSEL_FOCUS_RADIUS_M = 3000;/);
   const focusRadiusUses = militaryAwarenessSource.match(
-    /new Cesium\.BoundingSphere\(vessel\.position, VESSEL_FOCUS_RADIUS_M\)/g,
+    /flyToFocusRadius\(vessel\.position, VESSEL_FOCUS_RADIUS_M/g,
   ) || [];
   assert.equal(focusRadiusUses.length, 2);
 });
@@ -1561,9 +1511,9 @@ test('expanded Context results omit the redundant status heading', () => {
 });
 
 test('Context entry tracks a nearer civilian aircraft over a farther military aircraft', async () => {
-  const camera = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const civilianPosition = Cesium.Cartesian3.fromDegrees(-97.73, 30.27, 1000);
-  const militaryPosition = Cesium.Cartesian3.fromDegrees(-98.5, 30.27, 1000);
+  const camera = geoPoint(-97.74, 30.27, 1000);
+  const civilianPosition = geoPoint(-97.73, 30.27, 1000);
+  const militaryPosition = geoPoint(-98.5, 30.27, 1000);
   const restoreCollections = stubAwarenessCollections({
     flights: [{ icao24: 'civilian', position: civilianPosition, distanceM: 1000 }],
     military: [{ icao24: 'military', position: militaryPosition, distanceM: 70000 }],
@@ -1573,7 +1523,7 @@ test('Context entry tracks a nearer civilian aircraft over a farther military ai
   const focused = [];
 
   try {
-    runtime.viewer.camera = { positionWC: camera };
+    runtime.viewer.cameraView = { lon: camera.lon, lat: camera.lat, alt: camera.height, heading: 0, pitch: -90 };
     replaceMethod(flightsLayer, 'trackById', (id) => focused.push(`flights:${id}`) > 0, restores);
     replaceMethod(militaryFlightsLayer, 'trackById', (id) => focused.push(`military:${id}`) > 0, restores);
 
@@ -1589,8 +1539,8 @@ test('Context entry tracks a nearer civilian aircraft over a farther military ai
 });
 
 test('Context entry prefers military aircraft on an exact nearest-distance tie', async () => {
-  const camera = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const tiedPosition = Cesium.Cartesian3.fromDegrees(-97.73, 30.27, 1000);
+  const camera = geoPoint(-97.74, 30.27, 1000);
+  const tiedPosition = geoPoint(-97.73, 30.27, 1000);
   const restoreCollections = stubAwarenessCollections({
     flights: [{ icao24: 'civilian', position: tiedPosition, distanceM: 1000 }],
     military: [{ icao24: 'military', position: tiedPosition, distanceM: 1000 }],
@@ -1600,7 +1550,7 @@ test('Context entry prefers military aircraft on an exact nearest-distance tie',
   const focused = [];
 
   try {
-    runtime.viewer.camera = { positionWC: camera };
+    runtime.viewer.cameraView = { lon: camera.lon, lat: camera.lat, alt: camera.height, heading: 0, pitch: -90 };
     replaceMethod(flightsLayer, 'trackById', (id) => focused.push(`flights:${id}`) > 0, restores);
     replaceMethod(militaryFlightsLayer, 'trackById', (id) => focused.push(`military:${id}`) > 0, restores);
 
@@ -1617,15 +1567,15 @@ test('Context entry prefers military aircraft on an exact nearest-distance tie',
 
 test('Context entry retries once on the next refresh after initially empty feeds', async () => {
   const flights = [];
-  const camera = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const position = Cesium.Cartesian3.fromDegrees(-97.73, 30.27, 1000);
+  const camera = geoPoint(-97.74, 30.27, 1000);
+  const position = geoPoint(-97.73, 30.27, 1000);
   const restoreCollections = stubAwarenessCollections({ flights });
   const runtime = installAwarenessRuntime();
   const restores = [];
   const focused = [];
 
   try {
-    runtime.viewer.camera = { positionWC: camera };
+    runtime.viewer.cameraView = { lon: camera.lon, lat: camera.lat, alt: camera.height, heading: 0, pitch: -90 };
     replaceMethod(flightsLayer, 'trackById', (id) => focused.push(id) > 0, restores);
 
     militaryAwarenessLayer.setParams({ passive: false });
@@ -1644,16 +1594,16 @@ test('Context entry retries once on the next refresh after initially empty feeds
 
 test('user deselect cancels a pending Context entry auto-focus retry', async () => {
   const flights = [];
-  const camera = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const selectedPosition = Cesium.Cartesian3.fromDegrees(-97.72, 30.27, 1000);
-  const replacementPosition = Cesium.Cartesian3.fromDegrees(-97.73, 30.27, 1000);
+  const camera = geoPoint(-97.74, 30.27, 1000);
+  const selectedPosition = geoPoint(-97.72, 30.27, 1000);
+  const replacementPosition = geoPoint(-97.73, 30.27, 1000);
   const restoreCollections = stubAwarenessCollections({ flights });
   const runtime = installAwarenessRuntime();
   const restores = [];
   const focused = [];
 
   try {
-    runtime.viewer.camera = { positionWC: camera };
+    runtime.viewer.cameraView = { lon: camera.lon, lat: camera.lat, alt: camera.height, heading: 0, pitch: -90 };
     replaceMethod(flightsLayer, 'trackById', (id) => focused.push(id) > 0, restores);
 
     militaryAwarenessLayer.setParams({ passive: false });
@@ -1678,7 +1628,7 @@ test('user deselect cancels a pending Context entry auto-focus retry', async () 
 });
 
 test('reset camera release preserves the selected Contact for explicit refocus', () => {
-  const selectedPosition = Cesium.Cartesian3.fromDegrees(-97.72, 30.27, 1000);
+  const selectedPosition = geoPoint(-97.72, 30.27, 1000);
   const runtime = installAwarenessRuntime();
   const restores = [];
   const released = [];
@@ -1722,8 +1672,8 @@ test('reset camera release preserves the selected Contact for explicit refocus',
 
 test('same-layer selection clear is suppressed during a synchronous navigation reselect', () => {
   const positions = {
-    a: Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000),
-    b: Cesium.Cartesian3.fromDegrees(-97.73, 30.28, 1000),
+    a: geoPoint(-97.74, 30.27, 1000),
+    b: geoPoint(-97.73, 30.28, 1000),
   };
   const flights = Object.entries(positions).map(([id, position], index) => ({
     icao24: id,
@@ -1760,7 +1710,7 @@ test('same-layer selection clear is suppressed during a synchronous navigation r
 });
 
 test('FOCUS on an already-tracked subject clears its suppression keys before a later deselect', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
+  const position = geoPoint(-97.74, 30.27, 1000);
   const flights = [{
     icao24: 'a',
     callsign: 'A',
@@ -1811,7 +1761,7 @@ test('FOCUS on an already-tracked subject clears its suppression keys before a l
 test('NEXT wraps through a fresh visited cycle instead of ping-ponging after exhaustion', () => {
   const positions = Object.fromEntries(['a', 'b', 'c', 'd'].map((id, index) => [
     id,
-    Cesium.Cartesian3.fromDegrees(-97.74 + index * 0.01, 30.27, 1000),
+    geoPoint(-97.74 + index * 0.01, 30.27, 1000),
   ]));
   const flights = Object.entries(positions).map(([id, position], index) => ({
     icao24: id,
@@ -1875,7 +1825,7 @@ test('NEXT reaches beyond the panel cap when more nearby targets exist', () => {
   const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l'];
   const positions = Object.fromEntries(ids.map((id, index) => [
     id,
-    Cesium.Cartesian3.fromDegrees(-97.74 + index * 0.001, 30.27, 1000),
+    geoPoint(-97.74 + index * 0.001, 30.27, 1000),
   ]));
   const flights = Object.entries(positions).map(([id, position], index) => ({
     icao24: id,
@@ -1914,13 +1864,13 @@ test('NEXT reaches beyond the panel cap when more nearby targets exist', () => {
 });
 
 test('NEXT jumps to expanded flight search after fully cycling nearby flight candidates', () => {
-  const subjectPosition = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
+  const subjectPosition = geoPoint(-97.74, 30.27, 1000);
   const nearby = {
-    b: Cesium.Cartesian3.fromDegrees(-97.739, 30.2702, 1000),
-    c: Cesium.Cartesian3.fromDegrees(-97.738, 30.2704, 1000),
+    b: geoPoint(-97.739, 30.2702, 1000),
+    c: geoPoint(-97.738, 30.2704, 1000),
   };
   const expanded = {
-    d: Cesium.Cartesian3.fromDegrees(-97.0, 30.8, 1000),
+    d: geoPoint(-97.0, 30.8, 1000),
   };
   const nearbyFlights = Object.entries(nearby).map(([id, position], index) => ({
     icao24: id,
@@ -1994,7 +1944,7 @@ test('NEXT can restrict navigation to a requested layer', () => {
       return true;
     }, restores);
 
-    runtime.dispatch('gev:awareness-subject-selected', awarenessSubject('flights', 'f1', Cesium.Cartesian3.ZERO));
+    runtime.dispatch('gev:awareness-subject-selected', awarenessSubject('flights', 'f1', geoPoint(0, 0, 0)));
     assert.equal(militaryAwarenessLayer.navigateNext({
       targetLayer: 'military',
       origin: 'voice',
@@ -2027,7 +1977,7 @@ test('NEXT can restrict navigation to an aircraftClass', () => {
       return true;
     }, restores);
 
-    runtime.dispatch('gev:awareness-subject-selected', awarenessSubject('flights', 'f1', Cesium.Cartesian3.ZERO));
+    runtime.dispatch('gev:awareness-subject-selected', awarenessSubject('flights', 'f1', geoPoint(0, 0, 0)));
     assert.equal(militaryAwarenessLayer.navigateNext({ aircraftClass: 'helicopter' }), true);
     assert.deepEqual(focused, ['f2']);
   } finally {
@@ -2038,9 +1988,9 @@ test('NEXT can restrict navigation to an aircraftClass', () => {
 });
 
 test('Cockpit NEXT ignores a nearer vessel and selects the next aircraft', () => {
-  const subjectPosition = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const nextPosition = Cesium.Cartesian3.fromDegrees(-97.73, 30.28, 1200);
-  const vesselPosition = Cesium.Cartesian3.fromDegrees(-97.739, 30.271, 0);
+  const subjectPosition = geoPoint(-97.74, 30.27, 1000);
+  const nextPosition = geoPoint(-97.73, 30.28, 1200);
+  const vesselPosition = geoPoint(-97.739, 30.271, 0);
   const flights = [{
     icao24: 'f2', callsign: 'F2', distanceM: 1500, position: nextPosition,
   }];
@@ -2116,7 +2066,7 @@ test('production-shaped history snapshots retain aircraft class from the selecte
 test('NEXT steps over a history contact whose layer has since evicted it', () => {
   const positions = Object.fromEntries(['a', 'b', 'c'].map((id, index) => [
     id,
-    Cesium.Cartesian3.fromDegrees(-97.74 + index * 0.01, 30.27, 1000),
+    geoPoint(-97.74 + index * 0.01, 30.27, 1000),
   ]));
   const flights = Object.entries(positions).map(([id, position], index) => ({
     icao24: id,
@@ -2175,7 +2125,7 @@ test('NEXT steps over a history contact whose layer has since evicted it', () =>
 test('a fully evicted forward history falls through to the live cohort', () => {
   const positions = Object.fromEntries(['a', 'b', 'c'].map((id, index) => [
     id,
-    Cesium.Cartesian3.fromDegrees(-97.74 + index * 0.01, 30.27, 1000),
+    geoPoint(-97.74 + index * 0.01, 30.27, 1000),
   ]));
   const flights = Object.entries(positions).map(([id, position], index) => ({
     icao24: id,
@@ -2227,7 +2177,7 @@ test('every Context camera flight without a tracked entity takes navigation auth
   // stamps on trackedEntityChanged). Vessels and installations fly WITHOUT ever
   // setting one, so an earlier deferred geocode would still match the
   // generation it captured and could resolve on top of the new Context focus.
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
+  const position = geoPoint(-97.74, 30.27, 1000);
   const vessels = [{ mmsi: '111', id: '111', name: 'VESSEL', position, distanceM: 900 }];
   const installations = [{ id: 'inst-1', name: 'BASE', position, distanceM: 1200 }];
   const restoreCollections = stubAwarenessCollections({ vessels, installations });
@@ -2265,7 +2215,7 @@ test('every Context camera flight without a tracked entity takes navigation auth
 });
 
 test('Contacts vessel autofocus takes navigation authority before it frames', async () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
+  const position = geoPoint(-97.74, 30.27, 1000);
   const restoreCollections = stubAwarenessCollections({});
   const runtime = installAwarenessRuntime();
   const restores = [];
@@ -2360,7 +2310,7 @@ test('walking a cohort does not rescan the source layer per selection', () => {
   // record, so a NEXT burst must not grow the scan count.
   const positions = Object.fromEntries(['a', 'b', 'c', 'd'].map((id, index) => [
     id,
-    Cesium.Cartesian3.fromDegrees(-97.74 + index * 0.01, 30.27, 1000),
+    geoPoint(-97.74 + index * 0.01, 30.27, 1000),
   ]));
   const flights = Object.entries(positions).map(([id, position], index) => ({
     icao24: id,
@@ -2420,7 +2370,7 @@ test('the contacts window reports exactly the counts the panel renders', () => {
   // honest. The window block exists so the panel's numbers travel with the
   // answer, so it must be derived from the panel's own snapshot, not recomputed.
   const results = {
-    subject: { layerId: 'flights', id: 'a52e54', label: 'ASA635', position: Cesium.Cartesian3.ZERO },
+    subject: { layerId: 'flights', id: 'a52e54', label: 'ASA635', position: geoPoint(0, 0, 0) },
     evaluatedAt: Date.now(),
     radiusM: AWARENESS_RADIUS_M,
     cohorts: [
@@ -2465,8 +2415,8 @@ test('installation summaries keep the full navigation cohort beyond the former 5
 });
 
 test('unknown subject cohort blocks cross-layer NEXT navigation and availability', () => {
-  const vesselPosition = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 0);
-  const militaryPosition = Cesium.Cartesian3.fromDegrees(-97.7, 30.3, 1000);
+  const vesselPosition = geoPoint(-97.74, 30.27, 0);
+  const militaryPosition = geoPoint(-97.7, 30.3, 1000);
   const restoreCollections = stubAwarenessCollections({
     military: [{
       icao24: 'm1',
@@ -2524,8 +2474,8 @@ test('NEXT availability helper gates only new-target branches on an unknown coho
 
 test('canNext agrees with NEXT for unknown, healthy-empty, and recovered flight feeds', () => {
   const positions = {
-    subject: Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000),
-    contact: Cesium.Cartesian3.fromDegrees(-97.7, 30.3, 1000),
+    subject: geoPoint(-97.74, 30.27, 1000),
+    contact: geoPoint(-97.7, 30.3, 1000),
   };
   const military = [{
     icao24: 'm1',
@@ -2587,8 +2537,8 @@ test('canNext agrees with NEXT for unknown, healthy-empty, and recovered flight 
 });
 
 test('far-side hidden aircraft cannot enable NEXT when navigation cannot see them', () => {
-  const subjectPosition = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const hiddenPosition = Cesium.Cartesian3.fromDegrees(82.26, -30.27, 1000);
+  const subjectPosition = geoPoint(-97.74, 30.27, 1000);
+  const hiddenPosition = geoPoint(82.26, -30.27, 1000);
   const runtime = installAwarenessRuntime();
   const restores = [];
 
@@ -2653,16 +2603,14 @@ test('runtime listeners exist only while the awareness layer is enabled', () => 
   };
   const fakeBody = new FakeElement();
   const viewer = {
-    scene: {
-      preRender: {
-        addEventListener() {
-          preRenderListeners += 1;
-          return () => { preRenderListeners -= 1; };
-        },
-      },
+    on(type) {
+      if (type !== 'render') return () => {};
+      preRenderListeners += 1;
+      return () => { preRenderListeners -= 1; };
     },
-    entities: { remove() {} },
+    getCameraView: () => null,
     container: new FakeElement(),
+    canvas: new FakeElement(),
   };
 
   globalThis.window = fakeWindow;
@@ -2767,8 +2715,8 @@ test('the motion-end settle refresh still respects the motion floor', () => {
 test('parked Contacts takes no continuous-render hold and requests at most the parked cadence', () => {
   const realNow = Date.now;
   let clockMs = 1_700_000_000_000;
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
-  const neighbour = Cesium.Cartesian3.fromDegrees(-97.7, 30.27, 1000);
+  const position = geoPoint(-97.74, 30.27, 1000);
+  const neighbour = geoPoint(-97.7, 30.27, 1000);
   const restoreCollections = stubAwarenessCollections({
     // A real neighbouring contact, so the cohort is genuinely LIVE — an empty
     // or failed cohort must not take the hold (see the failed-feed test below).
@@ -2784,12 +2732,7 @@ test('parked Contacts takes no continuous-render hold and requests at most the p
   try {
     Date.now = () => clockMs;
     installRenderGovernor(runtime.viewer);
-    runtime.viewer.camera = {
-      positionWC: new Cesium.Cartesian3(1_000_000, 200_000, 300_000),
-      heading: 0,
-      pitch: -0.4,
-      roll: 0,
-    };
+    runtime.viewer.cameraView = { lon: -97.74, lat: 30.27, alt: 5000, heading: 0, pitch: -23, roll: 0 };
 
     // 1. Enabled, nothing selected, camera parked — Contacts must not be a
     //    reason the whole scene keeps repainting.
@@ -2811,7 +2754,7 @@ test('parked Contacts takes no continuous-render hold and requests at most the p
 
     // 3. Moving: the arrows are screen-projected, so per-frame work is real.
     clockMs += 16;
-    runtime.viewer.camera.heading += 0.5;
+    runtime.viewer.cameraView.heading += 30;
     runtime.tick();
     assert.ok(holds().includes('military-awareness'), 'a moving view earns the hold');
 
@@ -2821,7 +2764,7 @@ test('parked Contacts takes no continuous-render hold and requests at most the p
     assert.ok(!holds().includes('military-awareness'), 'settling releases the hold');
 
     // 5. Teardown releases even without another frame.
-    runtime.viewer.camera.heading += 0.5;
+    runtime.viewer.cameraView.heading += 30;
     clockMs += 16;
     runtime.tick();
     assert.ok(holds().includes('military-awareness'));
@@ -2856,7 +2799,7 @@ test('empty and failed cohorts are not "live" — there is no arrow to animate',
 test('a moving view over failed feeds takes no continuous-render hold', () => {
   const realNow = Date.now;
   let clockMs = 1_700_000_000_000;
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
+  const position = geoPoint(-97.74, 30.27, 1000);
   // Every dependency reports unavailable, so every cohort summarizes to count
   // null — the exact state the old Boolean(state.results) gate still held for.
   const restoreCollections = stubAwarenessCollections({});
@@ -2867,12 +2810,7 @@ test('a moving view over failed feeds takes no continuous-render hold', () => {
   try {
     Date.now = () => clockMs;
     installRenderGovernor(runtime.viewer);
-    runtime.viewer.camera = {
-      positionWC: new Cesium.Cartesian3(1_000_000, 200_000, 300_000),
-      heading: 0,
-      pitch: -0.4,
-      roll: 0,
-    };
+    runtime.viewer.cameraView = { lon: -97.74, lat: 30.27, alt: 5000, heading: 0, pitch: -23, roll: 0 };
     runtime.dispatch(
       'gev:awareness-subject-selected',
       awarenessSubject('flights', 'subject-flight', position),
@@ -2883,7 +2821,7 @@ test('a moving view over failed feeds takes no continuous-render hold', () => {
 
     for (let frame = 0; frame < 10; frame += 1) {
       clockMs += 16;
-      runtime.viewer.camera.heading += 0.5; // unmistakably moving
+      runtime.viewer.cameraView.heading += 30; // unmistakably moving
       runtime.tick();
     }
     assert.ok(
@@ -2901,7 +2839,7 @@ test('a moving view over failed feeds takes no continuous-render hold', () => {
 test('a moving camera refreshes Contacts more than once inside one parked interval', () => {
   const realNow = Date.now;
   let clockMs = 1_700_000_000_000;
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.27, 1000);
+  const position = geoPoint(-97.74, 30.27, 1000);
   const restoreCollections = stubAwarenessCollections({
     flights: [{ icao24: 'subject-flight', position, distanceM: 0 }],
   });
@@ -2911,12 +2849,7 @@ test('a moving camera refreshes Contacts more than once inside one parked interv
 
   try {
     Date.now = () => clockMs;
-    runtime.viewer.camera = {
-      positionWC: new Cesium.Cartesian3(1_000_000, 200_000, 300_000),
-      heading: 0,
-      pitch: -0.4,
-      roll: 0,
-    };
+    runtime.viewer.cameraView = { lon: -97.74, lat: 30.27, alt: 5000, heading: 0, pitch: -23, roll: 0 };
     replaceMethod(flightsLayer, 'getAllPositions', () => {
       refreshes += 1;
       return [{ id: 'subject-flight', position }];
@@ -2931,7 +2864,7 @@ test('a moving camera refreshes Contacts more than once inside one parked interv
     refreshes = 0;
     for (let frame = 0; frame < 45; frame += 1) {
       clockMs += 16;
-      runtime.viewer.camera.heading += 0.02; // "looking around"
+      runtime.viewer.cameraView.heading += 1.2; // "looking around"
       runtime.tick();
     }
     assert.ok(

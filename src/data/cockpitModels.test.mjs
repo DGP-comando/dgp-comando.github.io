@@ -1,106 +1,95 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 
 /**
- * Cockpit 3D aircraft policy.
+ * Cockpit AIR presentation (MapLibre).
  *
- * Cockpit renders NEARBY traffic with the existing fleet models and leaves
- * everything beyond the band as the shipped contact pips. The behaviour itself
- * is only observable in a browser, but the policy is expressed as a handful of
- * decisions and constants in the two flight layers, and those are exactly what a
- * regression would silently revert. These assertions pin the decisions.
+ * MIGRAÇÃO MAPLIBRE (2026-09): este arquivo fixava a política de MODELOS 3D do
+ * cockpit no app Cesium (fila de GLB, teto de 60 modelos, raios de admissão,
+ * troca billboard→modelo). No MapLibre não há modelo glTF — a aeronave é
+ * sempre o ícone —, então esses testes saíram com o código. O que continua
+ * valendo, e é testado aqui por comportamento nas duas camadas aéreas:
+ *  - no cockpit, o tráfego fora da faixa próxima vira o pip de contato (sem
+ *    rumo) e o de perto mantém a silhueta da classe;
+ *  - a aeronave do próprio piloto (o alvo) não aparece na frota;
+ *  - a saída do cockpit devolve as silhuetas.
  */
+import flightsLayer, {
+  _fleetFeaturesForTest as flightsFleet,
+  _setTrackedFlightRefreshStateForTest,
+  fleetFeatureProps,
+} from './flights.js';
+import militaryFlightsLayer, {
+  _fleetFeaturesForTest as militaryFleet,
+  _setTrackedMilitaryRefreshStateForTest,
+  militaryFeatureProps,
+} from './militaryFlights.js';
 
 const LAYERS = [
-  { name: 'flights', path: new URL('./flights.js', import.meta.url) },
-  { name: 'militaryFlights', path: new URL('./militaryFlights.js', import.meta.url) },
+  {
+    name: 'flights',
+    layer: flightsLayer,
+    fleet: flightsFleet,
+    props: fleetFeatureProps,
+    seed: (icao24, tracked) => _setTrackedFlightRefreshStateForTest({
+      icao24, tracked, position: { lon: 0.01, lat: 0.01, alt: 10_000 },
+      meta: { callsign: 'T1', altitude: 10_000, klass: 'airliner', true_track: 90, rawLat: 0.01, rawLon: 0.01 },
+    }),
+  },
+  {
+    name: 'militaryFlights',
+    layer: militaryFlightsLayer,
+    fleet: militaryFleet,
+    props: militaryFeatureProps,
+    seed: (icao24, tracked) => _setTrackedMilitaryRefreshStateForTest({
+      icao24, tracked, position: { lon: 0.01, lat: 0.01, alt: 10_000 },
+      meta: { callsign: 'M1', altitudeFt: 33_000, klass: 'fastjet', track: 90, rawLat: 0.01, rawLon: 0.01 },
+    }),
+  },
 ];
 
-/** Read a `const NAME = <number>;` declaration out of a module's source. */
-function numericConstant(source, name) {
-  const match = new RegExp(`const ${name}\\s*=\\s*(\\d+(?:\\.\\d+)?)`).exec(source);
-  assert.ok(match, `${name} is declared`);
-  return Number(match[1]);
+function cockpitEvent(active, subjectId = null) {
+  globalThis.window.dispatchEvent(new CustomEvent('gev:cockpit-mode-changed', {
+    detail: { active, subjectId, layerId: null },
+  }));
 }
 
-for (const layer of LAYERS) {
-  const source = readFileSync(layer.path, 'utf8');
+for (const fixture of LAYERS) {
+  test(`${fixture.name}: far cockpit traffic becomes a rotation-free pip, near traffic keeps its silhouette`, () => {
+    const far = fixture.props('abc001', { klass: 'airliner' }, { course: 123, cockpitDot: true });
+    assert.match(far.img, /^dot-/);
+    assert.equal(far.r, 0, 'pips carry no course');
+    const near = fixture.props('abc001', { klass: 'airliner' }, { course: 123, cockpitDot: false });
+    assert.match(near.img, /^airliner-/);
+    assert.equal(near.r, 123, 'near silhouettes keep the projected course');
+    assert.ok(near.s > far.s, 'the pip is smaller than the silhouette');
+  });
 
-  test(`${layer.name}: every GLB creation bypasses the tile-contended frame-spread queue`, () => {
-    const calls = [...source.matchAll(/Cesium\.Model\.fromGltfAsync\(\{([\s\S]*?)\}\)/g)];
-    assert.ok(calls.length >= 3, `expected fleet, tracked, and preload model calls; found ${calls.length}`);
-    for (const [index, call] of calls.entries()) {
-      assert.match(call[1], /\basynchronous:\s*false\b/,
-        `Model.fromGltfAsync call ${index + 1} must keep bounded GLB readiness independent of tile jobs`);
+  test(`${fixture.name}: cockpit lifecycle swaps the fleet presentation and hides the pilot's own airframe`, () => {
+    const realWindow = globalThis.window;
+    globalThis.window = new EventTarget();
+    try {
+      fixture.layer.init(null);
+      fixture.seed('abc002', false);
+      assert.match(fixture.fleet(Date.now()).features[0].properties.img, /^(airliner|fastjet)-/);
+
+      // The fleet engine's camera sits 1000 km up: nothing is in the near band.
+      cockpitEvent(true, 'ABC002');
+      assert.match(fixture.fleet(Date.now()).features[0].properties.img, /^dot-/,
+        'out-of-range contacts become pips in cockpit');
+
+      fixture.seed('abc002', true);
+      assert.equal(fixture.fleet(Date.now()).features.length, 0,
+        'the tracked (pilot) aircraft is drawn only by its own marker, never in the fleet');
+
+      cockpitEvent(false);
+      fixture.seed('abc002', false);
+      assert.match(fixture.fleet(Date.now()).features[0].properties.img, /^(airliner|fastjet)-/,
+        'exiting cockpit restores the class silhouettes');
+    } finally {
+      cockpitEvent(false);
+      fixture.layer.destroy();
+      globalThis.window = realWindow;
     }
-  });
-
-  test(`${layer.name}: Cockpit 3D obeys the shared Display toggle`, () => {
-    const regime = /function _modelRegimeActive\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
-    assert.ok(regime, '_modelRegimeActive is defined');
-    assert.match(regime, /if \(!_models3dEnabled\) return false;/,
-      'OFF must keep Cockpit AIR contacts in 2D');
-    assert.doesNotMatch(regime, /!_models3dEnabled\s*&&\s*!_cockpitContactMode/,
-      'Cockpit must not bypass the user-visible Display toggle');
-  });
-
-  test(`${layer.name}: the pilot's own airframe stays hidden in cockpit`, () => {
-    // Extra suppressions are allowed (the TR-3B Easter egg shares this guard,
-    // pinned in tr3bRegistry.test.mjs); the cockpit exclusion is what this test
-    // owns. The tracked regime is DEFAULT-ON by camera distance (2026-08-19), so
-    // it no longer routes through the toggle-gated `_modelRegimeActive` — the
-    // suppression is now an explicit early return.
-    const regime = /function _trackedModelRegimeActive\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
-    assert.ok(regime, '_trackedModelRegimeActive is defined');
-    assert.match(regime, /if \(!_trackedIcao \|\| _cockpitContactMode \|\|[\s\S]*?return false;/,
-      '_trackedModelRegimeActive excludes cockpit');
-    const tracked = /function _updateTrackedModel\(\)[\s\S]*?\n  if \(!active\)/.exec(source)?.[0];
-    assert.ok(tracked, '_updateTrackedModel is defined');
-    assert.match(tracked, /_trackedModelRegimeActive\(\)/,
-      'the tracked-model driver uses the cockpit-aware predicate');
-  });
-
-  test(`${layer.name}: Cockpit uses standard Proximity and All radii with a lower cap`, () => {
-    assert.equal(numericConstant(source, 'MODEL_PROX_ADD_M'), 150_000);
-    assert.equal(numericConstant(source, 'MODEL_PROX_KEEP_M'), 185_000);
-    assert.equal(numericConstant(source, 'MODEL_ALL_ADD_M'), 400_000);
-    assert.equal(numericConstant(source, 'MODEL_ALL_KEEP_M'), 450_000);
-    assert.equal(numericConstant(source, 'COCKPIT_MODEL_MAX'), 60);
-
-    const add = /function _modelAddDistM\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
-    const keep = /function _modelKeepDistM\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
-    assert.match(add, /_models3dMode === 'all' \? MODEL_ALL_ADD_M : MODEL_PROX_ADD_M/);
-    assert.match(keep, /_models3dMode === 'all' \? MODEL_ALL_KEEP_M : MODEL_PROX_KEEP_M/);
-    assert.doesNotMatch(add, /COCKPIT_MODEL_ADD_M/);
-    assert.doesNotMatch(keep, /COCKPIT_MODEL_KEEP_M/);
-
-    const cap = /function _modelCap\(\) \{[\s\S]*?\n\}/.exec(source)?.[0];
-    assert.match(cap, /Math\.min\(COCKPIT_MODEL_MAX/,
-      'Cockpit keeps its 60-model performance ceiling');
-  });
-
-  test(`${layer.name}: near AIR state is independent from model admission`, () => {
-    assert.match(source, /nextCockpitNearContacts\(/,
-      'Cockpit derives a separate near-contact hysteresis set');
-    assert.match(source, /isCockpitContact && !isCockpitNear[\s\S]*cockpitContactDotImage\(\)/,
-      'only out-of-range Cockpit contacts become dots');
-    // `_iconKind` is identity for every unconverted contact (see
-    // tr3bRegistry.test.mjs) — it only swaps the glyph for a contact the
-    // operator explicitly converted into a TR-3B.
-    assert.match(source, /bb\.image = aircraftIcon\(_iconKind\(icao24, meta\?\.klass\)(, bb\._gevIconLarge \? TRACKED_ICON_PX : undefined)?\)/,
-      'near contacts and model fallbacks retain the class-derived aircraft silhouette');
-    assert.match(source, /bb\.rotation = 0;/,
-      'far dots are reset to a rotation-free presentation');
-    assert.match(source, /\(!_cockpitContactMode \|\| isCockpitNear\) && \(doRotations \|\| revealed\)/,
-      'near 2D silhouettes continue to receive projected course');
-    assert.match(source, /if \(bb\.show\) bb\.show = false; \/\/ hand off ONLY once the model renders/,
-      'the gap-proof billboard-to-model handoff remains intact');
-  });
-
-  test(`${layer.name}: Cockpit exit clears near state before restoring map presentation`, () => {
-    const setMode = /function _setCockpitContactMode\([\s\S]*?\n\}/.exec(source)?.[0];
-    assert.match(setMode, /else _cockpitNearContacts = new Set\(\);/);
-    assert.match(setMode, /for \(const \[icao24, bb\] of _billboards\) _applyFleetBillboardPresentation\(icao24, bb\);/);
   });
 }

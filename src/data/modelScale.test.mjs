@@ -426,6 +426,9 @@ function normalBillboardScaleByDistance(sourceFile) {
 // calibração de referência do airplane.glb que o militar copia (PLANE_*) fica
 // fixada aqui, com os valores que a camada civil usava.
 const AIRPLANE_GLB_CALIBRATION = Object.freeze({ modelScale: 1, bellyOffsetNative: 6.719 });
+const MILITARY_JET_GLB_CALIBRATION = Object.freeze({ modelScale: 1, bellyOffsetNative: 5.631 });
+/** Cópias PLANE_* que o militar Cesium usava para o airplane.glb (fixadas aqui). */
+const MILITARY_PLANE_CALIBRATION = Object.freeze({ PLANE_MODEL_SCALE: 1, PLANE_NATIVE_RADIUS_M: 34.41, PLANE_BELLY_OFFSET_NATIVE: 6.719 });
 
 const LAYERS = [
   {
@@ -440,14 +443,12 @@ const LAYERS = [
     })(),
   },
   {
+    // MIGRAÇÃO MAPLIBRE: militaryFlights.js também desenha só o ícone (sem
+    // glTF); a calibração do jet.glb que a camada militar usava fica fixada
+    // aqui com os valores do app Cesium (MODEL_SCALE 1, barriga 5,631).
     name: 'military',
-    source: 'src/data/militaryFlights.js',
-    asset: (() => {
-      const src = fs.readFileSync(path.join(ROOT, 'src/data/militaryFlights.js'), 'utf8');
-      const m = src.match(/\bconst JET_MODEL_URL = '([^']+)';/);
-      assert.ok(m, 'militaryFlights.js: JET_MODEL_URL not found');
-      return m[1];
-    })(),
+    constants: MILITARY_JET_GLB_CALIBRATION,
+    asset: '/models/jet.glb',
   },
 ];
 
@@ -543,12 +544,7 @@ for (const [klass, spec] of Object.entries(CLASS_MODEL_REAL)) {
 // PLANE_* constants — pin them to the measured meter-scale GLB + flights'
 // calibration so the copies cannot drift.
 test('military layer airplane.glb constants match the measured GLB and flights calibration', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/data/militaryFlights.js'), 'utf8');
-  const grab = (name) => {
-    const m = src.match(new RegExp(`\\bconst ${name} = ([\\d.]+);`));
-    assert.ok(m, `militaryFlights.js: ${name} not found`);
-    return Number(m[1]);
-  };
+  const grab = (name) => MILITARY_PLANE_CALIBRATION[name];
   const [flights] = measured;
   assert.equal(grab('PLANE_MODEL_SCALE'), flights.modelScale, 'PLANE_MODEL_SCALE must match flights MODEL_SCALE');
   assert.ok(

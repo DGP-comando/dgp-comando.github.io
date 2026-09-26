@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import * as Cesium from 'cesium';
+import { geoPoint } from './geoPoint.js';
 
 import {
   TR3B_CLASS,
@@ -22,11 +22,17 @@ import {
 } from './tr3bRegistry.js';
 import { aircraftIcon, TRACKED_ICON_PX } from './aircraftIcons.js';
 import flightsLayer, {
+  _fleetFeaturesForTest as _flightFleetFeaturesForTest,
   _setTrackedFlightRefreshStateForTest,
+  _trackedPresentationForTest as _flightTrackedPresentationForTest,
+  fleetFeatureProps,
   mapAnalystRecord as mapFlightAnalystRecord,
 } from './flights.js';
 import militaryFlightsLayer, {
+  _fleetFeaturesForTest as _militaryFleetFeaturesForTest,
   _setTrackedMilitaryRefreshStateForTest,
+  _trackedPresentationForTest as _militaryTrackedPresentationForTest,
+  militaryFeatureProps,
   mapAnalystRecord as mapMilitaryAnalystRecord,
 } from './militaryFlights.js';
 import { findCompatibleHistoryIndex } from './militaryAwareness.js';
@@ -143,28 +149,13 @@ test('tr3b class label overrides the real type only for converted contacts', () 
   clearTr3bRegistry();
 });
 
-test('a conversion survives a poll refresh, in both the billboard and the tracked card', async () => {
+test('a conversion survives a poll refresh, in both the fleet glyph and the tracked card', async () => {
   clearTr3bRegistry();
   const icao24 = 'a1b2c3';
   setTr3b(icao24, true);
-
-  const entity = { gevLabelModel: { title: 'OLD', details: [] } };
-  const billboard = {
-    position: Cesium.Cartesian3.fromDegrees(-97.7, 30.2, 9_000),
-    color: Cesium.Color.WHITE,
-    image: aircraftIcon('tr3b'),
-    show: true,
-    width: 20,
-    height: 20,
-    scale: 1,
-  };
-  const viewer = { camera: { positionCartographic: null }, scene: {} };
   _setTrackedFlightRefreshStateForTest({
     icao24,
-    entity,
-    billboard,
-    billboardCollection: { show: false, remove() {} },
-    viewer,
+    position: { lon: -97.7, lat: 30.2, alt: 9_050 },
     meta: {
       callsign: 'OLD1',
       altitude: 9_000,
@@ -172,8 +163,7 @@ test('a conversion survives a poll refresh, in both the billboard and the tracke
       velocity: 180,
       true_track: 80,
       // A DIFFERENT class from the one the poll will derive, so the reconciler's
-      // class-change branch fires and re-images the billboard. That is exactly
-      // the path a conversion has to survive.
+      // class-change path runs. That is exactly the path a conversion has to survive.
       klass: 'light',
       typeName: 'Boeing 737-800',
       airline: 'Southwest Airlines',
@@ -184,6 +174,7 @@ test('a conversion survives a poll refresh, in both the billboard and the tracke
       rawLon: -97.7,
     },
   });
+  const target = flightsLayer.getTrackedTarget();
 
   const realFetch = globalThis.fetch;
   const nowSec = Math.floor(Date.now() / 1000);
@@ -207,61 +198,65 @@ test('a conversion survives a poll refresh, in both the billboard and the tracke
   };
 
   try {
-    await flightsLayer.update(viewer);
-    assert.equal(billboard.image, aircraftIcon('tr3b'),
-      'the poll reconciler re-images through the TR-3B resolver, not the raw class');
+    await flightsLayer.update(null);
+    assert.equal(_flightTrackedPresentationForTest().kind, 'tr3b',
+      'the tracked marker resolves its glyph through the TR-3B resolver, not the raw class');
     // Live telemetry keeps flowing; only the class label is the operator's fiction.
-    assert.match(entity.gevLabelModel.title, /^DAL123 · FL350 · 486 kts$/);
-    assert.deepEqual(entity.gevLabelModel.details.slice(0, 1), ['TR-3B'],
+    assert.match(target.gevLabelModel.title, /^DAL123 · FL350 · 486 kts$/);
+    assert.deepEqual(target.gevLabelModel.details.slice(0, 1), ['TR-3B'],
       'the tracked card class line reports TR-3B, replacing operator/type');
     assert.equal(
-      [entity.gevLabelModel.title, ...entity.gevLabelModel.details].join(' · ').includes('Southwest'),
+      [target.gevLabelModel.title, ...target.gevLabelModel.details].join(' · ').includes('Southwest'),
       false,
       'the real operator is not shown alongside the TR-3B classification',
     );
+    flightsLayer.stopTracking();
+    const fleet = _flightFleetFeaturesForTest(Date.now());
+    assert.equal(fleet.features.find((f) => f.id === icao24)?.properties.img.startsWith('tr3b-'), true,
+      'released back to the fleet, the contact still draws the triangle');
   } finally {
     globalThis.fetch = realFetch;
+    flightsLayer.stopTracking();
     clearTr3bRegistry();
   }
 });
 
-test('both flight layers keep a converted contact 2D and visible (render invariants)', async () => {
-  for (const name of ['flights.js', 'militaryFlights.js']) {
-    const source = await readFile(new URL(`./${name}`, import.meta.url), 'utf8');
+test('both flight layers keep a converted contact visible as the triangle (render invariants)', async () => {
+  // MIGRAÇÃO MAPLIBRE: não há mais modelo 3D a suprimir — a aeronave é sempre
+  // o ícone. O invariante que resta é o de desenho: todo glifo POR CONTATO
+  // (frota e alvo) passa pelo resolvedor _iconKind, e o contato convertido
+  // continua na fonte da frota (visível para CONTATOS, detecção e cockpit).
+  clearTr3bRegistry();
+  try {
+    for (const [name, props, tint] of [
+      ['flights.js', fleetFeatureProps, 'w'],
+      ['militaryFlights.js', militaryFeatureProps, 'm'],
+    ]) {
+      const source = stripComments(await readFile(new URL(`./${name}`, import.meta.url), 'utf8'));
+      assert.match(source, /const kind = cockpitDot \? 'dot' : _iconKind\(icao24, info\?\.klass\);/,
+        `${name}: the fleet glyph resolves through _iconKind`);
+      assert.match(source, /kind: _iconKind\(icao24, info\?\.klass\),/,
+        `${name}: the tracked marker resolves through _iconKind`);
+      assert.match(source, /'tr3b', 'tr3bHot'/, `${name}: both TR-3B rasters are loaded`);
+      assert.doesNotMatch(source, /Cesium/, `${name}: no Cesium render path is left to bypass the resolver`);
 
-    // 1. The 3D model handoff is SUPPRESSED for a converted contact — there is
-    //    no TR-3B GLB, so the triangle billboard stays the visual.
-    assert.match(source, /modelEligible\.has\(icao24\) && !isTr3b\(icao24\)/,
-      `${name}: fleet model handoff skips converted contacts`);
-    // The tracked regime became default-on and camera-distance driven
-    // (2026-08-19), so the suppression moved from a conjunct on
-    // `_modelRegimeActive()` to an explicit early return. The invariant is
-    // unchanged: a converted contact never reaches the model handoff.
-    assert.match(source, /if \(!_trackedIcao \|\| _cockpitContactMode \|\| isTr3b\(_trackedIcao\)\) \{/,
-      `${name}: the standalone tracked model is suppressed for a converted contact`);
-
-    // 2. The billboard is never hidden by that suppression — it must keep
-    //    satisfying the getNearby/getDetectableObjects visibility guards, so a
-    //    converted contact still works in Contacts and Cockpit.
-    assert.match(source, /if \(bb && id !== _trackedIcao\) bb\.show = true;|if \(modelled && id !== _trackedIcao\) modelled\.show = true;/,
-      `${name}: converting restores the billboard the model handoff had hidden`);
-
-    // 3. Every aircraftIcon() CALL SITE routes through the kind resolver, so no
-    //    refresh path (poll reconciler, raster swap, presentation, tracked
-    //    entity) can silently revert a conversion.
-    const code = stripComments(source);
-    const callSites = code.match(/aircraftIcon\(\s*[^;]*?\)/g) || [];
-    assert.equal(callSites.length >= 4, true, `${name}: expected the known aircraftIcon call sites`);
-    for (const call of callSites) {
-      assert.match(call, /aircraftIcon\(\s*_iconKind\(/,
-        `${name}: ${call.replace(/\s+/g, ' ')} must resolve its sprite kind through _iconKind`);
+      setTr3b('ab0001', true);
+      assert.equal(props('ab0001', { klass: 'widebody' }).img, `tr3b-${tint}`, `${name}: converted draws the triangle`);
+      assert.equal(props('ab0002', { klass: 'widebody' }).img, `widebody-${tint}`, `${name}: per contact, never global`);
+      clearTr3bRegistry();
     }
-
-    // 4. Orientation contract is untouched: still a screen-projected rotation
-    //    with alignedAxis ZERO, and no new per-frame CallbackProperty.
-    assert.match(source, /alignedAxis: Cesium\.Cartesian3\.ZERO/, `${name}: alignedAxis stays ZERO`);
-    assert.doesNotMatch(source, /isTr3b[\s\S]{0,200}new Cesium\.CallbackProperty/,
-      `${name}: the Easter egg adds no per-frame CallbackProperty`);
+    setTr3b('ae0009', true);
+    _setTrackedMilitaryRefreshStateForTest({
+      icao24: 'ae0009', tracked: false, position: { lon: 1, lat: 1, alt: 0 },
+      meta: { klass: 'fastjet', rawLat: 1, rawLon: 1 },
+    });
+    const fleet = _militaryFleetFeaturesForTest(Date.now());
+    assert.equal(fleet.features[0]?.properties.img, 'tr3b-m', 'the converted contact stays in the fleet source');
+    militaryFlightsLayer.setParams({ irBoost: true });
+    assert.equal(_militaryFleetFeaturesForTest(Date.now()).features[0]?.properties.img, 'tr3bHot-m');
+  } finally {
+    militaryFlightsLayer.setParams({ irBoost: false });
+    clearTr3bRegistry();
   }
 });
 
@@ -292,18 +287,10 @@ test('conversions are session-scoped and no lifecycle path clears them', async (
   clearTr3bRegistry();
   const icao24 = 'a1b2c3';
   setTr3b(icao24, true);
-  const viewer = { camera: { positionCartographic: null }, scene: {} };
+  const viewer = null;
   _setTrackedFlightRefreshStateForTest({
     icao24,
-    entity: null,
-    billboard: {
-      position: Cesium.Cartesian3.fromDegrees(-97.7, 30.2, 9_000),
-      color: Cesium.Color.WHITE,
-      image: aircraftIcon('tr3b'),
-      show: true,
-    },
-    billboardCollection: { show: false, remove() {} },
-    viewer,
+    position: { lon: -97.7, lat: 30.2, alt: 9_000 },
     tracked: false,
     meta: { callsign: 'OLD1', altitude: 9_000, klass: 'airliner', rawLat: 30.2, rawLon: -97.7 },
   });
@@ -399,26 +386,9 @@ test('the analyst engine filters and aggregates a tr3b class without choking', a
   clearTr3bRegistry();
 });
 
-test('a converted contact never consumes a 3D model CAP SLOT', async () => {
-  // The cap is applied to the `cand` list the eligibility pre-pass builds, so
-  // excluding converted contacts BEFORE `cand.push` is what frees the slot for
-  // an ordinary contact. Structural pin: the eligibility loop itself is inline
-  // in the fleet tick (no seam to drive headlessly), so this asserts the guard's
-  // POSITION rather than replaying the four-pass selection.
-  for (const name of ['flights.js', 'militaryFlights.js']) {
-    const source = await readFile(new URL(`./${name}`, import.meta.url), 'utf8');
-    // Anchor on the MODEL-eligibility loop (keepDistSq), not the unrelated
-    // ambient-enrichment candidate loop that also builds a `cand`.
-    const loop = /const cand = \[\];\s*\n\s*for \(const \[icao, bb\] of _billboards\)[\s\S]*?cand\.push\(/.exec(source)?.[0];
-    assert.ok(loop, `${name}: the model-eligibility candidate loop is present`);
-    assert.match(loop, /keepDistSq/, `${name}: matched the model-eligibility loop`);
-    assert.match(loop, /if \(isTr3b\(icao\)\) continue;/,
-      `${name}: converted contacts are dropped BEFORE entering the capped candidate list`);
-    // ...and the cap really is applied to that list, so a dropped candidate is a freed slot.
-    assert.match(source, /modelEligible\.size >= cap/,
-      `${name}: the cap bounds the candidate-derived eligible set`);
-  }
-});
+// MIGRAÇÃO MAPLIBRE: o teste "a converted contact never consumes a 3D model
+// CAP SLOT" saiu — ele fixava o laço de elegibilidade de modelos glTF da
+// frota (teto de modelos 3D), que não existe no MapLibre 2D.
 
 test('cockpit class filter matches a converted contact end to end', async () => {
   // The chain that was dead-ending: a spoken "TR-3B" is normalized by the voice
@@ -430,7 +400,7 @@ test('cockpit class filter matches a converted contact end to end', async () => 
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
   clearTr3bRegistry();
   const icao24 = 'abc123';
-  const center = Cesium.Cartesian3.fromDegrees(-97.7, 30.2, 200);
+  const center = geoPoint(-97.7, 30.2, 200);
 
   // 1) Real voice normalization: what the cockpit path actually receives.
   const seen = [];
@@ -457,14 +427,7 @@ test('cockpit class filter matches a converted contact end to end', async () => 
   // 2) Real getNearby record for a real (converted) contact in the layer.
   const seed = () => _setTrackedFlightRefreshStateForTest({
     icao24,
-    entity: null,
-    billboard: {
-      position: Cesium.Cartesian3.fromDegrees(-97.71, 30.21, 10_668),
-      color: Cesium.Color.WHITE,
-      show: true,
-    },
-    billboardCollection: { show: true, remove() {} },
-    viewer: { camera: { positionCartographic: null }, scene: {} },
+    position: { lon: -97.71, lat: 30.21, alt: 10_668 },
     tracked: false,
     meta: { callsign: 'SWA696 ', altitude: 10_668, klass: 'airliner', onGround: false },
   });
@@ -500,17 +463,10 @@ test('cockpit class filter matches a converted contact end to end', async () => 
 test('military records and detection cards agree with the conversion', () => {
   clearTr3bRegistry();
   const icao24 = 'ae01ce';
-  const center = Cesium.Cartesian3.fromDegrees(-97.7, 30.2, 200);
+  const center = geoPoint(-97.7, 30.2, 200);
   const seed = () => _setTrackedMilitaryRefreshStateForTest({
     icao24,
-    entity: null,
-    billboard: {
-      position: Cesium.Cartesian3.fromDegrees(-97.71, 30.21, 10_668),
-      color: Cesium.Color.WHITE,
-      show: true,
-    },
-    billboardCollection: { show: true, remove() {} },
-    viewer: { camera: { positionCartographic: null }, scene: {} },
+    position: { lon: -97.71, lat: 30.21, alt: 10_668 },
     tracked: false,
     meta: { callsign: 'RCH451', altitudeFt: 35_000, klass: 'quadjet', type: 'C-17A', onGround: false },
   });
