@@ -1,8 +1,7 @@
 // scripts/check-maplibre-no-cesium.mjs
 //
-// O protótipo MapLibre (maplibre.html) não carrega o Cesium: um import de
-// 'cesium' em qualquer ponto do grafo viraria o global `Cesium` indefinido e
-// derrubaria a página. Percorre os imports relativos a partir da entrada e
+// O app roda sobre o MapLibre e não deve chegar ao Cesium: percorre os
+// imports relativos a partir da entrada (por padrão o boot, src/main.js) e
 // falha mostrando a cadeia que chega ao Cesium.
 //
 //   node scripts/check-maplibre-no-cesium.mjs [entrada]
@@ -11,7 +10,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const entry = path.resolve(root, process.argv[2] ?? 'src/maplibre/prototype.js');
+const entry = path.resolve(root, process.argv[2] ?? 'src/main.js');
 const IMPORT_RE = /(?:import|export)\s[^'"]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)|import\s+['"]([^'"]+)['"]/g;
 
 const seen = new Map(); // arquivo -> cadeia até ele

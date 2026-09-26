@@ -4,7 +4,6 @@ import test from 'node:test';
 import layers, {
   aneisFc, buildTorres, circuloGraus, classeDaTorre, conectividadeInfo, conectividadeLegend, radiosFc, stationCount,
 } from './conectividadeRadios.js';
-import { classeDaTorre as classeApp, conectividadeLegend as legendApp } from '../../data/datageoConectividade.js';
 import { dotSize, flattenStations, nextLiveIndex } from '../../data/radioPlayer.js';
 
 const torres = JSON.parse(readFileSync(new URL('../../../public/data/conectividade-torres.json', import.meta.url), 'utf8'));
@@ -14,10 +13,24 @@ test('exporta as duas camadas na ordem, com os ids do app', () => {
   for (const l of layers) assert.equal(l.category, 'Infraestrutura');
 });
 
-test('classe e legenda iguais às do app Cesium', () => {
-  for (const mask of [0, 1, 2, 3, 4, 7, 8, 15]) assert.deepEqual(classeDaTorre(mask), classeApp(mask));
+// Os valores esperados são os da camada Cesium antiga (datageoConectividade.js,
+// removida): geração mais alta da torre e as mesmas cores/rótulos.
+test('classe e legenda iguais às do app antigo', () => {
+  const esperado = {
+    0: ['na', 'SEM INFO', '#52525b'], 1: ['2G', '2G', '#71717a'], 2: ['3G', '3G', '#15803d'],
+    3: ['3G', '3G', '#15803d'], 4: ['4G', '4G', '#4ade80'], 7: ['4G', '4G', '#4ade80'],
+    8: ['5G', '5G', '#a3e635'], 15: ['5G', '5G', '#a3e635'],
+  };
+  for (const [mask, [key, label, color]] of Object.entries(esperado)) {
+    const c = classeDaTorre(Number(mask));
+    assert.deepEqual([c.key, c.label, c.color], [key, label, color], `máscara ${mask}`);
+  }
   const counts = { '5G': 3, '4G': 2, na: 1 };
-  assert.deepEqual(conectividadeLegend(counts), legendApp(counts));
+  assert.deepEqual(conectividadeLegend(counts), [
+    { label: '5G', color: '#a3e635', count: 3 },
+    { label: '4G', color: '#4ade80', count: 2 },
+    { label: 'SEM INFO', color: '#52525b', count: 1 },
+  ]);
 });
 
 test('buildTorres: uma feição por torre, vizinhas e município', () => {

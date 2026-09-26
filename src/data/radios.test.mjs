@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { centroidByIbge } from './prCentroids.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
-import { datageoRadiosLayer, dotSize, flattenStations, nextLiveIndex } from './datageoRadios.js';
+import { dotSize, flattenStations, nextLiveIndex } from './radioPlayer.js';
+import conectividadeRadios from '../maplibre/layers/conectividadeRadios.js';
+
+const datageoRadiosLayer = conectividadeRadios.find((l) => l.id === 'datageo-radios');
 import { contactLines, isLive, placeTooltipHtml, whatsappNumber } from './radioContact.js';
 
 const data = JSON.parse(readFileSync(new URL('../../data/privado/radios-pr.json', import.meta.url), 'utf8'));

@@ -3,9 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { centroidByName } from './prCentroids.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
+import { GRUPOS, partesDe, tooltipHtml } from './estradasConveniadasTooltip.js';
 import {
-  GRUPOS, datageoEstradasConveniadasLayer as layer, partesDe, tooltipHtml,
-} from './datageoEstradasConveniadas.js';
+  conveniadasHitFilter, contarPorGrupo, estradasConveniadasLayer as layer,
+} from '../maplibre/layers/transporte.js';
 
 const raw = readFileSync(new URL('../../data/privado/estradas-conveniadas-pr.geojson', import.meta.url), 'utf8');
 const { features } = JSON.parse(raw);
@@ -45,15 +46,39 @@ test('tooltip escapa texto e mostra o trecho', () => {
   assert.equal(tooltipHtml({ grupo: 'outro' }), '');
 });
 
-test('chips ligam e desligam cada conjunto; parâmetro inválido é recusado', () => {
-  assert.deepEqual(layer.getParams(), { conveniadas: true, protocolos: true, automatizado: true });
-  const chip = layer.getRowControls().chips.find((c) => c.id === 'protocolos');
-  assert.deepEqual(chip.params, { protocolos: false });
-  assert.equal(layer.setParams(chip.params), true);
-  assert.equal(layer.getParams().protocolos, false);
-  assert.equal(layer.setParams({ protocolos: true }), true);
-  assert.equal(layer.setParams({ outro: true }), false);
-  assert.equal(layer.setParams({ conveniadas: 'sim' }), false);
+// Na versão MapLibre os conjuntos são chips da linha do painel (rowControls /
+// onChip) que só mudam a visibilidade dos layers; não há mais getParams/setParams
+// próprios da camada Cesium.
+test('chips ligam e desligam cada conjunto; chip desconhecido é ignorado', () => {
+  const layout = new Map();
+  const filters = new Map();
+  const map = {
+    getLayer: () => true,
+    setLayoutProperty: (id, _prop, value) => layout.set(id, value),
+    setFilter: (id, filter) => filters.set(id, filter),
+  };
+  const ctx = { map };
+  const chips = () => layer.rowControls(ctx).chips;
+  assert.deepEqual(chips().map((c) => [c.id, c.active]),
+    [['conveniadas', true], ['protocolos', true], ['automatizado', true]]);
+  layer.onChip('protocolos', ctx);
+  assert.equal(chips().find((c) => c.id === 'protocolos').active, false);
+  assert.equal(layout.get('dg-estradas-conveniadas-protocolos'), 'none');
+  assert.equal(layout.get('dg-estradas-conveniadas-conveniadas'), 'visible');
+  assert.deepEqual(filters.get('dg-estradas-conveniadas-hit'),
+    conveniadasHitFilter({ conveniadas: true, protocolos: false, automatizado: true }));
+  layer.onChip('protocolos', ctx);
+  assert.equal(layout.get('dg-estradas-conveniadas-protocolos'), 'visible');
+  layer.onChip('outro', ctx);
+  assert.ok(chips().every((c) => c.active));
+});
+
+test('contagem por conjunto ignora grupo desconhecido', () => {
+  const counts = contarPorGrupo(features);
+  assert.equal(counts.conveniadas, 96);
+  assert.equal(Object.values(counts).reduce((a, b) => a + b, 0), features.length);
+  assert.deepEqual(contarPorGrupo([{ properties: { grupo: 'x' } }, null]),
+    { conveniadas: 0, protocolos: 0, automatizado: 0 });
 });
 
 test('camada tem token próprio no link', () => {

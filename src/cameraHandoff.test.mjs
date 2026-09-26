@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui.js'), 'utf8');
-const firms = fs.readFileSync(path.join(ROOT, 'src', 'data', 'firmsHeatmap.js'), 'utf8');
 const vessels = fs.readFileSync(path.join(ROOT, 'src', 'data', 'aisLiveVessels.js'), 'utf8');
 const voice = fs.readFileSync(path.join(ROOT, 'src', 'voice', 'gevActions.js'), 'utf8');
 const cameraVerbs = fs.readFileSync(path.join(ROOT, 'src', 'cameraVerbs.js'), 'utf8');
@@ -381,8 +380,11 @@ test('world-focus listener lifecycle is symmetric and idempotent', () => {
   assert.match(ui, /this\._removeWorldRequestFocusListener = null;/);
 });
 
-test('vessel and fire layers announce valid clicks and never fly cameras', () => {
-  for (const [label, source] of [['vessels', vessels], ['fires', firms]]) {
+// Os focos de calor saíram desta checagem: a camada FIRMS Cesium
+// (firmsHeatmap.js) foi removida e a versão MapLibre (contextoGev.js) recebe o
+// clique pelo layerHost e só centraliza o mapa (easeTo), sem requestWorldFocus.
+test('vessel layer announces valid clicks and never flies cameras', () => {
+  for (const [label, source] of [['vessels', vessels]]) {
     assert.match(source, /requestWorldFocus\(\{/);
     assert.doesNotMatch(source, /camera\.flyTo/);
   }
@@ -402,14 +404,4 @@ test('vessel and fire layers announce valid clicks and never fly cameras', () =>
     'vessel focus helper',
   );
   assert.match(vesselFocus, /requestWorldFocus\(\{/);
-  const fireClick = body(
-    firms,
-    /_clickHandler\.setInputAction\(\(click\) => \{([\s\S]*?)\n    \}, Cesium\.ScreenSpaceEventType\.LEFT_CLICK\);/,
-    'fire click',
-  );
-  ordered(fireClick, [
-    'isOwnedByOtherLayer(id, pickedId)',
-    'overlayHost.hitTest?.(',
-    'selectAndFocusFire(carded)',
-  ], 'fire sibling ownership');
 });

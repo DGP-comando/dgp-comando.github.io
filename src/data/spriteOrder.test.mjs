@@ -8,7 +8,6 @@ import {
 } from './spriteOrder.js';
 import flightsLayer from './flights.js';
 import aisLiveVesselsLayer from './aisLiveVessels.js';
-import { createFirmsHeatmapLayer } from './firmsHeatmap.js';
 
 const ORDER = ['cctv', 'firms', 'bikeshare', 'ais', 'military', 'flights'];
 
@@ -99,7 +98,9 @@ test('restoreSpriteOrder never raises a registered collection absent from scene 
   unregisterSpriteCollection('flights', flights);
 });
 
-test('flights, AIS, and FIRMS enable paths are wired through the shared sprite restorer', () => {
+// A camada FIRMS saiu desta checagem: a versão MapLibre (contextoGev.js)
+// desenha os focos como layers do mapa, sem coleção de sprites Cesium.
+test('flights and AIS enable paths are wired through the shared sprite restorer', () => {
   const viewer = { id: 'viewer' };
   const calls = [];
   const restoreSpy = (value) => calls.push(value);
@@ -108,15 +109,8 @@ test('flights, AIS, and FIRMS enable paths are wired through the shared sprite r
   }
   assert.deepEqual(calls, [viewer, viewer, viewer]);
 
-  const firmsLayer = createFirmsHeatmapLayer({ id: 'firms', name: 'FIRMS' });
   assert.match(flightsLayer.enable.toString(), /restoreSpriteOrderOnEnable\(LAYER_ID, _engine\)/);
   // Camadas já portadas ao MapLibre sem sprite order próprio (AIS) ficam fora.
   const aisEnable = aisLiveVesselsLayer.enable.toString();
   if (/restoreSpriteOrderOnEnable/.test(aisEnable)) assert.match(aisEnable, /restoreSpriteOrderOnEnable\('ais'/);
-  assert.match(firmsLayer.enable.toString(), /restoreSpriteOrderOnEnable\('firms', viewer\)/);
-  assert.match(
-    createFirmsHeatmapLayer.toString(),
-    /registerSpriteCollection\('firms', _billboards\);\s*restoreSpriteOrder\(_viewer\);/,
-    'lazy FIRMS registration must restore order immediately',
-  );
 });

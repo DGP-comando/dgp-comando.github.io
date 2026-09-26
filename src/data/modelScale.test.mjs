@@ -17,13 +17,20 @@
 // guards future asset updates). For jet.glb this yields 29.83 — Cesium's
 // Model.boundingSphere.radius / scale measured in-app (2026-07-02).
 import { test } from 'node:test';
-import * as Cesium from 'cesium';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CLASS_SCALE_3D, CLASS_MODEL_URL, CLASS_MODEL_REAL } from './aircraftClass.js';
 import { nearFarFactorAtZoom } from './flights.js';
+import {
+  cartesianFromDegrees,
+  cross,
+  dot,
+  normalize,
+  sub,
+  toRadians,
+} from './spaceGeo.js';
 import {
   MODEL_TRAIL_ANCHOR_NATIVE,
   MODEL_VISUAL_CENTER_NATIVE,
@@ -53,6 +60,44 @@ test('model-space anchors honor Cesium minimum-pixel computed scale', () => {
   modelVisualAnchor(matrix, [2, 3, -4], 7, result);
   assert.deepEqual(result, { x: 79, y: 214, z: 272 });
 });
+
+// --- WGS84 frames without Cesium --------------------------------------------
+// Cesium was only the oracle for these frames; the same math in plain WGS84.
+
+/** Local east/north/up unit axes at a geodetic lon/lat (degrees). */
+function enuAxes(lonDeg, latDeg) {
+  const lon = toRadians(lonDeg);
+  const lat = toRadians(latDeg);
+  return {
+    east: { x: -Math.sin(lon), y: Math.cos(lon), z: 0 },
+    north: { x: -Math.sin(lat) * Math.cos(lon), y: -Math.sin(lat) * Math.sin(lon), z: Math.cos(lat) },
+    up: { x: Math.cos(lat) * Math.cos(lon), y: Math.cos(lat) * Math.sin(lon), z: Math.sin(lat) },
+  };
+}
+
+/**
+ * Column-major 4×4 equivalent of Cesium's
+ * `Transforms.headingPitchRollToFixedFrame(origin, hpr(heading, 0, 0))`:
+ * the ENU frame rotated by −heading about local up, so model +y (lengthwise
+ * after the glTF axis correction) points along the course.
+ */
+function headingFrame(lonDeg, latDeg, heightM, headingDeg) {
+  const { east, north, up } = enuAxes(lonDeg, latDeg);
+  const h = toRadians(headingDeg);
+  const c = Math.cos(h);
+  const s = Math.sin(h);
+  const x = { x: east.x * c - north.x * s, y: east.y * c - north.y * s, z: east.z * c - north.z * s };
+  const y = { x: east.x * s + north.x * c, y: east.y * s + north.y * c, z: east.z * s + north.z * c };
+  const o = cartesianFromDegrees(lonDeg, latDeg, heightM);
+  return [x.x, x.y, x.z, 0, y.x, y.y, y.z, 0, up.x, up.y, up.z, 0, o.x, o.y, o.z, 1];
+}
+
+/** Column-major translation·uniform-scale matrix (identity rotation). */
+function translationScale(t, scale) {
+  return [scale, 0, 0, 0, 0, scale, 0, 0, 0, 0, scale, 0, t.x, t.y, t.z, 1];
+}
+
+const translationOf = (m) => ({ x: m[12], y: m[13], z: m[14] });
 
 // --- minimal GLB bounds reader ---------------------------------------------
 
@@ -787,29 +832,24 @@ test('the trail head grows continuously across the envelope, never in one step',
 const TRAIL_ROOT_SCALE = 2;
 const TRAIL_ROOT_OFFSET = Object.freeze({ lengthwise: 5, vertical: -1 });
 test('the trail anchor rides the rendered longitudinal axis at every heading', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.7, 30.2, 3000);
-  const sub = (a, b) => Cesium.Cartesian3.subtract(a, b, new Cesium.Cartesian3());
+  const LON = -97.7;
+  const LAT = 30.2;
   // Cesium-model-local: x is lateral, y lengthwise, z vertical once the axis
   // correction has mapped raw glTF [x, y, z] -> [z, x, y].
-  const rootTransform = Cesium.Matrix4.fromTranslationQuaternionRotationScale(
-    new Cesium.Cartesian3(0, TRAIL_ROOT_OFFSET.lengthwise, TRAIL_ROOT_OFFSET.vertical),
-    Cesium.Quaternion.IDENTITY,
-    new Cesium.Cartesian3(TRAIL_ROOT_SCALE, TRAIL_ROOT_SCALE, TRAIL_ROOT_SCALE),
-    new Cesium.Matrix4(),
+  const rootTransform = translationScale(
+    { x: 0, y: TRAIL_ROOT_OFFSET.lengthwise, z: TRAIL_ROOT_OFFSET.vertical },
+    TRAIL_ROOT_SCALE,
   );
   for (const headingDeg of [0, 45, 90, 180, 270, 315]) {
-    const hpr = new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(headingDeg), 0, 0);
-    const modelMatrix = Cesium.Transforms.headingPitchRollToFixedFrame(
-      position, hpr, Cesium.Ellipsoid.WGS84, undefined, new Cesium.Matrix4(),
-    );
+    const modelMatrix = headingFrame(LON, LAT, 3000, headingDeg);
     for (const [url, anchor] of Object.entries(MODEL_TRAIL_ANCHOR_NATIVE)) {
       const model = {
         modelMatrix,
         computedScale: 1,
         sceneGraph: { components: { transform: rootTransform } },
       };
-      const origin = Cesium.Matrix4.getTranslation(modelMatrix, new Cesium.Cartesian3());
-      const world = modelAnchorWorld(model, anchor, new Cesium.Cartesian3());
+      const origin = translationOf(modelMatrix);
+      const world = modelAnchorWorld(model, anchor, { x: 0, y: 0, z: 0 });
       // Reference axes derived INDEPENDENTLY, from the ENU frame and the same
       // heading the matrix was built with — deliberately NOT through
       // modelAnchorWorld. Taking them through the function under test makes the
@@ -817,23 +857,18 @@ test('the trail anchor rides the rendered longitudinal axis at every heading', (
       // reference frame together and the lateral component stays zero, which is
       // how the first version of this pin passed against the very bug it was
       // written for.
-      const enu = Cesium.Transforms.eastNorthUpToFixedFrame(origin, Cesium.Ellipsoid.WGS84, new Cesium.Matrix4());
-      const axis = (i) => {
-        const c = Cesium.Matrix4.getColumn(enu, i, new Cesium.Cartesian4());
-        return Cesium.Cartesian3.normalize(new Cesium.Cartesian3(c.x, c.y, c.z), new Cesium.Cartesian3());
-      };
-      const east = axis(0); const north = axis(1); const vertical = axis(2);
-      const rad = Cesium.Math.toRadians(headingDeg);
-      const lengthwise = Cesium.Cartesian3.normalize(Cesium.Cartesian3.add(
-        Cesium.Cartesian3.multiplyByScalar(north, Math.cos(rad), new Cesium.Cartesian3()),
-        Cesium.Cartesian3.multiplyByScalar(east, Math.sin(rad), new Cesium.Cartesian3()),
-        new Cesium.Cartesian3()), new Cesium.Cartesian3());
-      const lateral = Cesium.Cartesian3.normalize(
-        Cesium.Cartesian3.cross(lengthwise, vertical, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+      const { east, north, up: vertical } = enuAxes(LON, LAT);
+      const rad = toRadians(headingDeg);
+      const lengthwise = normalize({
+        x: north.x * Math.cos(rad) + east.x * Math.sin(rad),
+        y: north.y * Math.cos(rad) + east.y * Math.sin(rad),
+        z: north.z * Math.cos(rad) + east.z * Math.sin(rad),
+      });
+      const lateral = normalize(cross(lengthwise, vertical));
       const offset = sub(world, origin);
-      const along = Cesium.Cartesian3.dot(offset, lengthwise);
-      const up = Cesium.Cartesian3.dot(offset, vertical);
-      const side = Cesium.Cartesian3.dot(offset, lateral);
+      const along = dot(offset, lengthwise);
+      const up = dot(offset, vertical);
+      const side = dot(offset, lateral);
       const where = `${url} @ heading ${headingDeg}`;
       // The anchor must lie in the vertical plane through the heading. The
       // regression put the whole longitudinal offset on THIS axis.
@@ -862,31 +897,20 @@ test('the trail anchor rides the rendered longitudinal axis at every heading', (
 // contact having a meaningful heading — it is a model-space offset, so an
 // arbitrary heading still puts it aft of the hull.
 test('a hovering rotorcraft anchors aft of its own hull, whatever its heading', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-97.7, 30.2, 300);
   const anchor = MODEL_TRAIL_ANCHOR_NATIVE['/models/bell206.glb'];
   for (const headingDeg of [0, 137.5, 271.9]) {
-    const hpr = new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(headingDeg), 0, 0);
-    const model = {
-      modelMatrix: Cesium.Transforms.headingPitchRollToFixedFrame(
-        position, hpr, Cesium.Ellipsoid.WGS84, undefined, new Cesium.Matrix4()),
-      computedScale: 1,
-    };
-    const origin = Cesium.Matrix4.getTranslation(model.modelMatrix, new Cesium.Cartesian3());
-    const world = modelAnchorWorld(model, anchor, new Cesium.Cartesian3());
-    const enu = Cesium.Transforms.eastNorthUpToFixedFrame(origin, Cesium.Ellipsoid.WGS84, new Cesium.Matrix4());
-    const ax = (i) => {
-      const c = Cesium.Matrix4.getColumn(enu, i, new Cesium.Cartesian4());
-      return Cesium.Cartesian3.normalize(new Cesium.Cartesian3(c.x, c.y, c.z), new Cesium.Cartesian3());
-    };
-    const rad = Cesium.Math.toRadians(headingDeg);
-    const fwd = Cesium.Cartesian3.normalize(Cesium.Cartesian3.add(
-      Cesium.Cartesian3.multiplyByScalar(ax(1), Math.cos(rad), new Cesium.Cartesian3()),
-      Cesium.Cartesian3.multiplyByScalar(ax(0), Math.sin(rad), new Cesium.Cartesian3()),
-      new Cesium.Cartesian3()), new Cesium.Cartesian3());
-    const lateral = Cesium.Cartesian3.normalize(
-      Cesium.Cartesian3.cross(fwd, ax(2), new Cesium.Cartesian3()), new Cesium.Cartesian3());
-    const side = Cesium.Cartesian3.dot(
-      Cesium.Cartesian3.subtract(world, origin, new Cesium.Cartesian3()), lateral);
+    const model = { modelMatrix: headingFrame(-97.7, 30.2, 300, headingDeg), computedScale: 1 };
+    const origin = translationOf(model.modelMatrix);
+    const world = modelAnchorWorld(model, anchor, { x: 0, y: 0, z: 0 });
+    const { east, north, up } = enuAxes(-97.7, 30.2);
+    const rad = toRadians(headingDeg);
+    const fwd = normalize({
+      x: north.x * Math.cos(rad) + east.x * Math.sin(rad),
+      y: north.y * Math.cos(rad) + east.y * Math.sin(rad),
+      z: north.z * Math.cos(rad) + east.z * Math.sin(rad),
+    });
+    const lateral = normalize(cross(fwd, up));
+    const side = dot(sub(world, origin), lateral);
     assert.ok(Math.abs(side) < 1e-4,
       `bell206 @ heading ${headingDeg}: hovering rotorcraft anchor drifted sideways by ${side.toFixed(4)} m`);
   }

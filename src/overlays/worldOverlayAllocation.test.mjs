@@ -2,18 +2,34 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { LOCAL_OVERLAY_COHORT_LIMIT } from '../data/localGeojson.js';
-import { FIRMS_AMBIENT_COHORT_LIMIT } from '../data/firmsLabels.js';
 import { vesselOverlayCohortLimit } from '../data/vesselLabels.js';
 import { CCTV_AMBIENT_CARD_MAX } from '../data/cctvLod.js';
 import { AMBIENT_CARD_COLLISION_CAPACITY } from './worldOverlay.js';
-import { EARTHQUAKE_OVERLAY_COHORT_LIMIT } from '../data/earthquakes.js';
 import { ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT } from '../data/rocketLaunches.js';
 import { RADIO_OVERLAY_COHORT_LIMIT } from '../data/radio.js';
-import { CABLE_REFERENCE_LABEL_WINNER_CAP } from '../data/telegeographySubmarineCables.js';
 import { isCalibratedAllocationRuntime } from '../../scripts/run-unit-tests.mjs';
 
 /**
+ * MapLibre migration (2026-09): the local-infrastructure, FIRMS, earthquake and
+ * submarine-cable rows were removed. Those layers were rewritten as MapLibre
+ * symbol layers (src/maplibre/layers/contextoGev.js) and no longer publish to
+ * the world overlay, so their overlay-entry factories are gone. The cumulative
+ * phase rows now start from the vessel cohort; their frame budgets were
+ * re-derived without those sources (Node 22.22 medians in this environment,
+ * ~30% headroom — reconfirm on the calibrated Node 24 runtime):
+ *
+ *   profile              | candidates | median B/frame (Node 22) | B/candidate | frame budget
+ *   ---------------------+------------+--------------------------+-------------+-------------
+ *   Phase 3 vessels      |        113 |                    15320 |       135.6 |      20,000
+ *   Phase 3 + tracked    |        113 |                    16936 |       149.9 |      22,000
+ *   Phase 4 + CCTV       |        154 |                    21207 |       137.7 |      28,000
+ *   Phase 5 pre-missions |        157 |                    28513 |       181.6 |      37,000
+ *   Phase 5 final        |        205 |                    35455 |       173.0 |      46,000
+ *   all-live (Radio)     |        270 |                    42079 |       155.8 |      55,000
+ *
+ * The per-candidate ceilings (154 shared, 210 CCTV image row, 225 image-inclusive
+ * aggregates) are unchanged. The history below describes the pre-migration rows.
+ *
  * Phase-2 entry gate: a steady moving-source frame must not allocate in
  * proportion to the cohort it projects. The measurement runs in a
  * `--expose-gc` child (`worldOverlayAllocation.worker.mjs`) so the whole suite
@@ -127,52 +143,29 @@ const WORKLOADS = [
     saturated: true,
   },
   {
-    name: 'with both local infrastructure sources live',
-    profile: 'local-infrastructure',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2,
-    maxBytesPerFrame: 49_000,
-    saturated: true,
-  },
-  {
-    name: 'with infrastructure and FIRMS live',
-    profile: 'phase3-firms',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT,
-    maxBytesPerFrame: 53_600,
-    saturated: true,
-    ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
-  },
-  {
-    name: 'with infrastructure, FIRMS, and vessels live',
+    name: 'with vessels live',
     profile: 'phase3-vessels',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1,
-    maxBytesPerFrame: 87_500,
+    entries: vesselOverlayCohortLimit(1600, 900) + 1,
+    candidates: vesselOverlayCohortLimit(1600, 900) + 1,
+    maxBytesPerFrame: 20_000,
     saturated: true,
     ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
   },
   {
-    name: 'with infrastructure, FIRMS, ambient vessels, and tracked readout live',
+    name: 'with ambient vessels and tracked readout live',
     profile: 'phase3-tracked',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1,
-    maxBytesPerFrame: 86_700,
+    entries: vesselOverlayCohortLimit(1600, 900) + 1,
+    candidates: vesselOverlayCohortLimit(1600, 900) + 1,
+    maxBytesPerFrame: 22_000,
     saturated: true,
     ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
   },
   {
     name: 'with all Phase 3 sources and CCTV thumbnails live',
     profile: 'phase4-cctv',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1,
-    maxBytesPerFrame: 102_400,
+    entries: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1,
+    candidates: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1,
+    maxBytesPerFrame: 28_000,
     maxBytesPerCandidatePerFrame: 210,
     saturated: true,
     ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
@@ -186,15 +179,11 @@ const WORKLOADS = [
     saturated: true,
   },
   {
-    name: 'with final Phase 5 host sources live (pre-cable-migration surface)',
+    name: 'with final Phase 5 host sources live',
     profile: 'phase5-military',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1
-      + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1
-      + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3,
-    maxBytesPerFrame: 132_000,
+    entries: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1 + 3,
+    candidates: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1 + 3,
+    maxBytesPerFrame: 37_000,
     maxBytesPerCandidatePerFrame: 225,
     saturated: true,
     ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
@@ -202,62 +191,26 @@ const WORKLOADS = [
   {
     name: 'with final Phase 5 sources and bounded rocket-mission markers live',
     profile: 'phase5-rockets',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1
-      + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3
+    entries: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1 + 3
       + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1
-      + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3
+    candidates: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1 + 3
       + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT,
-    // 142,000 deliberately carries ~6% headroom (vs the ~3.3% the previous
-    // aggregate row ran at): a chosen margin correction, not drift.
-    maxBytesPerFrame: 142_000,
+    maxBytesPerFrame: 46_000,
     maxBytesPerCandidatePerFrame: 225,
     saturated: true,
     ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
   },
   {
-    // Recalibrated 2026-08-18 when the migrated submarine-cable cohort joined
-    // the aggregate (the row is "every shared-host source", so cable labels
-    // must coexist with Radio/earthquake/mission quotas here, not only in
-    // their isolated row; the probe shows cables winning painted slots in the
-    // saturated ambient-label domain). Node 24.19 measures 164,711 B/frame
-    // median (190.6 B/candidate) across two identical runs with cables folded
-    // in; 182,000 keeps the row's >10% headroom convention and the
-    // image-inclusive 225 ceiling stands with ~15% headroom.
     name: 'with every shared-host source and bounded Radio text live',
     profile: 'all-live-radio',
-    entries: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1
-      + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3
-      + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT + RADIO_OVERLAY_COHORT_LIMIT + 1
-      + CABLE_REFERENCE_LABEL_WINNER_CAP,
-    candidates: LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-      + vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1
-      + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3
-      + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT + RADIO_OVERLAY_COHORT_LIMIT + 1
-      + CABLE_REFERENCE_LABEL_WINNER_CAP,
-    maxBytesPerFrame: 182_000,
+    entries: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1 + 3
+      + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT + RADIO_OVERLAY_COHORT_LIMIT + 1,
+    candidates: vesselOverlayCohortLimit(1600, 900) + 1 + CCTV_AMBIENT_CARD_MAX + 1 + 3
+      + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT + RADIO_OVERLAY_COHORT_LIMIT + 1,
+    maxBytesPerFrame: 55_000,
     maxBytesPerCandidatePerFrame: 225,
     saturated: true,
     ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
-  },
-  {
-    // 2026-08-18 cable-label migration: the former native exception now
-    // publishes a bounded 160-winner ambient-label cohort (collision capacity
-    // 96, so the row saturates). Isolated row like rocket-missions, so a
-    // cables-only regression stays attributable; the cohort is also folded
-    // into the recalibrated all-live aggregate below for interaction
-    // coverage. Measured median 17,015 B/frame (106.3 B/candidate)
-    // on Node 24.19; 19,000 carries ~11.7% headroom and the shared 154
-    // ceiling applies unchanged.
-    name: 'with the bounded submarine-cable reference cohort',
-    profile: 'submarine-cables',
-    entries: CABLE_REFERENCE_LABEL_WINNER_CAP,
-    candidates: CABLE_REFERENCE_LABEL_WINNER_CAP,
-    maxBytesPerFrame: 19_000,
-    saturated: true,
   },
   {
     name: 'with the Dense detection lane active over 5,000 observations',

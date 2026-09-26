@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeCell, nearestCells, cellKey } from './slicedLineLayer.js';
-import { datageoEstradasLayer } from './datageoEstradas.js';
+import { decodeCell, nearestCells, cellKey } from './slicedCells.js';
+import { estradasLayer as datageoEstradasLayer } from '../maplibre/layers/transporte.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
