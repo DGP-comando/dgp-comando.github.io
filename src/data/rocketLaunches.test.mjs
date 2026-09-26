@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as Cesium from 'cesium';
 import { gstime } from 'satellite.js';
 import rocketLaunchesLayer, {
-  _setRocketMissionOverlayHostForTest,
+  _missionFeaturesForTest,
+  _replayActiveLaunchForTest,
   _setSelectedRocketMissionForTest,
+  _startMissionReplayForTest,
   approximateOrbitPath,
   buildMissionPaths,
   cameraHeadingForPath,
@@ -43,10 +44,6 @@ import rocketLaunchesLayer, {
   replayVehicleScreenRotation,
   releaseAircraftTracking,
   ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT,
-  ROCKET_MISSION_AMBIENT_OVERLAY_COLLISION_CAPACITY,
-  ROCKET_MISSION_AMBIENT_OVERLAY_SOURCE_ID,
-  ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_ID,
-  ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_OPTIONS,
   samplePath,
   satelliteParamsAfterSpaceMissions,
   satelliteParamsForSpaceMissions,
@@ -55,6 +52,22 @@ import rocketLaunchesLayer, {
   smoothReplayCameraHeading,
 } from './rocketLaunches.js';
 import {
+  WGS84_A,
+  cartesianFromDegrees,
+  cross,
+  distance,
+  dot,
+  geodeticFromCartesian,
+  magnitude,
+  negativePiToPi,
+  normalize,
+  sub,
+  surfaceDistance,
+  toDegrees,
+  toRadians,
+  vec,
+} from './spaceGeo.js';
+import {
   findSatelliteOrbitTrackInTle,
   orbitFrameModelMatrix,
   satelliteCatalogModeChanged,
@@ -62,19 +75,20 @@ import {
 } from './satellites.js';
 
 const NOW = new Date('2026-07-27T00:00:00Z');
+const acosClamped = (x) => Math.acos(Math.max(-1, Math.min(1, x)));
 
 test('mission anchors are hidden behind Earth and restored on the facing hemisphere', () => {
-  const camera = Cesium.Cartesian3.fromDegrees(-75, 20, 18000000);
-  const front = Cesium.Cartesian3.fromDegrees(-75, 20);
-  const rear = Cesium.Cartesian3.fromDegrees(105, -20);
+  const camera = cartesianFromDegrees(-75, 20, 18000000);
+  const front = cartesianFromDegrees(-75, 20);
+  const rear = cartesianFromDegrees(105, -20);
   assert.equal(missionAnchorHorizonVisible(camera, front), true);
   assert.equal(missionAnchorHorizonVisible(camera, rear), false);
 });
 
 test('selecting one mission hides every other front-facing launch anchor', () => {
-  const camera = Cesium.Cartesian3.fromDegrees(-75, 20, 18000000);
-  const first = Cesium.Cartesian3.fromDegrees(-75, 20);
-  const second = Cesium.Cartesian3.fromDegrees(-80, 25);
+  const camera = cartesianFromDegrees(-75, 20, 18000000);
+  const first = cartesianFromDegrees(-75, 20);
+  const second = cartesianFromDegrees(-80, 25);
 
   assert.equal(missionAnchorVisible(camera, first, 'first', null), true);
   assert.equal(missionAnchorVisible(camera, second, 'second', null), true);
@@ -90,18 +104,18 @@ test('advances the live orbit marker between whole seconds', () => {
 
 test('samples replay paths uniformly by distance rather than vertex count', () => {
   const path = [
-    new Cesium.Cartesian3(0, 0, 0),
-    new Cesium.Cartesian3(1, 0, 0),
-    new Cesium.Cartesian3(101, 0, 0),
+    vec(0, 0, 0),
+    vec(1, 0, 0),
+    vec(101, 0, 0),
   ];
   assert.ok(Math.abs(samplePath(path, 0.5).x - 50.5) < 1e-9);
   assert.ok(Math.abs(samplePath(path, 0.75).x - 75.75) < 1e-9);
 });
 
 test('transitions selected mission zoom from globe nadir to an oblique site view', () => {
-  assert.ok(Math.abs(missionZoomPitch(5000000) - Cesium.Math.toRadians(-90)) < 1e-10);
-  assert.ok(Math.abs(missionZoomPitch(180000) - Cesium.Math.toRadians(-42)) < 1e-10);
-  const midPitch = Cesium.Math.toDegrees(missionZoomPitch(1000000));
+  assert.ok(Math.abs(missionZoomPitch(5000000) - toRadians(-90)) < 1e-10);
+  assert.ok(Math.abs(missionZoomPitch(180000) - toRadians(-42)) < 1e-10);
+  const midPitch = toDegrees(missionZoomPitch(1000000));
   assert.ok(midPitch < -42 && midPitch > -90);
 });
 
@@ -112,101 +126,98 @@ test('pulls replay camera from close ascent tracking into a globe-scale orbit vi
   const orbitMidPullback = replayCameraView({ ascending: false, phaseProgress: 0.1 }, 550000);
   const orbitGlobe = replayCameraView({ ascending: false, phaseProgress: 0.2 }, 550000);
 
-  assert.ok(ascent.pitch < Cesium.Math.toRadians(-20));
-  assert.ok(ascent.pitch > Cesium.Math.toRadians(-34));
+  assert.ok(ascent.pitch < toRadians(-20));
+  assert.ok(ascent.pitch > toRadians(-34));
   assert.ok(contextualAscent.range > 1000000);
-  assert.equal(contextualAscent.pitch, Cesium.Math.toRadians(-34));
-  assert.equal(orbitStart.pitch, Cesium.Math.toRadians(-34));
+  assert.equal(contextualAscent.pitch, toRadians(-34));
+  assert.equal(orbitStart.pitch, toRadians(-34));
   assert.ok(orbitMidPullback.range > orbitStart.range);
   assert.ok(orbitMidPullback.pitch < orbitStart.pitch);
   assert.equal(orbitGlobe.range, 18000000);
-  assert.equal(orbitGlobe.pitch, Cesium.Math.toRadians(-45));
+  assert.equal(orbitGlobe.pitch, toRadians(-45));
 });
 
 test('limits replay camera yaw through heading wraps', () => {
-  const previous = Cesium.Math.toRadians(359);
-  const desired = Cesium.Math.toRadians(181);
+  const previous = toRadians(359);
+  const desired = toRadians(181);
   const next = smoothReplayCameraHeading(previous, desired);
-  assert.ok(Math.abs(Cesium.Math.negativePiToPi(next - previous)) <= Cesium.Math.toRadians(2));
+  assert.ok(Math.abs(negativePiToPi(next - previous)) <= toRadians(2));
 
   const wrapped = smoothReplayCameraHeading(
-    Cesium.Math.toRadians(359),
-    Cesium.Math.toRadians(1),
+    toRadians(359),
+    toRadians(1),
   );
-  assert.ok(Cesium.Math.negativePiToPi(wrapped - previous) > 0);
+  assert.ok(negativePiToPi(wrapped - previous) > 0);
 });
 
 test('starts replay camera broadside to the ascent path', () => {
   const path = [
-    Cesium.Cartesian3.fromDegrees(-120, 34, 0),
-    Cesium.Cartesian3.fromDegrees(-120, 35, 1000),
+    cartesianFromDegrees(-120, 34, 0),
+    cartesianFromDegrees(-120, 35, 1000),
   ];
   const chaseHeading = cameraHeadingForPath(path, 0);
   const heading = replayInitialCameraHeading(path);
-  assert.ok(Math.abs(Cesium.Math.negativePiToPi(chaseHeading)) < 0.02);
-  assert.ok(Math.abs(Cesium.Math.negativePiToPi(heading - Cesium.Math.toRadians(90))) < 0.02);
+  assert.ok(Math.abs(negativePiToPi(chaseHeading)) < 0.02);
+  assert.ok(Math.abs(negativePiToPi(heading - toRadians(90))) < 0.02);
 });
 
 test('keeps the chase camera in a rear-quarter view of the forward path', () => {
   assert.ok(Math.abs(
-    Cesium.Math.negativePiToPi(replayChaseCameraHeading(0, 0) - Cesium.Math.toRadians(30)),
+    negativePiToPi(replayChaseCameraHeading(0, 0) - toRadians(30)),
   ) < 1e-10);
   assert.ok(Math.abs(
-    Cesium.Math.negativePiToPi(replayChaseCameraHeading(0, 1) - Cesium.Math.toRadians(45)),
+    negativePiToPi(replayChaseCameraHeading(0, 1) - toRadians(45)),
   ) < 1e-10);
 });
 
 test('centers orbit follow on a globe-side anchor while retaining vehicle clearance', () => {
-  const position = Cesium.Cartesian3.fromDegrees(20, 10, 550000);
+  const position = cartesianFromDegrees(20, 10, 550000);
   const anchor = replayOrbitGlobeAnchor(position, 1);
-  const anchorHeight = Cesium.Ellipsoid.WGS84.cartesianToCartographic(anchor).height;
+  const anchorHeight = geodeticFromCartesian(anchor).height;
   assert.ok(Math.abs(anchorHeight - 55000) < 1);
-  const target = replayOrbitCameraTarget(anchor, Cesium.Cartesian3.ZERO, 1);
-  assert.ok(Cesium.Cartesian3.magnitude(target) > Cesium.Ellipsoid.WGS84.maximumRadius * 0.3);
-  assert.ok(Cesium.Cartesian3.distance(target, anchor) > 0);
-  assert.ok(Cesium.Cartesian3.distance(target, anchor) < Cesium.Cartesian3.magnitude(anchor));
+  const target = replayOrbitCameraTarget(anchor, vec(), 1);
+  assert.ok(magnitude(target) > WGS84_A * 0.3);
+  assert.ok(distance(target, anchor) > 0);
+  assert.ok(distance(target, anchor) < magnitude(anchor));
   assert.equal(replayOrbitGlobeRange(18000000, 550000, 1), 18000000);
   assert.ok(replayOrbitGlobeRange(18000000, 35786000, 1) > 50000000);
 });
 
 test('keeps the forward orbit tangent moving toward screen-left', () => {
-  const earthRadius = Cesium.Ellipsoid.WGS84.maximumRadius;
-  const position = new Cesium.Cartesian3(earthRadius + 550000, 0, 0);
-  const tangentPosition = new Cesium.Cartesian3(earthRadius + 550000, 10000, 0);
-  const target = new Cesium.Cartesian3(earthRadius * 0.35, 0, 0);
+  const earthRadius = WGS84_A;
+  const position = vec(earthRadius + 550000, 0, 0);
+  const tangentPosition = vec(earthRadius + 550000, 10000, 0);
+  const target = vec(earthRadius * 0.35, 0, 0);
   const pose = replayOrbitCameraPose(
     position,
     tangentPosition,
     target,
     18000000,
-    Cesium.Math.toRadians(-45),
+    toRadians(-45),
   );
   assert.ok(pose);
-  const screenRight = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.cross(pose.direction, pose.up, new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
+  const screenRight = normalize(
+    cross(pose.direction, pose.up),
   );
-  const tangent = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.subtract(
+  const tangent = normalize(
+    sub(
       tangentPosition,
       position,
-      new Cesium.Cartesian3(),
     ),
-    new Cesium.Cartesian3(),
   );
-  assert.ok(Cesium.Cartesian3.dot(screenRight, tangent) < -0.999);
+  assert.ok(dot(screenRight, tangent) < -0.999);
   assert.ok(Math.abs(
-    Cesium.Cartesian3.distance(pose.destination, target) - 18000000,
+    distance(pose.destination, target) - 18000000,
   ) < 1e-5);
 });
 
 test('frames the complete high-apogee orbit together with Earth', () => {
-  const earthRadius = Cesium.Ellipsoid.WGS84.maximumRadius;
+  const earthRadius = WGS84_A;
   const orbit = [
-    new Cesium.Cartesian3(earthRadius + 300000, 0, 0),
-    new Cesium.Cartesian3(0, earthRadius + 35786000, 0),
-    new Cesium.Cartesian3(-(earthRadius + 300000), 0, 0),
-    new Cesium.Cartesian3(0, -(earthRadius + 35786000), 0),
+    vec(earthRadius + 300000, 0, 0),
+    vec(0, earthRadius + 35786000, 0),
+    vec(-(earthRadius + 300000), 0, 0),
+    vec(0, -(earthRadius + 35786000), 0),
   ];
   const frame = replayOrbitFrameSphere(orbit);
   const range = replayOrbitGlobeRange(18000000, 300000, 1, frame.radius);
@@ -405,11 +416,8 @@ test('uses the core GMST frame transform for mission orbit primitives', () => {
   const nowDate = new Date('2026-07-20T10:10:00Z');
   const gmstAtBake = gstime(bakeDate);
   const matrix = orbitFrameModelMatrix(gmstAtBake, nowDate);
-  const actual = Cesium.Matrix4.multiplyByPoint(
-    matrix,
-    Cesium.Cartesian3.UNIT_X,
-    new Cesium.Cartesian3(),
-  );
+  // Column-major 4x4 (Cesium.Matrix4 layout): the image of +X is column 0.
+  const actual = { x: matrix[0], y: matrix[1], z: matrix[2] };
   const expectedAngle = -(gstime(nowDate) - gmstAtBake);
   assert.ok(Math.abs(actual.x - Math.cos(expectedAngle)) < 1e-12);
   assert.ok(Math.abs(actual.y - Math.sin(expectedAngle)) < 1e-12);
@@ -491,9 +499,9 @@ test('preserves globe scale for roster hover previews', () => {
 });
 
 test('assigns distinct stable colors to mission operators', () => {
-  assert.equal(missionMarkerColor({ provider: 'NASA', name: 'Science Flight' }).toCssColorString(), 'rgb(255,159,67)');
-  assert.equal(missionMarkerColor({ provider: 'SpaceX', name: 'Starlink Group' }).toCssColorString(), 'rgb(76,201,240)');
-  assert.equal(missionMarkerColor({ provider: 'Private Launch Co.', name: 'Test Flight' }).toCssColorString(), 'rgb(192,132,252)');
+  assert.equal(missionMarkerColor({ provider: 'NASA', name: 'Science Flight' }), '#ff9f43');
+  assert.equal(missionMarkerColor({ provider: 'SpaceX', name: 'Starlink Group' }), '#4cc9f0');
+  assert.equal(missionMarkerColor({ provider: 'Private Launch Co.', name: 'Test Flight' }), '#c084fc');
 });
 
 test('normalizes recent launches and preserves supplied trajectory/orbit data', () => {
@@ -608,11 +616,11 @@ test('accepts an array payload for proxy and fixture flexibility', () => {
 });
 
 test('builds a surface-safe ascent that meets the orbit without a phase jump', () => {
-  const launch = Cesium.Cartesian3.fromDegrees(-120.61, 34.63, 0);
+  const launch = cartesianFromDegrees(-120.61, 34.63, 0);
   const orbit = Array.from({ length: 37 }, (_, index) => {
     const longitude = -180 + index * 10;
-    const latitude = Math.sin(Cesium.Math.toRadians(longitude)) * 35;
-    return Cesium.Cartesian3.fromDegrees(longitude, latitude, 550000);
+    const latitude = Math.sin(toRadians(longitude)) * 35;
+    return cartesianFromDegrees(longitude, latitude, 550000);
   });
   const paths = buildMissionPaths(launch, [], orbit);
 
@@ -620,47 +628,40 @@ test('builds a surface-safe ascent that meets the orbit without a phase jump', (
   assert.equal(paths.ascentPath.at(-1), orbit[paths.insertionIndex]);
   assert.equal(paths.animatedOrbitPath[0], orbit[paths.insertionIndex]);
   assert.equal(paths.animatedOrbitPath.at(-1), paths.animatedOrbitPath[0]);
-  const launchCartographic = Cesium.Cartographic.fromCartesian(paths.ascentPath[0]);
-  const verticalCartographic = Cesium.Cartographic.fromCartesian(paths.ascentPath[12]);
-  const earlyHorizontalDistance = new Cesium.EllipsoidGeodesic(
-    launchCartographic,
-    verticalCartographic,
-  ).surfaceDistance;
+  const launchCartographic = geodeticFromCartesian(paths.ascentPath[0]);
+  const verticalCartographic = geodeticFromCartesian(paths.ascentPath[12]);
+  const earlyHorizontalDistance = surfaceDistance(launchCartographic, verticalCartographic);
   assert.ok(earlyHorizontalDistance < 2000);
   assert.ok(verticalCartographic.height > launchCartographic.height + 10000);
   const maximumTurn = Math.max(...paths.ascentPath.slice(1, -13).map((position, index) => {
-    const incoming = Cesium.Cartesian3.normalize(
-      Cesium.Cartesian3.subtract(position, paths.ascentPath[index], new Cesium.Cartesian3()),
-      new Cesium.Cartesian3(),
+    const incoming = normalize(
+      sub(position, paths.ascentPath[index]),
     );
-    const outgoing = Cesium.Cartesian3.normalize(
-      Cesium.Cartesian3.subtract(paths.ascentPath[index + 2], position, new Cesium.Cartesian3()),
-      new Cesium.Cartesian3(),
+    const outgoing = normalize(
+      sub(paths.ascentPath[index + 2], position),
     );
-    return Cesium.Math.acosClamped(Cesium.Cartesian3.dot(incoming, outgoing));
+    return acosClamped(dot(incoming, outgoing));
   }));
-  assert.ok(Cesium.Math.toDegrees(maximumTurn) < 5);
-  const ascentTangent = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.subtract(paths.ascentPath.at(-1), paths.ascentPath.at(-2), new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
+  assert.ok(toDegrees(maximumTurn) < 5);
+  const ascentTangent = normalize(
+    sub(paths.ascentPath.at(-1), paths.ascentPath.at(-2)),
   );
-  const orbitTangent = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.subtract(paths.animatedOrbitPath[1], paths.animatedOrbitPath[0], new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
+  const orbitTangent = normalize(
+    sub(paths.animatedOrbitPath[1], paths.animatedOrbitPath[0]),
   );
-  assert.ok(Cesium.Cartesian3.dot(ascentTangent, orbitTangent) > 0.7);
+  assert.ok(dot(ascentTangent, orbitTangent) > 0.7);
   for (const position of paths.ascentPath) {
-    assert.ok(Cesium.Cartographic.fromCartesian(position).height >= -1);
+    assert.ok(geodeticFromCartesian(position).height >= -1);
   }
 });
 
 test('keeps a tangent-blended inclined ascent outside the globe', () => {
-  const launch = Cesium.Cartesian3.fromDegrees(80, -60, 0);
-  const radius = Cesium.Ellipsoid.WGS84.maximumRadius + 200000;
-  const inclination = Cesium.Math.toRadians(30);
+  const launch = cartesianFromDegrees(80, -60, 0);
+  const radius = WGS84_A + 200000;
+  const inclination = toRadians(30);
   const orbit = Array.from({ length: 97 }, (_, index) => {
-    const angle = (index / 96) * Cesium.Math.TWO_PI;
-    return new Cesium.Cartesian3(
+    const angle = (index / 96) * (2 * Math.PI);
+    return vec(
       radius * Math.cos(angle),
       radius * Math.sin(angle) * Math.cos(inclination),
       radius * Math.sin(angle) * Math.sin(inclination),
@@ -668,7 +669,7 @@ test('keeps a tangent-blended inclined ascent outside the globe', () => {
   });
   const paths = buildMissionPaths(launch, [], orbit);
   const minimumHeight = Math.min(
-    ...paths.ascentPath.map((position) => Cesium.Cartographic.fromCartesian(position).height),
+    ...paths.ascentPath.map((position) => geodeticFromCartesian(position).height),
   );
 
   assert.ok(minimumHeight >= -1);
@@ -676,7 +677,7 @@ test('keeps a tangent-blended inclined ascent outside the globe', () => {
 });
 
 test('uses a propagated insertion reference instead of the radial nearest orbit point', () => {
-  const launch = Cesium.Cartesian3.fromDegrees(-80.6, 28.5, 0);
+  const launch = cartesianFromDegrees(-80.6, 28.5, 0);
   const orbit = approximateOrbitPath({
     lat: 28.5,
     lon: -80.6,
@@ -686,15 +687,13 @@ test('uses a propagated insertion reference instead of the radial nearest orbit 
   const paths = buildMissionPaths(launch, [], orbit, orbit[targetIndex]);
   assert.equal(paths.insertionIndex, targetIndex);
   assert.equal(paths.ascentPath.at(-1), orbit[targetIndex]);
-  const finalAscent = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.subtract(paths.ascentPath.at(-1), paths.ascentPath.at(-2), new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
+  const finalAscent = normalize(
+    sub(paths.ascentPath.at(-1), paths.ascentPath.at(-2)),
   );
-  const firstOrbit = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.subtract(paths.animatedOrbitPath[1], paths.animatedOrbitPath[0], new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
+  const firstOrbit = normalize(
+    sub(paths.animatedOrbitPath[1], paths.animatedOrbitPath[0]),
   );
-  assert.ok(Cesium.Cartesian3.dot(finalAscent, firstOrbit) > 0.7);
+  assert.ok(dot(finalAscent, firstOrbit) > 0.7);
 });
 
 test('estimated mission orbit is a smooth planar ring', () => {
@@ -703,18 +702,17 @@ test('estimated mission orbit is a smooth planar ring', () => {
     lon: -120.61,
     orbit: { name: 'Polar Orbit' },
   });
-  const normal = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.cross(orbit[0], orbit[24], new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
+  const normal = normalize(
+    cross(orbit[0], orbit[24]),
   );
   const maximumPlaneResidual = Math.max(...orbit.map((position) => Math.abs(
-    Cesium.Cartesian3.dot(
+    dot(
       normal,
-      Cesium.Cartesian3.normalize(position, new Cesium.Cartesian3()),
+      normalize(position),
     ),
   )));
   assert.ok(maximumPlaneResidual < 1e-12);
-  assert.ok(Cesium.Cartesian3.distance(orbit[0], orbit.at(-1)) < 1e-6);
+  assert.ok(distance(orbit[0], orbit.at(-1)) < 1e-6);
 });
 
 test('projects a west-coast ascent forward into orbit without reversing course', () => {
@@ -723,27 +721,25 @@ test('projects a west-coast ascent forward into orbit without reversing course',
     lon: -120.61,
     orbit: { name: 'Low Earth Orbit' },
   };
-  const launch = Cesium.Cartesian3.fromDegrees(launchInfo.lon, launchInfo.lat, 0);
+  const launch = cartesianFromDegrees(launchInfo.lon, launchInfo.lat, 0);
   const orbit = approximateOrbitPath(launchInfo);
-  const firstDownrange = Cesium.Cartographic.fromCartesian(orbit[1]);
-  assert.ok(Cesium.Math.toDegrees(firstDownrange.latitude) < launchInfo.lat);
-  assert.ok(Cesium.Math.toDegrees(firstDownrange.longitude) < launchInfo.lon);
+  const firstDownrange = geodeticFromCartesian(orbit[1]);
+  assert.ok(firstDownrange.lat < launchInfo.lat);
+  assert.ok(firstDownrange.lon < launchInfo.lon);
 
   const paths = buildMissionPaths(launch, [], orbit, orbit[10]);
   const minimumDirectionContinuity = Math.min(
     ...paths.ascentPath.slice(1, -1).map((position, index) => {
-      const incoming = Cesium.Cartesian3.normalize(
-        Cesium.Cartesian3.subtract(position, paths.ascentPath[index], new Cesium.Cartesian3()),
-        new Cesium.Cartesian3(),
+      const incoming = normalize(
+        sub(position, paths.ascentPath[index]),
       );
-      const outgoing = Cesium.Cartesian3.normalize(
-        Cesium.Cartesian3.subtract(paths.ascentPath[index + 2], position, new Cesium.Cartesian3()),
-        new Cesium.Cartesian3(),
+      const outgoing = normalize(
+        sub(paths.ascentPath[index + 2], position),
       );
-      return Cesium.Cartesian3.dot(incoming, outgoing);
+      return dot(incoming, outgoing);
     }),
   );
-  assert.ok(minimumDirectionContinuity > Math.cos(Cesium.Math.toRadians(5)));
+  assert.ok(minimumDirectionContinuity > Math.cos(toRadians(5)));
 });
 
 test('formats the launch epoch for ascent and orbit replay labels', () => {
@@ -766,7 +762,7 @@ test('reduces generic launch-site names to their identifying suffix', () => {
 });
 
 test('mission overlay factories preserve all four source-formatted label roles and lane policy', () => {
-  const position = Cesium.Cartesian3.fromDegrees(-80.604, 28.608);
+  const position = cartesianFromDegrees(-80.604, 28.608);
   const launch = {
     id: 'mission-1',
     name: 'Falcon 9 | Gauntlet Payload',
@@ -831,8 +827,8 @@ test('parses signed Launch Library timeline durations', () => {
 
 test('derives replay ascent duration from mission timing instead of a fixed constant', () => {
   const path = [
-    Cesium.Cartesian3.fromDegrees(-120, 34, 0),
-    Cesium.Cartesian3.fromDegrees(-116, 34, 200000),
+    cartesianFromDegrees(-120, 34, 0),
+    cartesianFromDegrees(-116, 34, 200000),
   ];
   const fast = replayAscentDurationSeconds({
     timeline: [{ name: 'SECO-1', offsetSeconds: 360 }],
@@ -865,25 +861,33 @@ test('finds a newly launched payload in the active TLE fallback catalog', () => 
   assert.equal(typeof track?.positionAt, 'function');
 });
 
-test('real mission build, select, refresh, deselect, disable, and destroy paths publish no native labels', async () => {
+/** Motor MapLibre falso: registra setData por fonte, voos e o alvo seguido. */
+function fakeEngine() {
+  const data = new Map();
+  const calls = [];
+  const engine = {
+    data,
+    calls,
+    trackedTarget: null,
+    map: {
+      getSource: (id) => ({ setData: (fcData) => data.set(id, fcData) }),
+    },
+    getCameraView: () => ({ lat: 28.6, lon: -80.6, alt: 18_000_000, heading: 0, pitch: -90, zoom: 1, targetLat: 28.6, targetLon: -80.6 }),
+    cameraLookingAt: (target, opts) => ({ ...target, ...opts }),
+    flyToCamera: (view, opts) => calls.push(['flyToCamera', view, opts]),
+    flyToTarget: (target, opts) => calls.push(['flyToTarget', target, opts]),
+    setCameraView: (view) => calls.push(['setCameraView', view]),
+    cancelFlight: () => calls.push(['cancelFlight']),
+    track: (target) => { engine.trackedTarget = target; calls.push(['track', target]); },
+    project: () => ({ x: 100, y: 100, visible: true }),
+    on: () => () => {},
+  };
+  return engine;
+}
+
+test('real mission build, select, replay, refresh, deselect, disable and destroy paths draw the expected MapLibre features', async () => {
   const realDocument = globalThis.document;
   const realFetch = globalThis.fetch;
-  const realHtmlCanvasElement = globalThis.HTMLCanvasElement;
-  const realHtmlImageElement = globalThis.HTMLImageElement;
-  const realImageBitmap = globalThis.ImageBitmap;
-  const realOffscreenCanvas = globalThis.OffscreenCanvas;
-  const listeners = new Map();
-  const context = {
-    strokeStyle: '',
-    lineWidth: 1,
-    lineCap: '',
-    shadowColor: '',
-    shadowBlur: 0,
-    beginPath() {},
-    moveTo() {},
-    lineTo() {},
-    stroke() {},
-  };
   class FakeElement {
     constructor(tagName = 'div') {
       this.tagName = tagName.toUpperCase();
@@ -893,15 +897,7 @@ test('real mission build, select, refresh, deselect, disable, and destroy paths 
       this.classList = { add() {}, remove() {}, toggle() {} };
       this.dataset = {};
       this.hidden = false;
-      this.clientWidth = 1600;
-      this.clientHeight = 900;
-      this.width = 1600;
-      this.height = 900;
-      this.disableRootEvents = false;
     }
-
-    addEventListener(type, handler) { listeners.set(`${this.tagName}:${type}`, handler); }
-    removeEventListener(type) { listeners.delete(`${this.tagName}:${type}`); }
     appendChild(child) { child.parentElement = this; this.children.push(child); return child; }
     remove() {
       if (this.parentElement) {
@@ -910,54 +906,13 @@ test('real mission build, select, refresh, deselect, disable, and destroy paths 
       this.parentElement = null;
     }
     setAttribute() {}
-    getBoundingClientRect() { return { left: 0, top: 0, width: 1600, height: 900 }; }
-    getContext() { return this.tagName === 'CANVAS' ? context : null; }
+    querySelector() { return { textContent: '' }; }
   }
   const body = new FakeElement('body');
-  const document = {
+  globalThis.document = {
     body,
-    onmousewheel: undefined,
     createElement: (tagName) => new FakeElement(tagName),
     getElementById: () => null,
-    addEventListener(type, handler) { listeners.set(`document:${type}`, handler); },
-    removeEventListener(type) { listeners.delete(`document:${type}`); },
-  };
-  const canvas = new FakeElement('canvas');
-  const dataSources = [];
-  const camera = {
-    positionCartographic: null,
-    positionWC: Cesium.Cartesian3.fromDegrees(-80.604, 28.608, 18_000_000),
-    cancelFlight() {},
-    lookAtTransform() {},
-  };
-  const scene = {
-    canvas,
-    camera,
-    frameState: { frameNumber: 1 },
-    postRender: new Cesium.Event(),
-    preRender: new Cesium.Event(),
-    preUpdate: new Cesium.Event(),
-    primitives: { add: (primitive) => primitive, remove: () => true },
-    drillPick: () => [],
-  };
-  const viewer = {
-    camera,
-    scene,
-    dataSources: {
-      add(dataSource) { dataSources.push(dataSource); return dataSource; },
-      remove(dataSource) {
-        const index = dataSources.indexOf(dataSource);
-        if (index >= 0) dataSources.splice(index, 1);
-        return index >= 0;
-      },
-    },
-    selectedEntity: undefined,
-  };
-  const hostCalls = [];
-  const host = {
-    setEntries: (...args) => hostCalls.push(['entries', ...args]),
-    setVisible: (...args) => hostCalls.push(['visible', ...args]),
-    clearSource: (...args) => hostCalls.push(['clear', ...args]),
   };
   const launchTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   let launchName = 'Falcon 9 | Gauntlet Payload';
@@ -988,187 +943,95 @@ test('real mission build, select, refresh, deselect, disable, and destroy paths 
       orbit: { name: 'Low Earth Orbit' },
     },
   }] });
-  globalThis.document = document;
-  globalThis.HTMLCanvasElement = FakeElement;
-  globalThis.HTMLImageElement = class {};
-  globalThis.ImageBitmap = class {};
-  globalThis.OffscreenCanvas = class {};
   globalThis.fetch = async (url) => {
-    if (url === '/api/celestrak/active') {
-      return { ok: true, text: async () => '' };
-    }
+    if (url === '/api/celestrak/active') return { ok: true, text: async () => '' };
     assert.equal(url, '/api/launches');
     return { ok: true, json: async () => launchPayload() };
   };
-  _setRocketMissionOverlayHostForTest(host);
+  const engine = fakeEngine();
+  const warn = console.warn;
+  console.warn = () => {};
   let initialized = false;
   try {
-    rocketLaunchesLayer.init(viewer);
+    rocketLaunchesLayer.init(engine);
     initialized = true;
     await rocketLaunchesLayer.enable();
+    assert.ok(engine.calls.some(([name, view]) => name === 'flyToCamera' && view.pitch === -90),
+      'enabling frames the whole globe from above');
     await rocketLaunchesLayer.update();
 
-    const entities = dataSources[0].entities.values;
-    assert.ok(entities.length >= 7, 'runtime guard requires the populated mission build path');
-    assert.ok(entities.every((entity) => entity.label === undefined));
-    const ambientPublication = hostCalls.findLast(([type, sourceId]) => (
-      type === 'entries' && sourceId === ROCKET_MISSION_AMBIENT_OVERLAY_SOURCE_ID
-    ));
-    assert.ok(ambientPublication);
-    assert.equal(ambientPublication[2].length, 1);
-    assert.equal(ambientPublication[2][0].title, 'FALCON 9');
-    assert.deepEqual(ambientPublication[3], {
-      cohortLimit: ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT,
-      collisionCapacity: ROCKET_MISSION_AMBIENT_OVERLAY_COLLISION_CAPACITY,
-      moving: false,
-    });
-    const launchEntity = dataSources[0].entities.getById('rocket-launch:mission-runtime');
-    assert.deepEqual(
-      ambientPublication[2][0].position,
-      launchEntity.position.getValue(Cesium.JulianDate.now()),
-      'ambient host marker must reuse the entity anchor Cartesian',
-    );
-    const frameTime = Cesium.JulianDate.now();
-    scene.preRender.raiseEvent(scene, frameTime);
-    assert.equal(launchEntity.point.show.getValue(frameTime), true);
-    camera.positionWC = Cesium.Cartesian3.fromDegrees(99.396, -28.608, 18_000_000);
-    scene.preRender.raiseEvent(scene, frameTime);
-    assert.equal(
-      launchEntity.point.show.getValue(frameTime),
-      false,
-      'pre-render horizon pass must hide a rear-side depth-free mission dot before draw and pick',
-    );
-    camera.positionWC = Cesium.Cartesian3.fromDegrees(-80.604, 28.608, 18_000_000);
-    scene.preRender.raiseEvent(scene, frameTime);
-    assert.equal(
-      launchEntity.point.show.getValue(frameTime),
-      true,
-      'mission dot must return when its surface anchor faces the camera again',
-    );
+    // Overview: one launch marker, labelled, no mission paths (the estimated
+    // orbit belongs to the selected view only).
+    let features = _missionFeaturesForTest();
+    assert.equal(features.sites.features.length, 1);
+    const site = features.sites.features[0];
+    assert.deepEqual(site.geometry.coordinates, [-80.604, 28.608]);
+    assert.equal(site.properties.label, 'FALCON 9');
+    assert.equal(site.properties.showLabel, 1);
+    assert.equal(site.properties.launchId, 'mission-runtime');
+    assert.equal(features.paths.features.length, 0);
+    assert.equal(engine.data.get('dg-rocket-sites'), features.sites, 'the drawn collection reaches the MapLibre source');
 
     _setSelectedRocketMissionForTest('mission-runtime');
-    const selectedPublication = hostCalls.findLast(([type, sourceId]) => (
-      type === 'entries' && sourceId === ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_ID
-    ));
-    assert.ok(selectedPublication);
-    assert.deepEqual(selectedPublication[3], ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_OPTIONS);
-    assert.deepEqual(selectedPublication[2].map(({ title }) => title), [
-      'FALCON 9',
-      'STAGE RE-ENTRY',
-      'EST. ORBIT POSITION',
-      'PROJECTED ORBIT',
-    ]);
-    assert.deepEqual(selectedPublication[2][0].details, ['LAUNCH SITE · 39A']);
-    assert.match(selectedPublication[2][2].details[0], /^\d{4}-\d{2}-\d{2}$/);
-    assert.match(selectedPublication[2][2].details[1], /^\d{2}:\d{2}:\d{2} UTC$/);
-    assert.ok(selectedPublication[2].every((entry) => (
-      entry.selected === true
-      && entry.protected === true
-      && entry.paintLane === 'selected'
-      && entry.edgeFade === 'keyhole'
-    )));
-    const satelliteEntity = dataSources[0].entities.getById('rocket-satellite:mission-runtime');
-    const satellitePosition = satelliteEntity.position.getValue(Cesium.JulianDate.now());
-    assert.equal(
-      selectedPublication[2][2].position(),
-      satellitePosition,
-      'payload host getter must return the exact per-frame live-position cache',
-    );
-
-    // Jitter regression net: live-state propagation advances at most once per
-    // frameNumber, and the host getter is a pure read that never advances it.
-    // Without both halves, the host label and the native dot can propagate to
-    // different wall-clock instants inside one frame — the documented
-    // label-separation jitter class.
-    const payloadEntry = selectedPublication[2][2];
-    const realDateNow = Date.now;
-    try {
-      let nowMs = realDateNow();
-      Date.now = () => nowMs;
-      scene.frameState.frameNumber = 41;
-      const frameA = Cesium.Cartesian3.clone(
-        satelliteEntity.position.getValue(Cesium.JulianDate.now()),
-      );
-      nowMs += 30_000;
-      assert.deepEqual(
-        Cesium.Cartesian3.clone(satelliteEntity.position.getValue(Cesium.JulianDate.now())),
-        frameA,
-        'a second native read in the same frame must not re-propagate',
-      );
-      nowMs += 30_000;
-      scene.frameState.frameNumber = 42;
-      assert.deepEqual(
-        Cesium.Cartesian3.clone(payloadEntry.position()),
-        frameA,
-        'host getter must not advance propagation, even on a new frame',
-      );
-      const frameB = Cesium.Cartesian3.clone(
-        satelliteEntity.position.getValue(Cesium.JulianDate.now()),
-      );
-      assert.notDeepEqual(frameB, frameA, 'native read on a new frame propagates (non-vacuous)');
-      assert.deepEqual(
-        Cesium.Cartesian3.clone(payloadEntry.position()),
-        frameB,
-        'host getter reads the advanced cache after native propagation',
-      );
-    } finally {
-      Date.now = realDateNow;
-      scene.frameState.frameNumber = 1;
+    features = _missionFeaturesForTest();
+    assert.equal(features.sites.features[0].properties.label, 'FALCON 9\nLAUNCH SITE · 39A');
+    const kinds = features.paths.features.map((f) => f.properties.kind).sort();
+    assert.deepEqual(kinds, ['orbit-est', 'recovery', 'reentry', 'transfer']);
+    for (const line of features.paths.features) {
+      assert.ok(line.geometry.coordinates.length > 1);
+      for (const [lon, lat] of line.geometry.coordinates) {
+        assert.ok(Number.isFinite(lon) && Number.isFinite(lat) && Math.abs(lat) <= 90);
+      }
+      // Unwrapped longitudes: no ±360 jumps between consecutive vertices.
+      for (let i = 1; i < line.geometry.coordinates.length; i++) {
+        assert.ok(Math.abs(line.geometry.coordinates[i][0] - line.geometry.coordinates[i - 1][0]) < 180);
+      }
     }
-    const reentryEntity = dataSources[0].entities.getById('rocket-reentry:mission-runtime:0');
-    assert.deepEqual(
-      selectedPublication[2][1].position,
-      reentryEntity.polyline.positions.getValue(Cesium.JulianDate.now())[0],
-      're-entry host label must reuse the recovery-path interface Cartesian',
-    );
-    const transferEntity = dataSources[0].entities.getById('rocket-transfer:mission-runtime');
-    assert.deepEqual(
-      selectedPublication[2][3].position,
-      transferEntity.polyline.positions.getValue(Cesium.JulianDate.now()).at(-1),
-      'orbit host label must reuse the insertion Cartesian',
-    );
+    const transfer = features.paths.features.find((f) => f.properties.kind === 'transfer');
+    const [padLon, padLat] = transfer.geometry.coordinates[0];
+    assert.ok(Math.abs(padLon + 80.604) < 1e-6 && Math.abs(padLat - 28.608) < 1e-6, 'the ascent starts at the pad');
+    const labels = features.marks.features.filter((f) => f.properties.label).map((f) => f.properties.label.split('\n')[0]);
+    assert.deepEqual(labels, ['STAGE RE-ENTRY', 'EST. ORBIT POSITION', 'PROJECTED ORBIT']);
+    const payload = features.marks.features.find((f) => f.properties.kind === 'satellite');
+    assert.match(payload.properties.label.split('\n')[1], /^\d{4}-\d{2}-\d{2}$/);
+    assert.match(payload.properties.label.split('\n')[2], /^\d{2}:\d{2}:\d{2} UTC$/);
+    assert.ok(payload.properties.altKm > 300, 'the estimated payload sits on its LEO ring');
+    assert.ok(features.marks.features.some((f) => f.properties.kind === 'recovery-end'));
+
+    // Replay: releases other follows, flies to the pad, owns the camera.
+    engine.calls.length = 0;
+    assert.equal(_startMissionReplayForTest('mission-runtime'), true);
+    assert.equal(_replayActiveLaunchForTest(), 'mission-runtime');
+    assert.ok(engine.calls.some(([name, target]) => name === 'track' && target === null), 'replay releases the follow camera');
+    const replayFlight = engine.calls.find(([name]) => name === 'flyToTarget');
+    assert.ok(replayFlight, 'replay flies to the pad');
+    assert.ok(Math.abs(replayFlight[1].lat - 28.608) < 1e-6);
+    assert.equal(replayFlight[2].rangeM, 3500);
+    assert.equal(_missionFeaturesForTest().sites.features[0].properties.showLabel, 0,
+      'the replay callout replaces the site label');
 
     launchName = 'Mission Refresh | Gauntlet Payload';
     await rocketLaunchesLayer.update();
-    assert.ok(dataSources[0].entities.values.every((entity) => entity.label === undefined));
-    const refreshPublication = hostCalls.findLast(([type, sourceId]) => (
-      type === 'entries' && sourceId === ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_ID
-    ));
-    assert.equal(refreshPublication[2][0].title, 'MISSION REFRESH');
-    assert.deepEqual(refreshPublication[2][0].details, ['LAUNCH SITE · 39A']);
+    assert.equal(_replayActiveLaunchForTest(), null, 'a data refresh stops the replay');
+    assert.equal(_missionFeaturesForTest().sites.features[0].properties.label, 'MISSION REFRESH\nLAUNCH SITE · 39A');
 
     _setSelectedRocketMissionForTest(null);
-    const deselectedPublication = hostCalls.findLast(([type, sourceId]) => (
-      type === 'entries' && sourceId === ROCKET_MISSION_AMBIENT_OVERLAY_SOURCE_ID
-    ));
-    assert.equal(deselectedPublication[2][0].title, 'MISSION REFRESH');
-    assert.equal(deselectedPublication[2][0].protected, false);
+    features = _missionFeaturesForTest();
+    assert.equal(features.sites.features[0].properties.label, 'MISSION REFRESH');
+    assert.equal(features.paths.features.length, 0);
+    assert.equal(features.marks.features.length, 0);
 
     await rocketLaunchesLayer.disable();
-    assert.deepEqual(hostCalls.slice(-4), [
-      ['clear', ROCKET_MISSION_AMBIENT_OVERLAY_SOURCE_ID],
-      ['visible', ROCKET_MISSION_AMBIENT_OVERLAY_SOURCE_ID, false],
-      ['clear', ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_ID],
-      ['visible', ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_ID, false],
-    ]);
-    await rocketLaunchesLayer.destroy(viewer);
+    features = _missionFeaturesForTest();
+    assert.equal(features.sites.features.length, 0, 'disable clears the markers');
+    assert.equal(engine.data.get('dg-rocket-sites').features.length, 0);
+    await rocketLaunchesLayer.destroy();
     initialized = false;
-    assert.equal(dataSources.length, 0);
-    assert.deepEqual(hostCalls.slice(-4), [
-      ['clear', ROCKET_MISSION_AMBIENT_OVERLAY_SOURCE_ID],
-      ['visible', ROCKET_MISSION_AMBIENT_OVERLAY_SOURCE_ID, false],
-      ['clear', ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_ID],
-      ['visible', ROCKET_MISSION_SELECTED_OVERLAY_SOURCE_ID, false],
-    ]);
   } finally {
-    if (initialized) await rocketLaunchesLayer.destroy(viewer);
-    _setRocketMissionOverlayHostForTest();
+    if (initialized) await rocketLaunchesLayer.destroy();
+    console.warn = warn;
     globalThis.fetch = realFetch;
     globalThis.document = realDocument;
-    globalThis.HTMLCanvasElement = realHtmlCanvasElement;
-    globalThis.HTMLImageElement = realHtmlImageElement;
-    globalThis.ImageBitmap = realImageBitmap;
-    globalThis.OffscreenCanvas = realOffscreenCanvas;
   }
 });
 
@@ -1252,4 +1115,68 @@ test('disable reports a semantic failure while restoring the satellites dependen
     () => rocketLaunchesLayer.disable(),
     /could not restore the satellites layer/,
   );
+});
+
+test('a mission matched in the active TLE catalog draws its live, GMST-aligned orbit', async () => {
+  const realDocument = globalThis.document;
+  const realFetch = globalThis.fetch;
+  globalThis.document = {
+    body: { appendChild() {} },
+    createElement: () => ({
+      style: { setProperty() {} },
+      classList: { add() {}, remove() {}, toggle() {} },
+      dataset: {},
+      setAttribute() {},
+      remove() {},
+      querySelector: () => ({ textContent: '' }),
+    }),
+    getElementById: () => null,
+  };
+  const launchTime = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const shortYear = String(new Date(launchTime).getUTCFullYear()).slice(2);
+  const activeTle = [
+    'GAUNTLET-1',
+    `1 69728U ${shortYear}148A   26208.65166678  .00000015  00000+0  00000+0 0  9990`,
+    '2 69728  53.0000 264.9826 0001797 240.4588 273.9506 15.20000000   440',
+  ].join('\n');
+  globalThis.fetch = async (url) => {
+    if (url === '/api/celestrak/active') return { ok: true, text: async () => activeTle };
+    return {
+      ok: true,
+      json: async () => ({ results: [{
+        id: 'live-mission',
+        name: 'Falcon 9 | Gauntlet-1',
+        net: launchTime,
+        status: { name: 'Launch Successful' },
+        pad: { latitude: '28.608', longitude: '-80.604', name: 'SLC-40' },
+        mission: { name: 'Gauntlet-1', orbit: { name: 'Low Earth Orbit' } },
+      }] }),
+    };
+  };
+  const engine = fakeEngine();
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    rocketLaunchesLayer.init(engine);
+    await rocketLaunchesLayer.enable();
+    await rocketLaunchesLayer.update();
+    // The active catalog arrives asynchronously; the next rebuild uses it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await rocketLaunchesLayer.update();
+    assert.equal(rocketLaunchesLayer.getStats().orbitMatches, 1);
+    const overview = _missionFeaturesForTest().paths.features;
+    assert.deepEqual(overview.map((f) => f.properties.kind), ['orbit'],
+      'a real satellite ring shows in the overview, like the Cesium orbit primitive');
+    _setSelectedRocketMissionForTest('live-mission');
+    const payload = _missionFeaturesForTest().marks.features.find((f) => f.properties.kind === 'satellite');
+    assert.equal(payload.properties.label.split('\n')[0], 'GAUNTLET-1');
+    assert.equal(payload.properties.estimated, 0);
+    assert.ok(payload.properties.altKm > 300 && payload.properties.altKm < 700);
+    await rocketLaunchesLayer.disable();
+    await rocketLaunchesLayer.destroy();
+  } finally {
+    console.warn = warn;
+    globalThis.fetch = realFetch;
+    globalThis.document = realDocument;
+  }
 });
