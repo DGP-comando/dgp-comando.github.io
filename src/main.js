@@ -301,4 +301,7 @@ async function init() {
   }
 }
 
-requireLogin().then(init);
+// `?semlogin` só no servidor de desenvolvimento, para QA de navegador sem
+// credencial (as camadas do Supabase ficam vazias; as estáticas carregam).
+const skipLogin = import.meta.env.DEV && new URLSearchParams(location.search).has('semlogin');
+(skipLogin ? Promise.resolve() : requireLogin()).then(init);
