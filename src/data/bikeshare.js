@@ -1,24 +1,27 @@
 /**
  * @module bikeshare
- * @description GBFS bikeshare station data overlay with real-time availability.
+ * @description GBFS bikeshare station data overlay with real-time availability
+ * — MapLibre version (migração do CesiumJS).
  *
- * Fetches station information and status from GBFS-compliant feeds for major
- * US bikeshare systems, renders stations as color-coded point primitives on the
- * Cesium globe, and provides click-to-inspect and HUD detection integration.
+ * Fetches station information and status from GBFS-compliant feeds (via the
+ * dev proxy `/api/gbfs/*`), renders stations as color-coded circles sized by
+ * capacity, and provides click-to-inspect and HUD detection integration.
+ * Stations load on demand by camera proximity and altitude gating, with
+ * periodic status polling to keep availability colors current.
  *
- * Stations are loaded on-demand based on camera proximity and altitude gating,
- * with periodic status polling to keep availability colors current.
+ * No MapLibre (o que mudou):
+ *  - Estações: fonte GeoJSON `dg-bikeshare` + `circle` (antes
+ *    PointPrimitiveCollection com escala/translucidez por distância).
+ *  - Seleção: clique numa estação a destaca (anel ciano) e publica o cartão
+ *    do selecionado no host de cartões (mapCardHost.js, marcador DOM) — antes
+ *    uma Entity Cesium + worldOverlay. Clique no vazio ou Esc limpa.
+ *  - Posições públicas (`record.position`, detecção, cartão) são
+ *    `{lon, lat, height}` em vez de Cesium.Cartesian3.
  */
 
-import * as Cesium from 'cesium';
-import { governorRequestRender } from '../renderGovernor.js';
-import { registerSpriteCollection, restoreSpriteOrder } from './spriteOrder.js';
-import { registerPickOwner, unregisterPickOwner } from './pickRegistry.js';
-import {
-  clearOverlaySource,
-  setOverlayEntries,
-  setOverlaySourceVisible,
-} from '../overlays/worldOverlay.js';
+import { defineLayer, EMPTY_FC, esc, row } from '../maplibre/kit.js';
+import { getActiveLayerHost } from '../maplibre/layerHost.js';
+import { cameraAltitudeM, getMapCardHost } from './mapCardHost.js';
 
 export const BIKESHARE_SELECTED_OVERLAY_SOURCE_ID = 'bikeshare-selected';
 export const BIKESHARE_SELECTED_OVERLAY_SOURCE_OPTIONS = Object.freeze({
@@ -27,12 +30,15 @@ export const BIKESHARE_SELECTED_OVERLAY_SOURCE_OPTIONS = Object.freeze({
   moving: false,
 });
 
-const DEFAULT_OVERLAY_HOST = Object.freeze({
-  setEntries: setOverlayEntries,
-  setVisible: setOverlaySourceVisible,
-  clearSource: clearOverlaySource,
+const NOOP_OVERLAY_HOST = Object.freeze({
+  setEntries() {},
+  setVisible() {},
+  clearSource() {},
 });
-let _overlayHost = DEFAULT_OVERLAY_HOST;
+let _overlayHostOverride = null;
+function overlayHost() {
+  return _overlayHostOverride || getMapCardHost(_engine) || NOOP_OVERLAY_HOST;
+}
 
 // --- Activation / display thresholds ---
 /** Altitude (m) at which bikeshare layer becomes eligible for display. */
@@ -49,30 +55,21 @@ const CITY_RANGE_BASE_KM = 100;
 const STATUS_POLL_MS = 60000;
 
 // --- Point rendering constants ---
-/** Minimum rendered point size in pixels. */
 const POINT_SIZE_MIN = 4;
-/** Maximum rendered point size in pixels. */
 const POINT_SIZE_MAX = 12;
-/** Fallback station capacity when real data is unavailable. */
 const DEFAULT_CAPACITY = 15;
-/** Vertical offset (m) above terrain for station points. */
-const POINT_HEIGHT_OFFSET_M = 2.0;
-/** Hard cap on total rendered station points across all cities. */
 const MAX_TOTAL_POINTS = 8000;
 
-// --- Availability color palette ---
-/** Station has >60% bikes available. */
-const COLOR_GREEN = Cesium.Color.fromCssColorString('#00ff88').withAlpha(0.95);
-/** Station has 30-60% bikes available. */
-const COLOR_YELLOW = Cesium.Color.fromCssColorString('#ffaa00').withAlpha(0.94);
-/** Station has <30% bikes available. */
-const COLOR_RED = Cesium.Color.fromCssColorString('#ff4444').withAlpha(0.94);
-/** No status data available for station. */
-const COLOR_NEUTRAL = Cesium.Color.fromCssColorString('#91a4b4').withAlpha(0.62);
-/** Station is offline (not installed, not renting, or not returning). */
-const COLOR_MUTED = Cesium.Color.fromCssColorString('#687581').withAlpha(0.48);
-/** Outline color for all station points. */
-const COLOR_OUTLINE = Cesium.Color.BLACK.withAlpha(0.25);
+// --- Availability color palette (CSS) ---
+const COLOR_GREEN = 'rgba(0,255,136,0.95)';
+const COLOR_YELLOW = 'rgba(255,170,0,0.94)';
+const COLOR_RED = 'rgba(255,68,68,0.94)';
+const COLOR_NEUTRAL = 'rgba(145,164,180,0.62)';
+const COLOR_MUTED = 'rgba(104,117,129,0.48)';
+
+const SRC_STATIONS = 'dg-bikeshare';
+const LYR_STATIONS = 'dg-bikeshare-pt';
+const LYR_SELECTED = 'dg-bikeshare-selected';
 
 /**
  * Build GBFS endpoint URLs for a BCycle-hosted system.
@@ -462,60 +459,37 @@ const GBFS_CITY_REGISTRY = (() => {
 
 /** Lookup map from city id to its normalized registry entry. */
 const CITY_BY_ID = new Map(GBFS_CITY_REGISTRY.map((entry) => [entry.id, entry]));
-
 // ---------------------------------------------------------------------------
 // Module-level mutable state
 // ---------------------------------------------------------------------------
 
-/** @type {Cesium.Viewer|null} Active Cesium viewer instance. */
-let _viewer = null;
-/** @type {Cesium.PointPrimitiveCollection|null} Primitive collection for station dots. */
-let _pointCollection = null;
-/** Whether the bikeshare layer is currently enabled. */
+let _engine = null;
+let _map = null;
 let _enabled = false;
-/** Timer handle for camera-move debounce. */
 let _cameraDebounceTimer = null;
-/** Whether the camera.changed listener is currently attached. */
-let _cameraChangedAttached = false;
-/** Hysteresis flag for altitude-based activation. */
+let _offs = [];
 let _altitudeGateEnabled = false;
-/** Monotonic generation counter; incremented on each proximity check to cancel stale work. */
 let _proximityGeneration = 0;
 
-/** @type {Set<string>} City ids currently considered in-range. */
 let _activeCityIds = new Set();
-/** @type {Map<string, { stationKeys: Set<string> }>} Per-city runtime tracking of rendered station keys. */
 let _cityRuntime = new Map();
 
-/** @type {Map<string, Map<string, Object>>} Cached station information per city (cityId -> stationId -> StationInfo). */
 let _stationInfoCache = new Map();
-/** @type {Map<string, { timestamp: number, statusMap: Map<string, Object> }>} Cached station status per city. */
 let _statusCache = new Map();
-/** @type {Map<string, { promise: Promise, controller: AbortController, generation: number }>} In-flight station info requests. */
 let _inFlightInfo = new Map();
-/** @type {Map<string, { promise: Promise, controller: AbortController, generation: number }>} In-flight station status requests. */
 let _inFlightStatus = new Map();
 
 /** @type {Map<string, Object>} Render records keyed by "cityId:stationId". */
 let _stationRenderMap = new Map();
-/** @type {Cesium.ScreenSpaceEventHandler|null} Click handler for station selection. */
-let _clickHandler = null;
-/** @type {string|null} Key of the currently selected station, or null. */
 let _selectedKey = null;
-/** @type {Cesium.Entity|null} Entity used to display the selected-station point highlight. */
-let _selectedEntity = null;
+let _keyListenerBound = false;
+let _renderQueued = false;
 
-/** Total number of currently rendered station points. */
 let _count = 0;
-/** Timestamp (ms) of the last successful status update. */
 let _lastUpdate = null;
-/** Whether any GBFS fetch is currently in progress. */
 let _loading = false;
-/** Reference count of concurrent loading operations. */
 let _loadingOps = 0;
-/** Most recent error message string, or null. */
 let _error = null;
-/** Whether the MAX_TOTAL_POINTS cap warning has already been logged. */
 let _limitWarned = false;
 
 /**
@@ -578,46 +552,6 @@ function toNonNegativeInteger(value, fallback = null) {
  */
 function stationKey(cityId, stationId) {
   return `${cityId}:${stationId}`;
-}
-
-/**
- * Get the camera's current altitude in meters above the ellipsoid.
- * @param {Cesium.Viewer} viewer - Cesium viewer instance.
- * @returns {number} Altitude in meters, or Infinity if unavailable.
- */
-function getCameraAltitude(viewer) {
-  const carto = viewer?.camera?.positionCartographic;
-  return carto && Number.isFinite(carto.height) ? carto.height : Infinity;
-}
-
-/**
- * Determine the lat/lon the camera is currently looking at.
- * Prefers the center of the computed view rectangle; falls back to the
- * camera's own cartographic position when the rectangle is unavailable.
- * @param {Cesium.Viewer} viewer - Cesium viewer instance.
- * @returns {{ lat: number, lon: number }|null} Center coordinates in degrees, or null.
- */
-function getCameraCenterLatLon(viewer) {
-  // Try view rectangle center first (more accurate for tilted views)
-  const rect = viewer?.camera?.computeViewRectangle?.(viewer.scene.globe?.ellipsoid);
-  if (rect) {
-    const center = Cesium.Rectangle.center(rect);
-    return {
-      lat: Cesium.Math.toDegrees(center.latitude),
-      lon: Cesium.Math.toDegrees(center.longitude),
-    };
-  }
-
-  // Fallback: use the camera's own position
-  const carto = viewer?.camera?.positionCartographic;
-  if (carto) {
-    return {
-      lat: Cesium.Math.toDegrees(carto.latitude),
-      lon: Cesium.Math.toDegrees(carto.longitude),
-    };
-  }
-
-  return null;
 }
 
 /**
@@ -937,7 +871,7 @@ function capacityToPixelSize(capacity) {
  * - <30% bikes available: red.
  * @param {Object|null} status - Station status object.
  * @param {number} capacity - Resolved station capacity.
- * @returns {Cesium.Color} Color to apply to the station point.
+ * @returns {string} CSS color to apply to the station point.
  */
 function statusToColor(status, capacity) {
   if (!status) return COLOR_NEUTRAL;
@@ -983,14 +917,17 @@ function buildSelectionLabel(record) {
   return lines.join('\n');
 }
 
+
 /**
- * Build the protected selected-station entry from source-owned copy.
- * @param {string} key Stable city/station composite key.
- * @param {Object} record Bikeshare render record.
+ * Selected-station card entry for the card host. `record.position` is
+ * `{lon, lat, height}` (was `record.point.position`, a Cesium.Cartesian3; the
+ * old shape is still read for compatibility).
+ * @param {string} key
+ * @param {Object} record
  * @returns {Object|null}
  */
 export function createBikeshareSelectedOverlayEntry(key, record) {
-  const position = record?.point?.position;
+  const position = record?.position ?? record?.point?.position;
   if (!key || !position) return null;
   const [title, ...details] = buildSelectionLabel(record).split('\n');
   return {
@@ -1008,6 +945,7 @@ export function createBikeshareSelectedOverlayEntry(key, record) {
     interactive: false,
     anchorRadiusPx: 9,
     minAnchorGapPx: 11,
+    gapPx: 11,
     verticalOnly: true,
     placement: 'above',
     edgeFade: 'keyhole',
@@ -1016,55 +954,108 @@ export function createBikeshareSelectedOverlayEntry(key, record) {
   };
 }
 
-/**
- * Clear the current station selection.
- * Re-shows the hidden point primitive and removes the highlight entity.
- */
+// ---------------------------------------------------------------------------
+// MapLibre rendering
+// ---------------------------------------------------------------------------
+
+const BIKESHARE_LAYER_DEF = defineLayer({
+  id: 'bikeshare',
+  name: 'Bikeshare',
+  category: 'Contexto',
+  icon: '🚲',
+  source: 'GBFS',
+  sources: { [SRC_STATIONS]: { type: 'geojson', data: EMPTY_FC } },
+  layers: [
+    {
+      id: LYR_STATIONS,
+      type: 'circle',
+      source: SRC_STATIONS,
+      paint: {
+        'circle-color': ['get', 'color'],
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, ['*', ['get', 'size'], 0.3], 15, ['*', ['get', 'size'], 0.75]],
+        'circle-stroke-color': 'rgba(0,0,0,0.25)',
+        'circle-stroke-width': 1,
+      },
+    },
+    {
+      id: LYR_SELECTED,
+      type: 'circle',
+      source: SRC_STATIONS,
+      filter: ['==', ['get', 'key'], ''],
+      paint: {
+        'circle-color': '#00ffff',
+        'circle-radius': 7,
+        'circle-stroke-color': '#000000',
+        'circle-stroke-width': 2,
+      },
+    },
+  ],
+  interactive: [LYR_STATIONS, LYR_SELECTED],
+  tooltip: (props) => {
+    const record = _stationRenderMap.get(props.key);
+    if (!record) return '';
+    const bikes = Number.isFinite(record.bikesAvailable) ? record.bikesAvailable : '?';
+    const docks = Number.isFinite(record.docksAvailable) ? record.docksAvailable : '?';
+    return `<b>${esc(record.stationName || `Station ${record.stationId}`)}</b>`
+      + `${row('Bicicletas', bikes)}${row('Vagas', docks)}${row('Capacidade', record.capacity)}`;
+  },
+  click: (props) => {
+    if (props?.key && _stationRenderMap.has(props.key)) {
+      if (props.key !== _selectedKey) _selectStation(props.key);
+    }
+  },
+});
+
+function stationFeatures() {
+  const features = [];
+  for (const record of _stationRenderMap.values()) {
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [record.position.lon, record.position.lat] },
+      properties: { key: record.key, color: record.color, size: record.pixelSize },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+/** Coalesce source rewrites to one per frame (fetches settle in bursts). */
+function scheduleRender() {
+  if (_renderQueued) return;
+  _renderQueued = true;
+  const run = () => {
+    _renderQueued = false;
+    _map?.getSource(SRC_STATIONS)?.setData(_enabled ? stationFeatures() : EMPTY_FC);
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else run();
+}
+
+function setSelectedFilter() {
+  if (_map?.getLayer(LYR_SELECTED)) {
+    _map.setFilter(LYR_SELECTED, ['==', ['get', 'key'], _selectedKey || '']);
+  }
+}
+
 function _clearSelection() {
   if (_selectedKey) {
     const record = _stationRenderMap.get(_selectedKey);
-    if (record?.point) {
-      record.point.show = true;
-    }
+    if (record?.point) record.point.show = true;
   }
-
-  if (_selectedEntity && _viewer) {
-    _viewer.entities.remove(_selectedEntity);
-  }
-
   _selectedKey = null;
-  _selectedEntity = null;
-  _overlayHost.clearSource(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID);
+  setSelectedFilter();
+  overlayHost().clearSource(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID);
 }
 
-/**
- * Select a station by key: hides the original point primitive and adds a
- * highlighted cyan entity plus a protected shared-host availability card.
- * @param {string} key - Composite "cityId:stationId" key.
- */
 function _selectStation(key) {
   _clearSelection();
-
   const record = _stationRenderMap.get(key);
-  if (!record || !record.point?.position || !_viewer) return;
-
+  if (!record || !(record.position || record.point?.position)) return;
   _selectedKey = key;
-  // Hide the base point so the highlight entity replaces it visually
-  record.point.show = false;
-
-  _selectedEntity = _viewer.entities.add({
-    position: record.point.position,
-    point: {
-      pixelSize: 14,
-      color: Cesium.Color.CYAN,
-      outlineColor: Cesium.Color.BLACK,
-      outlineWidth: 2,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
-    },
-  });
+  if (record.point) record.point.show = false;
+  setSelectedFilter();
   const entry = createBikeshareSelectedOverlayEntry(key, record);
   if (entry) {
-    _overlayHost.setEntries(
+    overlayHost().setEntries(
       BIKESHARE_SELECTED_OVERLAY_SOURCE_ID,
       [entry],
       BIKESHARE_SELECTED_OVERLAY_SOURCE_OPTIONS,
@@ -1072,71 +1063,6 @@ function _selectStation(key) {
   }
 }
 
-/**
- * Install a screen-space click handler for station selection/deselection.
- * Also registers a global keydown listener for Escape-to-deselect.
- * Idempotent — does nothing if a handler is already installed.
- * @param {Cesium.Viewer} viewer - Cesium viewer instance.
- */
-function _installClickHandler(viewer) {
-  if (_clickHandler) return;
-
-  _clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  _clickHandler.setInputAction((click) => {
-    const picked = viewer.scene.pick(click.position);
-
-    if (picked) {
-      // Clicking selected entity itself — ignore (don't deselect).
-      if (picked.id === _selectedEntity) return;
-
-      // Check if the picked primitive or entity id matches a station key
-      const primitive = picked.primitive;
-      if (primitive && typeof primitive.id === 'string' && _stationRenderMap.has(primitive.id)) {
-        _selectStation(primitive.id);
-        return;
-      }
-      if (typeof picked.id === 'string' && _stationRenderMap.has(picked.id)) {
-        _selectStation(picked.id);
-        return;
-      }
-    }
-
-    // Clicked empty space — deselect.
-    if (_selectedKey) _clearSelection();
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-
-  document.addEventListener('keydown', _onKeyDown);
-}
-
-/**
- * Create a Cartesian3 position for a station, terrain-clamped when possible.
- * Falls back to a fixed small height offset if terrain sampling is unsupported.
- * @param {Object} station - Station info object with lat/lon.
- * @returns {Cesium.Cartesian3|null} World position, or null if coordinates are invalid.
- */
-function createStationPosition(station) {
-  const lon = Number(station?.lon);
-  const lat = Number(station?.lat);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-
-  let height = POINT_HEIGHT_OFFSET_M;
-  // Sample terrain height so points sit on ground rather than at ellipsoid level
-  if (_viewer?.scene?.sampleHeightSupported) {
-    const carto = Cesium.Cartographic.fromDegrees(lon, lat);
-    const sampled = _viewer.scene.sampleHeight(carto);
-    if (Number.isFinite(sampled)) {
-      height = sampled + POINT_HEIGHT_OFFSET_M;
-    }
-  }
-
-  return Cesium.Cartesian3.fromDegrees(lon, lat, height);
-}
-
-/**
- * Get or create the runtime tracking object for a city.
- * @param {string} cityId - City identifier.
- * @returns {{ stationKeys: Set<string> }} City runtime object.
- */
 function ensureCityRuntime(cityId) {
   if (_cityRuntime.has(cityId)) return _cityRuntime.get(cityId);
   const runtime = { stationKeys: new Set() };
@@ -1144,27 +1070,14 @@ function ensureCityRuntime(cityId) {
   return runtime;
 }
 
-/**
- * Ensure point primitives exist for all stations in a city.
- * Creates new points for stations not yet rendered; skips existing ones.
- * Respects the MAX_TOTAL_POINTS global cap to prevent GPU overload.
- * @param {string} cityId - City identifier.
- * @param {Map<string, Object>} stationMap - Parsed station info map for the city.
- */
 function ensureCityPoints(cityId, stationMap) {
-  // Deferred debounce/fetch completions mutate point primitives after the
-  // camera settled — each commit needs one frame in idle mode. (perf wave 2 fix)
-  governorRequestRender('bikeshare-points');
   const runtime = ensureCityRuntime(cityId);
-
   for (const station of stationMap.values()) {
     const key = stationKey(cityId, station.stationId);
     if (_stationRenderMap.has(key)) {
       runtime.stationKeys.add(key);
       continue;
     }
-
-    // Enforce global point cap
     if (_stationRenderMap.size >= MAX_TOTAL_POINTS) {
       if (!_limitWarned) {
         _limitWarned = true;
@@ -1172,29 +1085,17 @@ function ensureCityPoints(cityId, stationMap) {
       }
       break;
     }
-
-    const position = createStationPosition(station);
-    if (!position) continue;
-
-    // Add a point primitive with distance-based scale and translucency falloff
-    const point = _pointCollection.add({
-      position,
-      pixelSize: capacityToPixelSize(station.capacity),
-      color: COLOR_NEUTRAL,
-      outlineColor: COLOR_OUTLINE,
-      outlineWidth: 1,
-      scaleByDistance: new Cesium.NearFarScalar(200, 1.35, 130000, 0.4),
-      translucencyByDistance: new Cesium.NearFarScalar(200, 1.0, 180000, 0.15),
-      disableDepthTestDistance: 2500,
-      id: key,
-    });
-
+    const lon = Number(station.lon);
+    const lat = Number(station.lat);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     _stationRenderMap.set(key, {
       key,
       cityId,
       stationId: station.stationId,
       stationName: station.name,
-      point,
+      position: { lon, lat, height: 0 },
+      color: COLOR_NEUTRAL,
+      pixelSize: capacityToPixelSize(station.capacity),
       capacity: toNonNegativeInteger(station.capacity),
       bikesAvailable: null,
       docksAvailable: null,
@@ -1202,70 +1103,46 @@ function ensureCityPoints(cityId, stationMap) {
       isRenting: station.isRenting,
       isReturning: station.isReturning,
     });
-
     runtime.stationKeys.add(key);
   }
-
   _count = _stationRenderMap.size;
+  scheduleRender();
 }
 
-/**
- * Remove all rendered point primitives for a city and clean up runtime state.
- * Also clears any active selection if it belongs to this city.
- * @param {string} cityId - City identifier to remove.
- */
 function removeCityPoints(cityId) {
   const runtime = _cityRuntime.get(cityId);
   if (!runtime) return;
-
-  // Clear selection if it belongs to the city being removed
-  if (_selectedKey && runtime.stationKeys.has(_selectedKey)) {
-    _clearSelection();
-  }
-
-  for (const key of runtime.stationKeys) {
-    const record = _stationRenderMap.get(key);
-    if (!record) continue;
-    _pointCollection.remove(record.point);
-    _stationRenderMap.delete(key);
-  }
-
+  if (_selectedKey && runtime.stationKeys.has(_selectedKey)) _clearSelection();
+  for (const key of runtime.stationKeys) _stationRenderMap.delete(key);
   _cityRuntime.delete(cityId);
   _count = _stationRenderMap.size;
+  scheduleRender();
 }
 
-/**
- * Apply real-time status data to rendered station points for a city.
- * Updates each point's color (availability ratio) and pixel size (capacity),
- * and refreshes the render record's cached availability fields.
- * @param {string} cityId - City identifier.
- * @param {Map<string, Object>} statusMap - Parsed station status map.
- */
 function applyStatusToPoints(cityId, statusMap) {
-  governorRequestRender('bikeshare-status');
   const runtime = _cityRuntime.get(cityId);
   if (!runtime) return;
-
   for (const key of runtime.stationKeys) {
     const record = _stationRenderMap.get(key);
     if (!record) continue;
-
     const status = statusMap.get(record.stationId) || null;
     const capacity = resolveCapacity(record.capacity, status);
     record.capacity = capacity;
-
     record.bikesAvailable = toNonNegativeInteger(status?.bikesAvailable);
     record.docksAvailable = toNonNegativeInteger(status?.docksAvailable);
     record.isInstalled = normalizeGbfsBool(status?.isInstalled, true);
     record.isRenting = normalizeGbfsBool(status?.isRenting, true);
     record.isReturning = normalizeGbfsBool(status?.isReturning, true);
-
-    // Update visual properties based on current status
-    record.point.pixelSize = capacityToPixelSize(capacity);
-    record.point.color = statusToColor(status, capacity);
+    record.pixelSize = capacityToPixelSize(capacity);
+    record.color = statusToColor(status, capacity);
+  }
+  scheduleRender();
+  // Keep the selected card's numbers current.
+  if (_selectedKey && runtime.stationKeys.has(_selectedKey)) {
+    const entry = createBikeshareSelectedOverlayEntry(_selectedKey, _stationRenderMap.get(_selectedKey));
+    if (entry) overlayHost().setEntries(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, [entry], BIKESHARE_SELECTED_OVERLAY_SOURCE_OPTIONS);
   }
 }
-
 /**
  * Build a compact HUD detection ID string for a station.
  * Truncates long names to 24 chars for readability.
@@ -1283,40 +1160,23 @@ function buildDetectionId(record) {
   return `🚲 ${short} [${bikes}/${capacity}]`;
 }
 
-/**
- * Collect a sampled subset of visible stations for HUD detection overlay rendering.
- * Uses a deterministic stride pattern controlled by options.seed and options.maxCount
- * to avoid overcrowding the HUD while still providing broad coverage.
- * @param {Object} [options]
- * @param {number} [options.maxCount] - Maximum number of detectable objects to return.
- * @param {number} [options.seed] - Seed for deterministic stride offset selection.
- * @returns {Array<{ position: Cesium.Cartesian3, id: string, type: string, skipLabel: boolean }>}
- */
+
 function collectDetectableStations(options = {}) {
-  if (!_enabled || !_pointCollection || !_pointCollection.show || _stationRenderMap.size === 0) return [];
-
-  // Gather all visible station records (include selected even though its point is hidden)
-  const records = [];
-  for (const record of _stationRenderMap.values()) {
-    const isSelected = record.key === _selectedKey;
-    if ((!record.point?.show && !isSelected) || !record.point?.position) continue;
-    records.push(record);
-  }
-  if (records.length === 0) return [];
-
-  // Deterministic subsampling: pick every Nth station, offset by seed
+  if (!_enabled || _stationRenderMap.size === 0) return [];
+  const records = [..._stationRenderMap.values()];
   const maxCount = Number.isFinite(options.maxCount)
     ? Math.max(1, Math.floor(options.maxCount))
     : records.length;
   const seed = Number.isFinite(options.seed) ? Math.floor(options.seed) : 0;
   const stride = Math.max(1, Math.ceil(records.length / maxCount));
   const start = ((seed % stride) + stride) % stride;
-
   const result = [];
   for (let i = start; i < records.length; i += stride) {
     const record = records[i];
     result.push({
-      position: record.point.position,
+      position: record.position,
+      lon: record.position.lon,
+      lat: record.position.lat,
       sourceId: record.key,
       id: buildDetectionId(record),
       type: 'VEH',
@@ -1324,51 +1184,43 @@ function collectDetectableStations(options = {}) {
     });
     if (result.length >= maxCount) break;
   }
-
   return result;
 }
 
-/**
- * Fully deactivate a single city: abort pending fetches and remove rendered points.
- * @param {string} cityId - City identifier to deactivate.
- */
+function getCameraAltitude() {
+  return cameraAltitudeM(_engine);
+}
+
+/** Center of the view (look-at point), falling back to the camera position. */
+function getCameraCenterLatLon() {
+  const view = _engine?.getCameraView?.();
+  if (!view) return null;
+  if (Number.isFinite(view.targetLat) && Number.isFinite(view.targetLon)) {
+    return { lat: view.targetLat, lon: view.targetLon };
+  }
+  if (Number.isFinite(view.lat) && Number.isFinite(view.lon)) return { lat: view.lat, lon: view.lon };
+  return null;
+}
+
 function deactivateCity(cityId) {
-  governorRequestRender('bikeshare-deactivate');
   abortInFlight(_inFlightInfo, cityId);
   abortInFlight(_inFlightStatus, cityId);
   removeCityPoints(cityId);
 }
 
-/** Deactivate all currently active cities and clear the active set. */
 function deactivateAllCities() {
-  const cityIds = Array.from(_activeCityIds);
-  for (const cityId of cityIds) deactivateCity(cityId);
+  for (const cityId of Array.from(_activeCityIds)) deactivateCity(cityId);
   _activeCityIds.clear();
 }
 
-/**
- * Activate a city: fetch station info, create point primitives, fetch status,
- * and apply availability colors. Checks generation at each async boundary
- * to bail out if the proximity context has changed.
- * @param {string} cityId - City identifier to activate.
- * @param {number} generation - Proximity generation at time of invocation.
- */
 async function activateCity(cityId, generation) {
   if (!_enabled || !_activeCityIds.has(cityId)) return;
-
   try {
     const stationMap = await loadCityStationInfo(cityId, generation);
-    // Bail if context changed during fetch
     if (!_enabled || !_activeCityIds.has(cityId) || generation !== _proximityGeneration) return;
-
     ensureCityPoints(cityId, stationMap);
-
-    // Apply any cached status immediately for snappier initial rendering
     const cachedStatus = _statusCache.get(cityId)?.statusMap;
-    if (cachedStatus) {
-      applyStatusToPoints(cityId, cachedStatus);
-    }
-
+    if (cachedStatus) applyStatusToPoints(cityId, cachedStatus);
     const statusMap = await loadCityStationStatus(cityId, generation);
     if (!_enabled || !_activeCityIds.has(cityId) || generation !== _proximityGeneration) return;
     applyStatusToPoints(cityId, statusMap);
@@ -1385,51 +1237,33 @@ async function activateCity(cityId, generation) {
   }
 }
 
-/**
- * Core proximity check: determines which cities are in camera range at the
- * current altitude, deactivates out-of-range cities, and activates newly
- * in-range ones. Increments the generation counter to invalidate stale work.
- * @returns {Promise<void>}
- */
 async function runProximityCheck() {
-  if (!_enabled || !_viewer) return;
-
+  if (!_enabled || !_engine) return;
   const generation = ++_proximityGeneration;
-  const altitude = getCameraAltitude(_viewer);
-  // Altitude gate: disable all cities when camera is too high
+  const altitude = getCameraAltitude();
   if (!shouldActivateAtAltitude(altitude)) {
     deactivateAllCities();
     return;
   }
-
-  const center = getCameraCenterLatLon(_viewer);
+  const center = getCameraCenterLatLon();
   if (!center) return;
-
-  // Diff active set against newly computed in-range set
   const nextActive = computeInRangeCities(center);
   for (const cityId of _activeCityIds) {
-    if (!nextActive.has(cityId)) {
-      deactivateCity(cityId);
-    }
+    if (!nextActive.has(cityId)) deactivateCity(cityId);
   }
-
   _activeCityIds = nextActive;
   if (_activeCityIds.size === 0) {
     _count = 0;
     return;
   }
-
-  // Only activate cities that don't already have rendered points
   const toActivate = [];
   for (const cityId of _activeCityIds) {
     if (!_cityRuntime.has(cityId)) toActivate.push(cityId);
   }
   if (toActivate.length === 0) return;
-
   await Promise.all(toActivate.map((cityId) => activateCity(cityId, generation)));
 }
 
-/** Schedule a debounced proximity check after camera movement. */
 function scheduleProximityCheck() {
   clearTimeout(_cameraDebounceTimer);
   _cameraDebounceTimer = setTimeout(() => {
@@ -1437,17 +1271,42 @@ function scheduleProximityCheck() {
   }, CAMERA_DEBOUNCE_MS);
 }
 
-/** Camera change event handler — triggers a debounced proximity check. */
 function onCameraChanged() {
   if (!_enabled) return;
   scheduleProximityCheck();
 }
 
+function _onKeyDown(e) {
+  if (e.key === 'Escape' && _selectedKey) _clearSelection();
+}
+
+function wireEvents() {
+  if (_offs.length || !_engine) return;
+  _offs.push(_engine.on('moveend', onCameraChanged));
+  _offs.push(_engine.on('click', (e) => {
+    if (!_enabled || !_selectedKey) return;
+    const hit = getActiveLayerHost()?.pickAt?.(e.x, e.y);
+    // Clicked empty space (or another layer) — deselect; station clicks
+    // select through the layer host.
+    if (!hit || hit.def?.id !== BIKESHARE_LAYER_DEF.id) _clearSelection();
+  }));
+  if (typeof document !== 'undefined' && !_keyListenerBound) {
+    document.addEventListener('keydown', _onKeyDown);
+    _keyListenerBound = true;
+  }
+}
+
+function unwireEvents() {
+  for (const off of _offs) off?.();
+  _offs = [];
+  if (typeof document !== 'undefined' && _keyListenerBound) {
+    document.removeEventListener('keydown', _onKeyDown);
+    _keyListenerBound = false;
+  }
+}
+
 /**
- * Bikeshare data layer object, conforming to the God's Eye View layer interface.
- * Manages lifecycle (init/enable/disable/update) and provides detection and
- * stats hooks for the HUD and UI systems.
- * @type {Object}
+ * Bikeshare data layer (same interface as before; `engine` in place of `viewer`).
  */
 const bikeshareLayer = {
   id: 'bikeshare',
@@ -1456,27 +1315,17 @@ const bikeshareLayer = {
   source: 'GBFS',
   updateInterval: STATUS_POLL_MS,
 
-  /**
-   * Initialize the bikeshare layer. Creates the point primitive collection,
-   * resets all internal state, and installs the click handler.
-   * Called once during app bootstrap.
-   * @param {Cesium.Viewer} viewer - Cesium viewer instance.
-   */
-  init(viewer) {
-    _viewer = viewer;
-    _pointCollection = new Cesium.PointPrimitiveCollection({
-      blendOption: Cesium.BlendOption.TRANSLUCENT,
-    });
-    viewer.scene.primitives.add(_pointCollection);
-    registerSpriteCollection('bikeshare', _pointCollection);
-    _pointCollection.show = false;
+  init(engine) {
+    _engine = engine;
+    _map = engine?.map || null;
+    const host = getActiveLayerHost();
+    host?.register(BIKESHARE_LAYER_DEF);
+    host?.ensureAdded(BIKESHARE_LAYER_DEF);
 
     _enabled = false;
     _cameraDebounceTimer = null;
-    _cameraChangedAttached = false;
     _altitudeGateEnabled = false;
     _proximityGeneration = 0;
-
     _activeCityIds = new Set();
     _cityRuntime = new Map();
     _stationInfoCache = new Map();
@@ -1484,9 +1333,7 @@ const bikeshareLayer = {
     _inFlightInfo = new Map();
     _inFlightStatus = new Map();
     _stationRenderMap = new Map();
-    _clickHandler = null;
     _selectedKey = null;
-    _selectedEntity = null;
     _count = 0;
     _lastUpdate = null;
     _loading = false;
@@ -1494,83 +1341,44 @@ const bikeshareLayer = {
     _error = null;
     _limitWarned = false;
 
-    _overlayHost.setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, false);
-
-    _installClickHandler(viewer);
-
-    restoreSpriteOrder(viewer);
-
+    overlayHost().setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, false);
     console.log(`[Data:Bikeshare] Initialized with ${GBFS_CITY_REGISTRY.length} cities`);
+    return true;
   },
 
-  /**
-   * Enable the bikeshare layer. Shows points, attaches the camera listener,
-   * and triggers an initial proximity check.
-   * @param {Cesium.Viewer} viewer - Cesium viewer instance.
-   */
-  enable(viewer) {
+  enable() {
     _enabled = true;
     _error = null;
-    _pointCollection.show = true;
-    _overlayHost.setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, true);
-    _installClickHandler(viewer);
-    // Pick-ownership (H2): station point ids are string render-map keys.
-    registerPickOwner('bikeshare', (pickedId) => _stationRenderMap.has(pickedId));
-
-    if (!_cameraChangedAttached) {
-      viewer.camera.changed.addEventListener(onCameraChanged);
-      viewer.camera.percentageChanged = Math.min(viewer.camera.percentageChanged || 1, 0.05);
-      _cameraChangedAttached = true;
-    }
-
+    getActiveLayerHost()?.setVisible(BIKESHARE_LAYER_DEF.id, true);
+    overlayHost().setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, true);
+    wireEvents();
     void runProximityCheck();
-    restoreSpriteOrder(viewer);
+    return true;
   },
 
-  /**
-   * Disable the bikeshare layer. Hides points, removes event listeners,
-   * aborts all pending fetches, and tears down all city data.
-   * @param {Cesium.Viewer} viewer - Cesium viewer instance.
-   */
-  disable(viewer) {
+  disable() {
     _enabled = false;
     _proximityGeneration++;
     _altitudeGateEnabled = false;
     clearTimeout(_cameraDebounceTimer);
     _cameraDebounceTimer = null;
     _clearSelection();
-    _overlayHost.setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, false);
-
-    if (_clickHandler) {
-      _clickHandler.destroy();
-      _clickHandler = null;
-    }
-    document.removeEventListener('keydown', _onKeyDown);
-    unregisterPickOwner('bikeshare');
-
-    if (_cameraChangedAttached) {
-      viewer.camera.changed.removeEventListener(onCameraChanged);
-      _cameraChangedAttached = false;
-    }
-
+    overlayHost().setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, false);
+    unwireEvents();
     abortAllInFlight();
     deactivateAllCities();
     _cityRuntime.clear();
-    _pointCollection.show = false;
+    _stationRenderMap.clear();
+    getActiveLayerHost()?.setVisible(BIKESHARE_LAYER_DEF.id, false);
+    scheduleRender();
     _count = 0;
     _loading = false;
     _loadingOps = 0;
+    return true;
   },
 
-  /**
-   * Periodic update tick — re-fetches station status for all active cities
-   * and refreshes point colors/sizes. Called by the layer manager at
-   * STATUS_POLL_MS intervals.
-   * @returns {Promise<void>}
-   */
   async update() {
-    if (!_enabled || _activeCityIds.size === 0) return;
-
+    if (!_enabled || _activeCityIds.size === 0) return true;
     const generation = _proximityGeneration;
     const cityIds = Array.from(_activeCityIds);
     await Promise.all(cityIds.map(async (cityId) => {
@@ -1584,24 +1392,16 @@ const bikeshareLayer = {
         _error = 'GBFS status update failed';
       }
     }));
-
     _count = _stationRenderMap.size;
     if (_count > 0) _lastUpdate = Date.now();
+    return true;
   },
 
-  /**
-   * Return a sampled array of detectable station objects for HUD overlay rendering.
-   * @param {Object} [options] - Sampling options (maxCount, seed).
-   * @returns {Array<{ position: Cesium.Cartesian3, id: string, type: string, skipLabel: boolean }>}
-   */
+  /** @returns {Array<{position:{lon:number,lat:number,height:number}, lon:number, lat:number, sourceId:string, id:string, type:string, skipLabel:boolean}>} */
   getDetectableObjects(options = {}) {
     return collectDetectableStations(options);
   },
 
-  /**
-   * Return current layer statistics for the UI status display.
-   * @returns {{ count: number, lastUpdate: number|null, loading: boolean, loadingLabel?: string, error?: string }}
-   */
   getStats() {
     const stats = {
       count: _count,
@@ -1617,60 +1417,41 @@ const bikeshareLayer = {
     return stats;
   },
 
-  /** Permanently release primitives, handlers, and the selected host source. */
-  destroy(viewer) {
-    if (_enabled) this.disable(viewer);
+  destroy() {
+    if (_enabled) this.disable();
     else {
       _clearSelection();
-      _overlayHost.setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, false);
-      if (_clickHandler) {
-        _clickHandler.destroy();
-        _clickHandler = null;
-      }
-      document.removeEventListener('keydown', _onKeyDown);
-      unregisterPickOwner('bikeshare');
-    }
-    if (_cameraChangedAttached) {
-      viewer.camera.changed.removeEventListener(onCameraChanged);
-      _cameraChangedAttached = false;
+      overlayHost().setVisible(BIKESHARE_SELECTED_OVERLAY_SOURCE_ID, false);
+      unwireEvents();
     }
     abortAllInFlight();
-    if (_pointCollection) {
-      viewer.scene.primitives.remove(_pointCollection);
-      _pointCollection = null;
-    }
-    _viewer = null;
+    _engine = null;
+    _map = null;
+    return true;
   },
 };
 
-/**
- * Global keydown handler — deselects the current station on Escape.
- * @param {KeyboardEvent} e - Keyboard event.
- */
-function _onKeyDown(e) {
-  if (e.key === 'Escape' && _selectedKey) {
-    _clearSelection();
-  }
-}
-
-/** Seed a selected-station runtime record while still exercising real select/clear paths. */
-export function _setBikeshareSelectionStateForTest({ viewer, key, record, overlayHost }) {
-  _viewer = viewer;
+/** Test seam: primes the selection state with one record and an overlay host. */
+export function _setBikeshareSelectionStateForTest({ engine = null, viewer = null, key, record, overlayHost: host }) {
+  _engine = engine || viewer;
+  _map = _engine?.map || null;
   _stationRenderMap = new Map([[key, record]]);
   _selectedKey = null;
-  _selectedEntity = null;
-  _overlayHost = overlayHost || DEFAULT_OVERLAY_HOST;
+  _overlayHostOverride = host || null;
 }
 
-/** Exercise the production selection path in focused runtime tests. */
 export function _selectBikeshareStationForTest(key) {
   _selectStation(key);
 }
 
-/** Exercise the production clear path and restore the production host seam. */
 export function _clearBikeshareSelectionForTest() {
   _clearSelection();
-  _overlayHost = DEFAULT_OVERLAY_HOST;
+  _overlayHostOverride = null;
+}
+
+/** Test seam: the currently selected station key. */
+export function _selectedBikeshareKeyForTest() {
+  return _selectedKey;
 }
 
 export default bikeshareLayer;

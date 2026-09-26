@@ -1,16 +1,24 @@
+// src/data/bikeshare.test.mjs — selected-station card (MapLibre port).
+//
+// The Cesium build selected a station by hiding its PointPrimitive and adding
+// a highlight Entity; the MapLibre build highlights it with a filtered circle
+// layer and publishes the same selected card entry to the card host. The card
+// contract (copy + protected-lane policy) is unchanged; positions are now
+// neutral `{lon, lat, height}`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as Cesium from 'cesium';
-import {
+import bikeshareLayer, {
   BIKESHARE_SELECTED_OVERLAY_SOURCE_OPTIONS,
   _clearBikeshareSelectionForTest,
   _selectBikeshareStationForTest,
+  _selectedBikeshareKeyForTest,
   _setBikeshareSelectionStateForTest,
   createBikeshareSelectedOverlayEntry,
 } from './bikeshare.js';
 
 function makeRecord() {
   return {
+    key: 'austin-capmetro:3790',
     stationId: '3790',
     stationName: 'Congress & 6th',
     bikesAvailable: 7,
@@ -19,17 +27,14 @@ function makeRecord() {
     isInstalled: true,
     isRenting: false,
     isReturning: true,
-    point: {
-      position: Cesium.Cartesian3.fromDegrees(-97.7431, 30.2672, 2),
-      show: true,
-    },
+    position: { lon: -97.7431, lat: 30.2672, height: 0 },
   };
 }
 
 test('selected bikeshare entry preserves source copy and protected-lane policy', () => {
   const record = makeRecord();
   const entry = createBikeshareSelectedOverlayEntry('austin-capmetro:3790', record);
-  assert.equal(entry.position, record.point.position);
+  assert.equal(entry.position, record.position);
   assert.equal(entry.title, 'Congress & 6th');
   assert.deepEqual(entry.details, [
     '🚲 7 avail · 4 docks · 11 cap',
@@ -44,36 +49,54 @@ test('selected bikeshare entry preserves source copy and protected-lane policy',
   assert.equal(entry.horizonCull, true);
 });
 
-test('real station select/clear path publishes one card and creates no native label graphic', () => {
+test('legacy record shape (point.position) is still accepted; no position → no entry', () => {
+  const legacy = { ...makeRecord(), position: undefined, point: { position: { lon: 1, lat: 2 } } };
+  assert.deepEqual(createBikeshareSelectedOverlayEntry('k', legacy).position, { lon: 1, lat: 2 });
+  assert.equal(createBikeshareSelectedOverlayEntry('k', { ...makeRecord(), position: null }), null);
+  assert.equal(createBikeshareSelectedOverlayEntry('', makeRecord()), null);
+});
+
+test('real station select/clear path publishes one card and highlights via the layer filter', () => {
   const calls = [];
+  const filters = [];
   const overlayHost = {
     setEntries: (...args) => calls.push(['entries', ...args]),
     setVisible: (...args) => calls.push(['visible', ...args]),
     clearSource: (...args) => calls.push(['clear', ...args]),
   };
+  const engine = {
+    map: {
+      getLayer: (id) => id === 'dg-bikeshare-selected',
+      setFilter: (id, filter) => filters.push([id, filter]),
+    },
+  };
   const key = 'austin-capmetro:3790';
   const record = makeRecord();
-  const viewer = { entities: new Cesium.EntityCollection() };
-  _setBikeshareSelectionStateForTest({ viewer, key, record, overlayHost });
+  _setBikeshareSelectionStateForTest({ engine, key, record, overlayHost });
   try {
     _selectBikeshareStationForTest(key);
-    assert.equal(record.point.show, false);
-    assert.equal(viewer.entities.values.length, 1, 'runtime guard requires a real selected entity');
-    assert.equal(viewer.entities.values[0].label, undefined);
-    assert.ok(viewer.entities.values[0].point, 'selected point highlight remains native');
+    assert.equal(_selectedBikeshareKeyForTest(), key);
+    assert.deepEqual(filters.at(-1), ['dg-bikeshare-selected', ['==', ['get', 'key'], key]]);
 
     const publication = calls.find(([type]) => type === 'entries');
     assert.ok(publication);
     assert.equal(publication[1], 'bikeshare-selected');
     assert.equal(publication[2].length, 1);
-    assert.equal(publication[2][0].position, record.point.position);
+    assert.equal(publication[2][0].position, record.position);
     assert.deepEqual(publication[3], BIKESHARE_SELECTED_OVERLAY_SOURCE_OPTIONS);
 
     _clearBikeshareSelectionForTest();
-    assert.equal(record.point.show, true);
-    assert.equal(viewer.entities.values.length, 0);
+    assert.equal(_selectedBikeshareKeyForTest(), null);
+    assert.deepEqual(filters.at(-1), ['dg-bikeshare-selected', ['==', ['get', 'key'], '']]);
     assert.deepEqual(calls.at(-1), ['clear', 'bikeshare-selected']);
   } finally {
     _clearBikeshareSelectionForTest();
   }
+});
+
+test('disabled layer reports empty detection and idle stats without a map', () => {
+  assert.deepEqual(bikeshareLayer.getDetectableObjects({ maxCount: 5 }), []);
+  const stats = bikeshareLayer.getStats();
+  assert.equal(stats.loading, false);
+  assert.equal(typeof stats.count, 'number');
 });

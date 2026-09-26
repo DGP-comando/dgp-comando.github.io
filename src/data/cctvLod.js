@@ -2,7 +2,7 @@
  * @module cctvLod
  *
  * Pure selection policy for the citywide ambient CCTV card tier.
- * Cesium-specific visibility projection stays in cctv.js; this module turns
+ * Map-specific visibility projection (engine.project) stays in cctv.js; this module turns
  * the resulting in-view candidates into a bounded, nearest-first ambient
  * card set, keeps that set stable across small camera moves (eviction
  * grace), and paces static-frame refreshes per source.
