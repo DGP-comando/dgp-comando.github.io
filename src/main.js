@@ -1,10 +1,8 @@
-import * as Cesium from 'cesium';
 import { StyleManager } from './ui.js';
 import { flyToParana } from './camera.js';
 import { DataLayerManager } from './data/manager.js';
 import flightsLayer from './data/flights.js';
 import militaryFlightsLayer from './data/militaryFlights.js';
-import earthquakesLayer from './data/earthquakes.js';
 import satellitesLayer from './data/satellites.js';
 import rocketLaunchesLayer from './data/rocketLaunches.js';
 import trafficLayer from './data/traffic.js';
@@ -14,8 +12,10 @@ import bikeshareLayer from './data/bikeshare.js';
 import aisLiveVesselsLayer from './data/aisLiveVessels.js';
 import militaryInstallationsLayer from './data/militaryInstallations.js';
 import militaryAwarenessLayer from './data/militaryAwareness.js';
-import localDataLayers from './data/localLayers.js';
-import { DATAGEO_LAYERS } from './data/datageoLayers.js';
+import { createEngine } from './maplibre/engine.js';
+import { createLayerHost } from './maplibre/layerHost.js';
+import { toManagerModule } from './maplibre/managerAdapter.js';
+import { LAYERS as MAPLIBRE_LAYERS } from './maplibre/layers/index.js';
 import { initDatageoTicker } from './datageoTicker.js';
 import { initDatageoBriefing } from './datageoBriefing.js';
 import { initDatageoAreaWatch } from './datageoAreaWatch.js';
@@ -32,13 +32,6 @@ import { MapStackController } from './mapStackController.js';
 import { initAnnotations } from './annotations/index.js';
 import { initLogoGaze } from './logoGaze.js';
 import { initCockpitCloudEffects } from './cockpitCloudEffects.js';
-import {
-  installRenderGovernor,
-  getRenderGovernorDiagnostics,
-  governorRequestRender,
-  holdContinuousRender,
-  releaseContinuousRender,
-} from './renderGovernor.js';
 import { installScopeMask } from './scopeMask.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
 import { requireLogin } from './datageoLogin.js';
@@ -72,156 +65,52 @@ function describeError(error) {
 }
 
 /**
- * GOD'S EYE VIEW — Main Entry Point
- * Initializes CesiumJS with Google Photorealistic 3D Tiles,
- * style system, intelligence HUD, location presets, and share links.
+ * DATAGEO PR — ponto de entrada.
+ *
+ * O mapa é o MapLibre GL (src/maplibre/engine.js), que substituiu o CesiumJS.
+ * `engine` ocupa o lugar do antigo `viewer` para todos os módulos: interface
+ * (ui.js), link compartilhável, HUD, overlays e camadas.
  */
 async function init() {
   const loadingScreen = document.getElementById('loading-screen');
   const loaderStatus = loadingScreen.querySelector('.loader-status');
 
   try {
-    loaderStatus.textContent = 'Configuring viewer...';
+    loaderStatus.textContent = 'Configurando o mapa...';
 
-    // Set Cesium Ion token for World Terrain
-    const cesiumToken = import.meta.env.CESIUM_ION_TOKEN;
-    if (cesiumToken) {
-      Cesium.Ion.defaultAccessToken = cesiumToken;
-    }
-
-    // Set Google Maps API key for 3D Tiles
-    // Chave Google e OPCIONAL na fusao DataGeo: sem ela o app sobe keyless
-    // direto no stack Esri (receita Serra do Mar) — ver PLANO_FUSAO.md.
-    const googleApiKey = import.meta.env.GOOGLE_MAPS_API_KEY || '';
-    if (googleApiKey) {
-      Cesium.GoogleMaps.defaultApiKey = googleApiKey;
-      // Expose API key globally for geocoding in locations.js
-      window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
-    }
-
-    // Create the Cesium viewer with minimal chrome
-    const viewer = new Cesium.Viewer('cesiumContainer', {
-      timeline: false,
-      animation: false,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      vrButton: false,
-      selectionIndicator: false,
-      infoBox: false,
-      baseLayer: false,
-      // Visible attribution container — Google Maps / 3D Tiles credits are
-      // required by Google's Terms of Service, so they must be shown (styled
-      // subtly via #cesium-credits). The credit line stays visible in
-      // clean-view AND recording modes too (ToS requires attribution while the
-      // content is displayed — those are the exact modes used to record
-      // demos), including the "Data attribution" link that opens the per-layer
-      // license popover.
-      creditContainer: (() => {
-        const el = document.createElement('div');
-        el.id = 'cesium-credits';
-        document.body.appendChild(el);
-        return el;
-      })(),
-      msaaSamples: 4,
-      contextOptions: {
-        webgl: {
-          // Only the dev-only voice viewport capture (src/voice/gevRealtime.js,
-          // drawImage of the Cesium canvas) reads the WebGL back buffer.
-          // Production has no reader, so skip the extra buffer copy there.
-          preserveDrawingBuffer: import.meta.env.DEV,
-        },
-      },
+    const engine = createEngine({
+      container: 'cesiumContainer',
+      basemap: 'esri',
+      // Só a captura de tela da voz (dev) lê o buffer do canvas.
+      preserveDrawingBuffer: import.meta.env.DEV,
     });
+    await engine.ready;
 
-    // Cap the default render loop at 60 fps. Cesium's loop otherwise runs at
-    // the display's refresh rate — 120 Hz on ProMotion panels — doubling GPU
-    // and CPU burn for zero visual benefit in a map app whose animation
-    // cadences (poll interpolation, trail fades, style crossfades) are all
-    // designed against wall-clock time, not frame count. Measured on the
-    // 2026-08-05 perf investigation as a strict halving of idle burn on
-    // 120 Hz hardware; a no-op on 60 Hz displays. (perf item 2)
-    viewer.targetFrameRate = 60;
+    // Créditos por camada no lightbox "Data attribution" (DATA_SOURCES.md).
+    registerDataCredits(engine);
 
-    // Register per-layer data attribution into the "Data attribution" popover.
-    // Required by each source's license (ODbL, CC BY-NC-SA, NASA FIRMS, etc.);
-    // strings are verbatim from DATA_SOURCES.md. Static + always-present in the
-    // expandable bottom-left credit lightbox (showOnScreen=false), so they never
-    // clutter the on-globe attribution line.
-    registerDataCredits(viewer);
+    loaderStatus.textContent = 'Inicializando sistemas...';
 
-    // Hide Cesium's default globe — Google Photorealistic 3D Tiles provide their own
-    // globe at all LODs (street level → orbital). The default globe's 2D imagery
-    // clips through 3D tile buildings at close range.
-    viewer.scene.globe.show = false;
-
-    // Keep a sky behind Google 3D Tiles, but soften Cesium's high-intensity
-    // default atmosphere. With the globe hidden its bright limb otherwise
-    // reads as a hard cyan seam where distant photoreal tiles meet the sky.
-    viewer.scene.skyAtmosphere.show = true;
-    viewer.scene.skyAtmosphere.atmosphereLightIntensity = 18;
-    viewer.scene.skyAtmosphere.saturationShift = -0.12;
-    viewer.scene.skyAtmosphere.brightnessShift = -0.08;
-
-    loaderStatus.textContent = 'Loading Google 3D Tiles...';
-    let tileset = null;
-    try {
-      if (!googleApiKey) throw new Error('keyless boot (sem GOOGLE_MAPS_API_KEY)');
-      // Load Google Photorealistic 3D Tiles
-      tileset = await Cesium.createGooglePhotorealistic3DTileset({
-        onlyUsingWithGoogleGeocoder: true,
-      });
-      viewer.scene.primitives.add(tileset);
-      // NOTE: Cesium World Terrain intentionally disabled — conflicts with Google 3D Tiles at high zoom.
-      // Google Photorealistic 3D Tiles provide their own terrain/elevation.
-      viewer.scene.globe.show = false;
-    } catch (tileError) {
-      console.warn('[Init] Google 3D Tiles unavailable, falling back to Cesium globe:', tileError);
-      const tileErrorDetail = describeError(tileError);
-      loaderStatus.textContent = `Google 3D Tiles unavailable (${tileErrorDetail}). Continuing in fallback mode...`;
-      // Keep Cesium globe visible as fallback instead of aborting the app.
-      viewer.scene.globe.show = true;
-    }
-
-    loaderStatus.textContent = 'Initializing systems...';
-
-    const mapStackController = new MapStackController(viewer, {
-      googleTileset: tileset,
-      cesiumToken,
-      initialStack: tileset ? 'photoreal' : 'esri',
-      // Task 5 (height-datum fix): rebroadcast stack changes as a window
-      // CustomEvent so data layers (CCTV per-regime ground resolution) can
-      // react without coupling MapStackController to layer modules. Fires on
-      // 'switching'/'ready'/'error'; listeners derive the surface regime from
-      // live scene state, so intermediate emissions are harmless.
+    const mapStackController = new MapStackController(engine, {
       onChange: (state) => {
         window.dispatchEvent(new CustomEvent('gev:map-stack-changed', { detail: state }));
       },
       onError: (message) => console.warn('[MapStack]', message),
     });
-    await mapStackController.setStack(tileset ? 'photoreal' : 'esri', { silent: true });
 
-    // Initialize the style manager (post-processing, HUD, locations, share links)
-    const styleManager = new StyleManager(viewer, { mapStackController });
-    // The previous multi-canvas weather compositor remains disabled. Cockpit
-    // clouds use a separate, capped low-resolution GPU pass that never attaches
-    // Cesium fog or post-process stages and is fully stopped in map mode.
-    const weatherEffects = null;
-    const cockpitCloudEffects = initCockpitCloudEffects(viewer);
+    // Interface (estilos, HUD, locais, link compartilhável).
+    const styleManager = new StyleManager(engine, { mapStackController });
+    const cockpitCloudEffects = initCockpitCloudEffects(engine);
 
-    // If no share link state, do default fly-to Austin
     if (!styleManager.hasShareState) {
       loaderStatus.textContent = 'Voando para o Paraná...';
-      flyToParana(viewer);
+      flyToParana(engine);
     } else {
-      loaderStatus.textContent = 'Restoring shared view...';
+      loaderStatus.textContent = 'Restaurando a vista compartilhada...';
     }
 
     // Initialize data layer manager
-    const dataManager = new DataLayerManager(viewer, {
+    const dataManager = new DataLayerManager(engine, {
       allowQaRegistration: import.meta.env.DEV,
     });
     // Camadas GEV cujo backend e um proxy do DEV-SERVER Vite (OpenSky,
@@ -249,12 +138,17 @@ async function init() {
 
     // Ordem de registro = ordem do painel Data Layers: as camadas DataGeo
     // (o produto) vem PRIMEIRO; as do GEV original viram contexto no fim.
-    for (const layer of DATAGEO_LAYERS) {
-      dataManager.register(layer);
+    // Camadas desenhadas pelo MapLibre (contrato em src/maplibre/kit.js) entram
+    // no manager pelo adaptador, com um único anfitrião de hover/clique.
+    const layerHost = createLayerHost(engine);
+    layerHost.onPanelRefresh = () => dataManager._refreshTogglePanel();
+    const maplibreModules = new Map(MAPLIBRE_LAYERS.map((def) => [def.id, toManagerModule(def, layerHost)]));
+    for (const def of MAPLIBRE_LAYERS) {
+      if (def.id.startsWith('datageo-')) dataManager.register(maplibreModules.get(def.id));
     }
     if (layerAvailableInBuild('flights')) dataManager.register(flightsLayer);
     if (layerAvailableInBuild('military')) dataManager.register(militaryFlightsLayer);
-    dataManager.register(earthquakesLayer);
+    dataManager.register(maplibreModules.get('earthquakes'));
     if (layerAvailableInBuild('satellites')) dataManager.register(satellitesLayer);
     if (layerAvailableInBuild('rocket-launches')) {
       dataManager.register(rocketLaunchesLayer);
@@ -272,8 +166,8 @@ async function init() {
       dataManager.register(militaryAwarenessLayer);
       militaryAwarenessLayer.attachDataManager(dataManager);
     }
-    for (const layer of localDataLayers) {
-      dataManager.register(layer);
+    for (const id of ['local-datacenters', 'local-dams', 'telegeography-submarine-cables', 'local-firms']) {
+      dataManager.register(maplibreModules.get(id));
     }
     // Chrome DataGeo: ticker de noticias + briefing situacional diario
     initDatageoTicker();
@@ -290,7 +184,7 @@ async function init() {
     window.__dgpAreaWatch = areaWatch;
     initDatageoShortcuts({
       actions: {
-        resetCamera: () => flyToParana(viewer),
+        resetCamera: () => flyToParana(engine),
         toggleWatch: () => areaWatch.toggle(),
       },
     });
@@ -302,7 +196,9 @@ async function init() {
     );
     if (import.meta.env.DEV) {
       // Dev-only handles for QA scripts and console-driven camera work.
-      window.__gevViewer = viewer;
+      window.__gevViewer = engine;
+      window.__gevEngine = engine;
+      window.__gevLayerHost = layerHost;
       window.__gevDataManager = dataManager;
       window.__gevMapStack = mapStackController;
       window.__gevQaRegisterLayer = (targetManager, layerModule) => {
@@ -318,10 +214,10 @@ async function init() {
     styleManager.attachDataManager(dataManager);
 
     // Initialize deterministic scene playback for social clip capture
-    const sceneDirector = new SceneDirector(viewer, styleManager, dataManager);
+    const sceneDirector = new SceneDirector(engine, styleManager, dataManager);
 
     // Initialize the voice "whiteboard" annotation engine (world-space renderer)
-    const annotations = initAnnotations({ viewer, tileset });
+    const annotations = initAnnotations({ engine });
 
     // Keep startup chrome truthful: a share is not restored until camera,
     // visual/map/panel lanes, and every requested layer have terminated.
@@ -347,59 +243,33 @@ async function init() {
       setTimeout(revealFirstRun, 900);
     });
 
-    // Expose for debugging
-    // Idle render governor: flips the scene into requestRenderMode whenever
-    // nothing animates per frame. Installed AFTER every module above has had
-    // its chance to register pre-install holds. (perf wave 2)
-    installRenderGovernor(viewer);
+    // Máscara circular (scope) — src/scopeMask.js.
+    installScopeMask(engine);
 
-    // The explicit scope mask replaces the emergent six-pass artifact —
-    // see src/scopeMask.js. Installed before the UI so the DISPLAY-rail
-    // toggle finds it live.
-    installScopeMask(viewer);
-
-    // The follow camera recomputes the tracked target's dead-reckon position
-    // every frame — tracking anything is a per-frame animation. (perf wave 2)
-    viewer.trackedEntityChanged.addEventListener(() => {
-      if (viewer.trackedEntity) holdContinuousRender('tracked-entity');
-      else releaseContinuousRender('tracked-entity');
-    });
-
-    // Hidden-state suspension (perf wave 2): when the window/tab is hidden,
-    // stop the default render loop outright — a hidden canvas repaints for
-    // nobody, and browser rAF throttling still lets throttled frames burn
-    // GPU. Holder/data state is untouched, so return is seamless: restore
-    // the loop, refresh the one DOM surface we gated, render a frame.
+    // Aba escondida: o MapLibre só redesenha quando algo muda; aqui só se
+    // suspendem as nuvens do cockpit e se repinta o painel na volta.
     const syncVisibilitySuspension = () => {
       const hidden = document.hidden;
-      viewer.useDefaultRenderLoop = !hidden;
       cockpitCloudEffects?.setSuspended?.(hidden);
-      if (!hidden) {
-        if (dataManager._panelRefreshPendingOnVisible) {
-          dataManager._panelRefreshPendingOnVisible = false;
-          dataManager._refreshTogglePanel();
-        }
-        governorRequestRender('visibility-restore');
+      if (!hidden && dataManager._panelRefreshPendingOnVisible) {
+        dataManager._panelRefreshPendingOnVisible = false;
+        dataManager._refreshTogglePanel();
       }
     };
     document.addEventListener('visibilitychange', syncVisibilitySuspension);
-    // Apply the CURRENT state too — bootstrap can complete while the tab is
-    // already hidden, and waiting for the next transition would leave the
-    // loop burning behind a hidden tab. (perf wave 2 fix)
     syncVisibilitySuspension();
 
     window.__godsEyeView = {
-      viewer,
+      engine,
+      viewer: engine,
       styleManager,
-      tileset,
       dataManager,
       sceneDirector,
       mapStackController,
       annotations,
-      weatherEffects,
       cockpitCloudEffects,
-      getRenderGovernorDiagnostics,
-      requestRender: governorRequestRender,
+      layerHost,
+      requestRender: () => engine.requestRender(),
     };
     // Voz depende do proxy OpenAI do dev-server; no deploy estatico o dock
     // ficaria morto (era o widget "VOICE STANDBY" que aparecia no celular).
@@ -408,7 +278,7 @@ async function init() {
     // nao entra no bundle.
     if (import.meta.env.DEV) {
       const { initGevVoiceCommands } = await import('./voice/gevRealtime.js');
-      window.__godsEyeView.voiceCommands = initGevVoiceCommands({ viewer, styleManager, dataManager, sceneDirector, annotations });
+      window.__godsEyeView.voiceCommands = initGevVoiceCommands({ engine, viewer: engine, styleManager, dataManager, sceneDirector, annotations });
     }
 
     // Paineis cujas camadas/backends nao existem no build estatico: remover o
