@@ -1,4 +1,3 @@
-import * as Cesium from 'cesium';
 import { CITY_POIS, findPoiByName, flyToGlobeView, flyToLandmark, flyToPOI, flyToPresetLocation, GLOBE_VIEW, searchAndFlyTo } from '../locations.js';
 import {
   getContextStore,
@@ -14,9 +13,8 @@ import militaryAwarenessLayer, {
   collectAircraftProximityWindow,
   contactsWindowFromSnapshot,
 } from '../data/militaryAwareness.js';
-import { initCameraVerbs, moveCamera, flyRoute, interruptCameraMotion, adjustOrbitRange } from '../cameraVerbs.js';
-import { cachedGroundFloor, warmGroundFloor } from '../data/groundFloor.js';
-import { isPickedWorldPosition } from '../data/scenePick.js';
+import { initCameraVerbs, moveCamera, flyRoute, interruptCameraMotion, adjustOrbitRange, engineGroundFloorM } from '../cameraVerbs.js';
+import { boundingCircle, cameraViewOf, geoPoint, haversineKm, toLonLat } from './geo3d.js';
 import { resolveRegionRingForQuery } from '../annotations/annotationResolver.js';
 import { normalizeRadioCountryInput } from '../data/radioCountry.js';
 import { TR3B_CLASS } from '../data/tr3bRegistry.js';
@@ -285,7 +283,7 @@ export function readLayerLifecycleSummary(dataManager, layerId, { fallbackEnable
 
 export function createGevActionRunner({ viewer, styleManager, dataManager, sceneDirector = null, annotations = null }) {
   installViewTargetPrewarm(viewer);
-  initCameraVerbs(viewer, getViewTargetCartesian);
+  initCameraVerbs(viewer, getViewTargetPoint);
   return async function runGevAction(name, rawArgs = {}, runOptions = {}) {
     const args = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
     const current = () => !runOptions.signal?.aborted
@@ -299,7 +297,7 @@ export function createGevActionRunner({ viewer, styleManager, dataManager, scene
     // Explicit navigation while TRACKING supersedes the follow camera —
     // otherwise the tracker drags the view back and "I flew there but can't
     // do anything" (field finding). track_entity manages its own handoff.
-    if (name === 'zoom_to_globe' && viewer.trackedEntity) {
+    if (name === 'zoom_to_globe' && isTracking(viewer)) {
       stopAllTracking(viewer, dataManager);
     }
 
@@ -780,7 +778,7 @@ export function createGevActionRunner({ viewer, styleManager, dataManager, scene
             return;
           }
           interruptCameraMotion('nav:fly_to_location');
-          if (viewer.trackedEntity) stopAllTracking(viewer, dataManager);
+          if (isTracking(viewer)) stopAllTracking(viewer, dataManager);
         },
       });
     }
@@ -823,9 +821,11 @@ export function createGevActionRunner({ viewer, styleManager, dataManager, scene
       return flyRoute(
         annotations?.list?.() || [],
         args,
-        (lat, lon) => cachedGroundFloor(lat, lon),
+        // Piso do dolly: relevo do MapLibre (ou 0 m sem relevo); o terreno do
+        // motor se carrega sozinho, então não há corredor para pré-aquecer.
+        (lat, lon) => engineGroundFloorM(viewer, lat, lon),
         (navigate) => runManagedVoiceNavigation(styleManager, 'route', 'fly_route', navigate),
-        (cells) => warmGroundFloor(cells),
+        null,
       );
     }
 
@@ -1774,7 +1774,11 @@ function stopAllTracking(viewer, dataManager) {
       failed.add(layerId);
     }
   }
-  if (viewer) viewer.trackedEntity = undefined;
+  try {
+    viewer?.track?.(null);
+  } catch {
+    // motor em desmontagem
+  }
   if (failed.size) {
     const failedLayerIds = [...failed];
     return {
@@ -1808,15 +1812,18 @@ async function frameOverhead(viewer, dataManager, styleManager, args = {}) {
   const isSatellites = layerId === 'satellites';
   const defaultRadiusKm = isSatellites ? 3000 : (layerId === 'ais-live-vessels' ? 120 : 150);
   const radiusKm = clampNumber(args.radiusKm, 10, 20000, defaultRadiusKm);
-  const center = getViewTargetCartesian(viewer) || viewer.camera.positionWC;
+  // Centro "de duas caras" (ECEF x/y/z + lon/lat): serve às camadas que ainda
+  // medem com Cartesian3 e às que já trabalham em graus.
+  const center = getViewTargetPoint(viewer) || cameraPoint(viewer);
 
   let entries = [];
   if (typeof module.getNearby === 'function') {
     entries = module.getNearby(center, radiusKm * 1000, 80) || [];
   } else if (typeof module.getAllPositions === 'function') {
     entries = (module.getAllPositions(800) || [])
-      .filter((entry) => entry.position)
-      .map((entry) => ({ ...entry, distance: Cesium.Cartesian3.distance(center, entry.position) }))
+      .map((entry) => ({ entry, where: toLonLat(entry.position ?? entry) }))
+      .filter(({ where }) => where)
+      .map(({ entry, where }) => ({ ...entry, distance: haversineKm(center.lat, center.lon, where.lat, where.lon) * 1000 }))
       .filter((entry) => entry.distance <= radiusKm * 1000)
       .sort((a, b) => a.distance - b.distance)
       .slice(0, 80);
@@ -1828,13 +1835,16 @@ async function frameOverhead(viewer, dataManager, styleManager, args = {}) {
     };
   }
 
-  const sphere = Cesium.BoundingSphere.fromPoints(entries.map((entry) => entry.position));
-  sphere.radius = Math.max(sphere.radius * 1.25, 8000);
-  const pitch = Cesium.Math.toRadians(isSatellites ? -35 : -62);
+  const circle = boundingCircle(entries.map((entry) => entry.position ?? entry))
+    || { lat: center.lat, lon: center.lon, radiusM: 0 };
+  const radiusM = Math.max(circle.radiusM * 1.25, 8000);
+  const pitch = isSatellites ? -35 : -62;
   return runManagedVoiceNavigation(styleManager, 'frame', 'frame_overhead', () => {
-    viewer.camera.flyToBoundingSphere(sphere, {
+    viewer.flyToTarget({ lat: circle.lat, lon: circle.lon }, {
+      rangeM: radiusM * 2.4,
+      heading: cameraView(viewer)?.heading ?? 0,
+      pitch,
       duration: 2.0,
-      offset: new Cesium.HeadingPitchRange(viewer.camera.heading, pitch, sphere.radius * 2.4),
     });
 
     let detectionEnabled = false;
@@ -1891,20 +1901,26 @@ function collectTrackedEntities(dataManager) {
   return tracked;
 }
 
+/**
+ * Rótulos do lugar em vista (HUD e contexto da voz): geocodificação reversa
+ * do centro e de amostras da viewport, lugares próximos e — no MapLibre — os
+ * rótulos que o próprio mapa base está desenhando (renderedBasemapLabels).
+ */
 export async function getBasemapLabelContext(viewer) {
   const samples = sampleViewportCartographics(viewer);
-  const cameraHeightM = viewer.camera.positionCartographic.height;
-  const target = getViewTargetCartographic(viewer);
+  const cameraHeightM = cameraHeightOf(viewer);
+  const target = getViewTarget(viewer);
+  const rendered = renderedBasemapLabels(viewer);
   if (!target) {
     return {
-      placeLabels: [],
-      streetLabels: [],
+      placeLabels: rendered.placeLabels.slice(0, 24),
+      streetLabels: rendered.streetLabels.slice(0, 16),
       nearbyPlaceLabels: [],
     };
   }
 
-  const latitude = Number(Cesium.Math.toDegrees(target.latitude).toFixed(6));
-  const longitude = Number(Cesium.Math.toDegrees(target.longitude).toFixed(6));
+  const latitude = Number(target.lat.toFixed(6));
+  const longitude = Number(target.lon.toFixed(6));
   const cachedViewportPlaces = viewportPlacesFromCache(samples, cameraHeightM);
   const viewportPromise = cachedViewportPlaces
     ? Promise.resolve(cachedViewportPlaces)
@@ -1929,10 +1945,12 @@ export async function getBasemapLabelContext(viewer) {
       place?.country,
       ...(place?.labels || []),
       ...(viewportPlaces?.visibleLabels || []),
+      ...rendered.placeLabels,
     ]).slice(0, 24),
     streetLabels: uniqueStrings([
       ...(place?.streetLabels || []),
       ...(viewportPlaces?.streetLabels || []),
+      ...rendered.streetLabels,
     ]).slice(0, 16),
     nearbyPlaceLabels: uniqueStrings((nearbyPlaces || []).flatMap((nearbyPlace) => [
       nearbyPlace.name,
@@ -1942,11 +1960,12 @@ export async function getBasemapLabelContext(viewer) {
 }
 
 function installViewTargetPrewarm(viewer) {
+  if (!viewer || typeof viewer.on !== 'function') return;
   if (viewer.__gevViewTargetPrewarmInstalled) return;
   viewer.__gevViewTargetPrewarmInstalled = true;
   let timer = null;
   let reportedPrewarmFailure = false;
-  viewer.camera.moveEnd.addEventListener(() => {
+  viewer.on('moveend', () => {
     if (timer) window.clearTimeout(timer);
     timer = window.setTimeout(() => {
       timer = null;
@@ -1957,7 +1976,7 @@ function installViewTargetPrewarm(viewer) {
       // viewer so a repeating cause cannot spam the console.
       const warm = () => {
         try {
-          getViewTargetCartographic(viewer);
+          getViewTarget(viewer);
         } catch (error) {
           if (reportedPrewarmFailure) return;
           reportedPrewarmFailure = true;
@@ -1987,19 +2006,24 @@ function adjustCameraZoom(viewer, args) {
   }[amount];
   if (!fraction) throw new Error(`Unknown zoom amount: ${args.amount}`);
 
-  const camera = viewer.camera;
-  const beforePosition = Cesium.Cartesian3.clone(camera.positionWC);
-  const beforeHeightM = camera.positionCartographic.height;
-  const target = getViewTargetCartesian(viewer);
-  const targetDistanceM = target
-    ? Cesium.Cartesian3.distance(beforePosition, target)
+  // Mesma semântica do Cesium (aproximar/afastar uma FRAÇÃO da distância até o
+  // alvo no centro da tela), expressa em níveis de zoom do MapLibre: a
+  // distância escala por 2^-Δzoom.
+  const map = viewer.map;
+  const before = cameraView(viewer);
+  const beforeHeightM = Number.isFinite(before?.alt) ? before.alt : 0;
+  const target = getViewTargetPoint(viewer);
+  const cameraPos = before ? geoPoint(before.lon, before.lat, beforeHeightM) : null;
+  const targetDistanceM = target && cameraPos
+    ? Math.hypot(target.x - cameraPos.x, target.y - cameraPos.y, target.z - cameraPos.z)
     : Math.max(100, beforeHeightM);
   const minimumDistanceM = direction === 'in' ? 20 : 50;
   const movementM = Math.max(minimumDistanceM, targetDistanceM * fraction);
 
-  camera.cancelFlight();
+  viewer.cancelFlight?.();
+  let nextDistanceM;
   if (direction === 'out') {
-    camera.zoomOut(movementM);
+    nextDistanceM = targetDistanceM + movementM;
   } else {
     const safeMovementM = Math.min(movementM, Math.max(0, targetDistanceM - 25));
     if (safeMovementM <= 0) {
@@ -2011,14 +2035,21 @@ function adjustCameraZoom(viewer, args) {
         error: 'Camera is already at the minimum target distance',
       };
     }
-    camera.zoomIn(safeMovementM);
+    nextDistanceM = targetDistanceM - safeMovementM;
   }
-  viewer.scene.requestRender();
+  const beforeZoom = map.getZoom();
+  const zoomDelta = Math.log2(targetDistanceM / Math.max(1, nextDistanceM));
+  const nextZoom = Math.max(map.getMinZoom?.() ?? 0, Math.min(map.getMaxZoom?.() ?? 22, beforeZoom + zoomDelta));
+  map.jumpTo({ zoom: nextZoom });
+  viewer.requestRender?.();
 
-  const afterPosition = camera.positionWC;
-  const movedM = Cesium.Cartesian3.distance(beforePosition, afterPosition);
-  const afterHeightM = camera.positionCartographic.height;
-  const moved = movedM >= 0.5;
+  const after = cameraView(viewer);
+  const afterHeightM = Number.isFinite(after?.alt) ? after.alt : beforeHeightM;
+  const afterPos = after ? geoPoint(after.lon, after.lat, afterHeightM) : cameraPos;
+  const movedM = cameraPos && afterPos
+    ? Math.hypot(afterPos.x - cameraPos.x, afterPos.y - cameraPos.y, afterPos.z - cameraPos.z)
+    : 0;
+  const moved = Math.abs(map.getZoom() - beforeZoom) > 1e-6 && movedM >= 0.5;
   return {
     ok: moved,
     action: 'adjust_camera_zoom',
@@ -2028,7 +2059,7 @@ function adjustCameraZoom(viewer, args) {
     movementActualM: Math.round(movedM),
     beforeHeightM: Math.round(beforeHeightM),
     afterHeightM: Math.round(afterHeightM),
-    error: moved ? null : 'Cesium camera position did not change',
+    error: moved ? null : `Camera is already at the ${direction === 'in' ? 'closest' : 'widest'} zoom`,
   };
 }
 
@@ -2042,10 +2073,10 @@ function nextIssPass(viewer, args) {
   let latDeg = Number.isFinite(args.latitude) ? args.latitude : null;
   let lonDeg = Number.isFinite(args.longitude) ? args.longitude : null;
   if (latDeg == null || lonDeg == null) {
-    const carto = viewer?.camera?.positionCartographic;
-    if (!carto) throw new Error('Camera position unavailable');
-    latDeg = Cesium.Math.toDegrees(carto.latitude);
-    lonDeg = Cesium.Math.toDegrees(carto.longitude);
+    const view = cameraView(viewer);
+    if (!view || !Number.isFinite(view.lat) || !Number.isFinite(view.lon)) throw new Error('Camera position unavailable');
+    latDeg = view.lat;
+    lonDeg = view.lon;
   }
   const minElevDeg = Number.isFinite(args.minElevationDeg) ? args.minElevationDeg : 10;
   const result = getNextIssPass({ latDeg, lonDeg, minElevDeg });
@@ -2351,14 +2382,16 @@ function normalizeLocationId(value) {
 }
 
 function getCurrentViewState(viewer, styleManager, dataManager, sceneDirector = null) {
-  const cartographic = Cesium.Cartographic.fromCartesian(viewer.camera.positionWC);
+  const view = cameraView(viewer);
   return {
     ok: true,
     action: 'get_current_view_state',
     camera: {
-      latitude: Cesium.Math.toDegrees(cartographic.latitude),
-      longitude: Cesium.Math.toDegrees(cartographic.longitude),
-      heightM: cartographic.height,
+      latitude: view?.lat ?? null,
+      longitude: view?.lon ?? null,
+      heightM: view?.alt ?? null,
+      headingDeg: Number.isFinite(view?.heading) ? Math.round(view.heading) : null,
+      pitchDeg: Number.isFinite(view?.pitch) ? Math.round(view.pitch) : null,
     },
     style: styleManager.activeStyle || 'normal',
     context: typeof styleManager.getContextModeState === 'function'
@@ -2391,8 +2424,8 @@ async function getEntityContext(viewer, dataManager, styleManager, args = {}) {
   const layerId = normalizeLayerId(args.layerId || args.layer);
   const limit = Math.round(clampNumber(args.limit, 1, 12, 5));
   const selected = selectedEntityContext(dataManager);
-  const cameraHeightM = viewer.camera.positionCartographic.height;
-  const viewTarget = getViewTargetCartographic(viewer);
+  const cameraHeightM = cameraHeightOf(viewer);
+  const viewTarget = getViewTarget(viewer);
   const scenePromise = getSceneContext(viewer, styleManager, dataManager, viewTarget);
   const selectedWillBeReturned = selected && (scope === 'selected' || scope === 'auto');
   const visible = (!selectedWillBeReturned && shouldScanVisibleEntities(cameraHeightM))
@@ -2510,16 +2543,14 @@ const SUBJECT_CENTER_TOLERANCE_KM = 1;
  * ~1.5 km away — far enough to be a different place, close enough to slip
  * through and get answered as the subject's window.
  * @param {{lat: number, lon: number}} center Requested centre.
- * @param {Cesium.Cartesian3} subjectPosition Subject's world position.
+ * @param {object} subjectPosition Subject's world position ({lon, lat} ou ECEF).
  * @returns {boolean} True when the two are the same place.
  */
 function centerMatchesSubject(center, subjectPosition) {
   if (!Number.isFinite(center?.lat) || !Number.isFinite(center?.lon)) return false;
-  const carto = Cesium.Cartographic.fromCartesian(subjectPosition);
-  if (!carto) return false;
-  const subjectLat = Cesium.Math.toDegrees(carto.latitude);
-  const subjectLon = Cesium.Math.toDegrees(carto.longitude);
-  return haversineKm(subjectLat, subjectLon, center.lat, center.lon) <= SUBJECT_CENTER_TOLERANCE_KM;
+  const subject = toLonLat(subjectPosition);
+  if (!subject) return false;
+  return haversineKm(subject.lat, subject.lon, center.lat, center.lon) <= SUBJECT_CENTER_TOLERANCE_KM;
 }
 
 function shouldScanVisibleEntities(cameraHeightM) {
@@ -2534,13 +2565,11 @@ function selectedEntityContext(dataManager) {
 
 function visibleEntityContexts(viewer, dataManager, { layerId = null, limit = 5, target = null } = {}) {
   const nearbyRecords = [];
-  const canvas = viewer.scene.canvas;
-  const width = canvas.clientWidth || canvas.width || 0;
-  const height = canvas.clientHeight || canvas.height || 0;
+  const { width, height } = viewportSize(viewer);
   const centerX = width / 2;
   const centerY = height / 2;
-  const targetLat = target ? Cesium.Math.toDegrees(target.latitude) : null;
-  const targetLon = target ? Cesium.Math.toDegrees(target.longitude) : null;
+  const targetLat = target ? target.lat : null;
+  const targetLon = target ? target.lon : null;
   const store = getContextStore();
   const enabledLayerIds = new Set(
     dataManager.getAll().filter((layer) => layer.enabled).map((layer) => layer.id)
@@ -2561,10 +2590,8 @@ function visibleEntityContexts(viewer, dataManager, { layerId = null, limit = 5,
 
   const candidates = [];
   for (const { record } of nearbyRecords) {
-    const position = record.entity?.__localBaseCartesian;
-    if (!position) continue;
-    const screen = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, position);
-    if (!screen || screen.x < 0 || screen.y < 0 || screen.x > width || screen.y > height) continue;
+    const screen = viewer.project?.(record.longitude, record.latitude, 0);
+    if (!screen || screen.visible === false || screen.x < 0 || screen.y < 0 || screen.x > width || screen.y > height) continue;
     const dx = screen.x - centerX;
     const dy = screen.y - centerY;
     candidates.push({
@@ -2599,7 +2626,7 @@ function insertNearestRecord(records, candidate, limit) {
 }
 
 async function getSceneContext(viewer, styleManager, dataManager, viewTarget = null) {
-  const cartographic = Cesium.Cartographic.fromCartesian(viewer.camera.positionWC);
+  const view = cameraView(viewer);
   const basemap = await getBasemapContext(viewer, viewTarget);
   const enabledLayers = dataManager.getAll()
     .filter((layer) => layer.enabled)
@@ -2611,9 +2638,9 @@ async function getSceneContext(viewer, styleManager, dataManager, viewTarget = n
     }));
   return {
     camera: {
-      latitude: Number(Cesium.Math.toDegrees(cartographic.latitude).toFixed(6)),
-      longitude: Number(Cesium.Math.toDegrees(cartographic.longitude).toFixed(6)),
-      heightM: Math.round(cartographic.height),
+      latitude: Number.isFinite(view?.lat) ? Number(view.lat.toFixed(6)) : null,
+      longitude: Number.isFinite(view?.lon) ? Number(view.lon.toFixed(6)) : null,
+      heightM: Number.isFinite(view?.alt) ? Math.round(view.alt) : null,
     },
     basemap,
     style: styleManager.activeStyle || 'normal',
@@ -2624,8 +2651,8 @@ async function getSceneContext(viewer, styleManager, dataManager, viewTarget = n
 async function getBasemapContext(viewer, viewTarget = null) {
   const target = viewTarget;
   const samples = sampleViewportCartographics(viewer);
-  const cameraCartographic = Cesium.Cartographic.fromCartesian(viewer.camera.positionWC);
-  const cameraHeightM = cameraCartographic.height;
+  const cameraHeightM = cameraHeightOf(viewer);
+  const rendered = renderedBasemapLabels(viewer);
   const viewScale = classifyViewScale(cameraHeightM);
   const cachedViewportPlaces = viewportPlacesFromCache(samples, cameraHeightM);
   const viewportPlacesPromise = cachedViewportPlaces
@@ -2638,18 +2665,19 @@ async function getBasemapContext(viewer, viewTarget = null) {
       cachedViewportPlaces
     );
     return {
-      source: 'Google Photorealistic 3D Tiles / Cesium basemap',
-      hasGoogle3DTiles: Boolean(window.__godsEyeView?.tileset),
+      source: basemapSourceLabel(viewer),
+      hasGoogle3DTiles: false,
       viewScale,
       viewportSamples: samples,
       viewportPlaces,
+      renderedLabels: rendered,
       target: null,
       place: null,
     };
   }
 
-  const latitude = Number(Cesium.Math.toDegrees(target.latitude).toFixed(6));
-  const longitude = Number(Cesium.Math.toDegrees(target.longitude).toFixed(6));
+  const latitude = Number(target.lat.toFixed(6));
+  const longitude = Number(target.lon.toFixed(6));
   const inferredCountry = inferCountryFromSamples(samples);
   const knownLandmarks = nearbyKnownLandmarks(latitude, longitude, cameraHeightM);
   const fallbackPlace = coarseBasemapPlace(viewScale, latitude, longitude, inferredCountry);
@@ -2674,11 +2702,12 @@ async function getBasemapContext(viewer, viewTarget = null) {
   const place = resolvedPlace || fallbackPlace;
   const nearbyPlaces = resolvedNearbyPlaces || [];
   return {
-    source: 'Google Photorealistic 3D Tiles / Cesium basemap',
-    hasGoogle3DTiles: Boolean(window.__godsEyeView?.tileset),
+    source: basemapSourceLabel(viewer),
+    hasGoogle3DTiles: false,
     viewScale,
     viewportSamples: samples,
     viewportPlaces,
+    renderedLabels: rendered,
     target: {
       latitude,
       longitude,
@@ -2741,18 +2770,6 @@ function nearbyKnownLandmarks(latitude, longitude, cameraHeightM) {
   return matches.sort((a, b) => a.distanceKm - b.distanceKm).slice(0, 5);
 }
 
-function haversineKm(lat1, lon1, lat2, lon2) {
-  const toRad = (value) => Cesium.Math.toRadians(value);
-  const radiusKm = 6371.0088;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  return 2 * radiusKm * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
 function coarseBasemapPlace(viewScale, latitude, longitude, inferredCountry = null) {
   if (viewScale === 'global') {
     return {
@@ -2777,88 +2794,94 @@ function coarseBasemapPlace(viewScale, latitude, longitude, inferredCountry = nu
   };
 }
 
-function getViewTargetCartographic(viewer) {
+/* ── Motor: câmera, alvo e amostras da viewport ─────────────────────────── */
+
+/** Pose da câmera do motor (semântica Cesium: graus, alt em m) ou null. */
+function cameraView(viewer) {
+  return cameraViewOf(viewer);
+}
+
+function cameraHeightOf(viewer) {
+  const alt = cameraView(viewer)?.alt;
+  return Number.isFinite(alt) ? alt : 0;
+}
+
+/** Posição da câmera como ponto de duas caras (ECEF + graus). */
+function cameraPoint(viewer) {
+  const view = cameraView(viewer);
+  if (!view || !Number.isFinite(view.lat) || !Number.isFinite(view.lon)) return geoPoint(0, 0, 0);
+  return geoPoint(view.lon, view.lat, Number.isFinite(view.alt) ? view.alt : 0);
+}
+
+function isTracking(viewer) {
+  return Boolean(viewer?.trackedTarget);
+}
+
+function viewportSize(viewer) {
+  const el = viewer?.container || viewer?.canvas || null;
+  return {
+    width: el?.clientWidth || el?.width || 0,
+    height: el?.clientHeight || el?.height || 0,
+  };
+}
+
+function basemapSourceLabel(viewer) {
+  const id = viewer?.getBasemap?.() || 'esri';
+  const entry = (viewer?.BASEMAPS || []).find((b) => b.id === id);
+  return `MapLibre basemap (${entry?.label || entry?.name || id})`;
+}
+
+/** Ponto do chão sob a tela em (x, y), ou null (céu/fora do globo). */
+function groundAt(viewer, x, y) {
+  const ll = viewer?.unproject?.(x, y);
+  if (!ll || !Number.isFinite(ll.lat) || !Number.isFinite(ll.lon) || Math.abs(ll.lat) > 90) return null;
+  const lon = ((ll.lon + 540) % 360) - 180;
+  return { lon, lat: ll.lat };
+}
+
+/** {lat, lon, height} do chão no centro da tela (cache curto por pose). */
+function getViewTarget(viewer) {
   const signature = cameraViewSignature(viewer);
   const cached = viewTargetCache.get(viewer);
   if (cached?.signature === signature && performance.now() - cached.cachedAt < 2500) {
     return cached.target;
   }
-  const position = getViewTargetCartesian(viewer);
-  // `fromCartesian` still returns undefined for a point too near the ellipsoid
-  // center to project; normalize that to the same "no target" null the callers
-  // already handle for a missed pick.
-  const target = position ? (Cesium.Cartographic.fromCartesian(position) || null) : null;
-  viewTargetCache.set(viewer, {
-    signature,
-    target,
-    cachedAt: performance.now(),
-  });
+  const point = getViewTargetPoint(viewer);
+  const target = point ? { lat: point.lat, lon: point.lon, height: point.height } : null;
+  if (viewer && typeof viewer === 'object') {
+    viewTargetCache.set(viewer, { signature, target, cachedAt: performance.now() });
+  }
   return target;
 }
 
 function cameraViewSignature(viewer) {
-  const camera = viewer.camera;
-  const cartographic = camera.positionCartographic;
+  const view = cameraView(viewer);
+  if (!view) return 'none';
   return [
-    Cesium.Math.toDegrees(cartographic.latitude).toFixed(5),
-    Cesium.Math.toDegrees(cartographic.longitude).toFixed(5),
-    Math.round(cartographic.height / 2),
-    camera.heading.toFixed(3),
-    camera.pitch.toFixed(3),
+    Number(view.lat).toFixed(5),
+    Number(view.lon).toFixed(5),
+    Math.round((view.alt || 0) / 2),
+    Number(view.heading).toFixed(3),
+    Number(view.pitch).toFixed(3),
   ].join(':');
 }
 
 /**
- * World position under the center of the viewport, or null when the view has no
- * target. Each stage of the cascade is validated before it is accepted: a depth
- * pick over empty sky can return a NaN or center-of-the-earth Cartesian, and
- * converting one of those throws deep inside Cesium. A degenerate pick is a
- * MISSED pick, so it falls through to the next stage rather than poisoning
- * every caller downstream.
+ * Ponto do chão sob o CENTRO da viewport, de duas caras (ECEF x/y/z + graus),
+ * ou null quando a vista não tem alvo. Com relevo ligado a altura vem do
+ * terreno do MapLibre; sem relevo o chão é o plano do mapa (0 m).
  */
-function getViewTargetCartesian(viewer) {
-  const scene = viewer.scene;
-  const canvas = scene.canvas;
-  const width = canvas.clientWidth || canvas.width || 0;
-  const height = canvas.clientHeight || canvas.height || 0;
-  const center = new Cesium.Cartesian2(width / 2, height / 2);
-  let position = null;
-
-  if (scene.pickPositionSupported && typeof scene.pickPosition === 'function') {
-    try {
-      position = scene.pickPosition(center);
-    } catch {
-      position = null;
-    }
-  }
-
-  if (!isPickedWorldPosition(position)
-    && viewer.camera && typeof viewer.camera.pickEllipsoid === 'function') {
-    try {
-      position = viewer.camera.pickEllipsoid(center, Cesium.Ellipsoid.WGS84);
-    } catch {
-      position = null;
-    }
-  }
-
-  if (!isPickedWorldPosition(position)
-    && viewer.camera && typeof viewer.camera.getPickRay === 'function') {
-    try {
-      const ray = viewer.camera.getPickRay(center);
-      position = scene.globe?.pick(ray, scene) || null;
-    } catch {
-      position = null;
-    }
-  }
-
-  return isPickedWorldPosition(position) ? position : null;
+function getViewTargetPoint(viewer) {
+  const { width, height } = viewportSize(viewer);
+  if (!width || !height) return null;
+  const ground = groundAt(viewer, width / 2, height / 2);
+  if (!ground) return null;
+  const floor = engineGroundFloorM(viewer, ground.lat, ground.lon);
+  return geoPoint(ground.lon, ground.lat, Number.isFinite(floor) ? floor : 0);
 }
 
 function sampleViewportCartographics(viewer) {
-  const scene = viewer.scene;
-  const canvas = scene.canvas;
-  const width = canvas.clientWidth || canvas.width || 0;
-  const height = canvas.clientHeight || canvas.height || 0;
+  const { width, height } = viewportSize(viewer);
   if (!width || !height) return [];
 
   const points = [
@@ -2873,19 +2896,51 @@ function sampleViewportCartographics(viewer) {
 
   const samples = [];
   for (const [x, y] of points) {
-    const cartesian = viewer.camera.pickEllipsoid(
-      new Cesium.Cartesian2(width * x, height * y),
-      Cesium.Ellipsoid.WGS84
-    );
-    if (!isPickedWorldPosition(cartesian)) continue;
-    const carto = Cesium.Cartographic.fromCartesian(cartesian);
-    if (!carto) continue;
+    const ground = groundAt(viewer, width * x, height * y);
+    if (!ground) continue;
     samples.push({
-      latitude: Number(Cesium.Math.toDegrees(carto.latitude).toFixed(4)),
-      longitude: Number(Cesium.Math.toDegrees(carto.longitude).toFixed(4)),
+      latitude: Number(ground.lat.toFixed(4)),
+      longitude: Number(ground.lon.toFixed(4)),
     });
   }
   return samples;
+}
+
+const STREET_LABEL_HINT = /(road|street|transportation|highway|motorway|path|rua|via)/i;
+
+/**
+ * Rótulos que o mapa base está DESENHANDO agora (camadas `symbol` que não são
+ * do app): nomes de lugares (cidades, bairros, países, águas) e de vias. É o
+ * equivalente MapLibre de "ler o que está no mapa"; no mapa base satélite com
+ * rótulos raster não há feições vetoriais e a lista fica vazia.
+ */
+function renderedBasemapLabels(viewer) {
+  const empty = { placeLabels: [], streetLabels: [] };
+  const map = viewer?.map;
+  if (!map || typeof map.queryRenderedFeatures !== 'function') return empty;
+  let features = [];
+  try {
+    const layers = (map.getStyle?.()?.layers || [])
+      .filter((layer) => layer.type === 'symbol' && !String(layer.id).startsWith('dg-'))
+      .map((layer) => layer.id);
+    if (!layers.length) return empty;
+    features = map.queryRenderedFeatures(undefined, { layers }) || [];
+  } catch {
+    return empty;
+  }
+  const place = [];
+  const street = [];
+  const seen = new Set();
+  for (const feature of features) {
+    const props = feature?.properties || {};
+    const name = String(props['name:pt'] || props.name || props['name:latin'] || props.name_int || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const layerHint = `${feature.sourceLayer || feature['source-layer'] || ''} ${feature.layer?.id || ''}`;
+    (STREET_LABEL_HINT.test(layerHint) ? street : place).push(name);
+    if (place.length >= 24 && street.length >= 16) break;
+  }
+  return { placeLabels: place.slice(0, 24), streetLabels: street.slice(0, 16) };
 }
 
 function inferCountryFromSamples(samples) {
@@ -3134,7 +3189,7 @@ async function resolveWithin(promise, timeoutMs, fallback) {
 
 function approximateCoordinateDistanceSq(latA, lonA, latB, lonB) {
   const latDelta = latB - latA;
-  const lonDelta = (lonB - lonA) * Math.cos(Cesium.Math.toRadians((latA + latB) / 2));
+  const lonDelta = (lonB - lonA) * Math.cos((((latA + latB) / 2) * Math.PI) / 180);
   return latDelta * latDelta + lonDelta * lonDelta;
 }
 
@@ -3157,39 +3212,6 @@ function dominantValue(values) {
   };
 }
 
-function summarizeEntity(viewer, entity, { includeProperties = false } = {}) {
-  const now = Cesium.JulianDate.now();
-  if (entity.__gevContextId) {
-    const store = window.__gevContextStore;
-    const record = store?.entities?.get(entity.__gevContextId);
-    if (record) return summarizeContextRecord(record, { includeProperties });
-  }
-  const props = propertyObject(entity);
-  const layerId = entity.__localLayerId || props.layerId || null;
-  const tags = props.tags || {};
-  const label = cleanText(
-    props.name ||
-    tags.name ||
-    tags['name:en'] ||
-    tags.official_name ||
-    tags.operator ||
-    props.operator ||
-    entity.name ||
-    layerTitle(layerId)
-  );
-  const position = entity.__localBaseCartesian || entity.position?.getValue?.(now) || polygonCenter(entity, now);
-  const carto = position ? Cesium.Cartographic.fromCartesian(position) : null;
-  return {
-    id: String(entity.id || ''),
-    name: label || layerTitle(layerId),
-    layerId,
-    layerName: layerTitle(layerId),
-    latitude: carto ? Number(Cesium.Math.toDegrees(carto.latitude).toFixed(6)) : null,
-    longitude: carto ? Number(Cesium.Math.toDegrees(carto.longitude).toFixed(6)) : null,
-    properties: includeProperties ? compactProperties(props) : undefined,
-  };
-}
-
 function summarizeContextRecord(record, { includeProperties = false } = {}) {
   return {
     id: String(record.id || ''),
@@ -3202,30 +3224,6 @@ function summarizeContextRecord(record, { includeProperties = false } = {}) {
     properties: includeProperties ? compactProperties(record.properties || {}) : undefined,
     active: isContextRecordActive(record),
   };
-}
-
-function polygonCenter(entity, now) {
-  const hierarchy = entity.polygon?.hierarchy?.getValue?.(now);
-  const positions = hierarchy?.positions;
-  if (!positions?.length) return null;
-  return Cesium.BoundingSphere.fromPoints(positions).center;
-}
-
-function propertyObject(entity) {
-  const raw = entity?.properties?.getValue?.(Cesium.JulianDate.now()) || {};
-  return unwrapProperties(raw);
-}
-
-function unwrapProperties(value) {
-  if (!value || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map(unwrapProperties);
-  const out = {};
-  for (const [key, entry] of Object.entries(value)) {
-    out[key] = entry && typeof entry.getValue === 'function'
-      ? unwrapProperties(entry.getValue(Cesium.JulianDate.now()))
-      : unwrapProperties(entry);
-  }
-  return out;
 }
 
 function compactProperties(props) {
@@ -3329,23 +3327,23 @@ function analystProviders(viewer, dataManager, { recordLimitByLayer = null } = {
       const snapshot = militaryAwarenessLayer.getContextSnapshot?.();
       const subject = snapshot?.subject;
       if (!subject?.position) return null;
-      const carto = Cesium.Cartographic.fromCartesian(subject.position);
-      if (!carto) return null;
+      const where = toLonLat(subject.position);
+      if (!where) return null;
       return {
-        lat: Cesium.Math.toDegrees(carto.latitude),
-        lon: Cesium.Math.toDegrees(carto.longitude),
+        lat: where.lat,
+        lon: where.lon,
         label: subject.label || subject.id || null,
       };
     },
     getViewContext() {
-      const carto = viewer.camera.positionCartographic;
-      const altKm = carto.height / 1000;
+      const view = cameraView(viewer) || { lat: 0, lon: 0, alt: 0 };
+      const altKm = (Number.isFinite(view.alt) ? view.alt : 0) / 1000;
       // View radius scales with altitude: street-level asks stay local,
       // country-level asks sweep wide. Clamped so "in view" is never absurd.
       const viewRadiusKm = Math.max(25, Math.min(2500, altKm * 1.6));
       return {
-        lat: Cesium.Math.toDegrees(carto.latitude),
-        lon: Cesium.Math.toDegrees(carto.longitude),
+        lat: view.lat,
+        lon: view.lon,
         viewRadiusKm,
       };
     },

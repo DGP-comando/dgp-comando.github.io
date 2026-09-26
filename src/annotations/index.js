@@ -6,17 +6,19 @@ import { createHybridAnnotationRenderer } from './hybridAnnotationRenderer.js';
  * for manual/dev use via `window.__gevAnnotations`.
  *
  * This module is the single swap point between annotation rendering strategies.
- * The HYBRID renderer uses world-space draping for
- * footprints + screen-space SVG for callouts/rings/arrows. The engine, resolver,
- * and voice tool wiring are shared across rendering strategies.
+ * The HYBRID renderer draws footprints/routes as MapLibre GeoJSON layers
+ * (`dg-annotations*`) and callouts/rings/arrows as a screen-space SVG overlay
+ * re-projected with `engine.project`. The engine, resolver, and voice tool
+ * wiring are shared across rendering strategies.
+ *
+ * @param {object} options
+ * @param {object} options.engine Motor MapLibre (src/maplibre/engine.js).
+ * @param {object} [options.viewer] Sinônimo antigo de `engine`.
  */
-export function initAnnotations({ viewer, tileset = null }) {
-  // World-space footprint draping; clamped marks can use the photoreal tiles.
-  if (tileset) {
-    try { tileset.enableCollision = true; } catch { /* older tileset */ }
-  }
-  const renderer = createHybridAnnotationRenderer(viewer);
-  const engine = createAnnotationEngine({ viewer, renderer });
-  window.__gevAnnotations = engine;
-  return engine;
+export function initAnnotations({ engine = null, viewer = null } = {}) {
+  const mapEngine = engine || viewer;
+  const renderer = createHybridAnnotationRenderer(mapEngine);
+  const annotations = createAnnotationEngine({ viewer: mapEngine, renderer });
+  window.__gevAnnotations = annotations;
+  return annotations;
 }

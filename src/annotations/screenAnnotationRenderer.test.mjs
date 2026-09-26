@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as Cesium from 'cesium';
 import { createScreenAnnotationRenderer } from './screenAnnotationRenderer.js';
 
 class FakeClassList {
@@ -130,6 +129,26 @@ function fakeDocument() {
   };
 }
 
+/**
+ * Motor MapLibre falso. `projectFn(lon, lat)` decide a projeção; cada chamada
+ * fica registrada para o teste saber de onde a marca foi projetada.
+ */
+function fakeEngine({ width = 1280, height = 720, projectFn = () => ({ x: 0, y: 0, visible: true }) } = {}) {
+  const projected = [];
+  const engine = {
+    container: { clientWidth: width, clientHeight: height },
+    trackedTarget: null,
+    getCameraView: () => ({ alt: 1000 }),
+    on: () => () => {},
+    project(lon, lat) {
+      projected.push([Number(lon.toFixed(4)), Number(lat.toFixed(4))]);
+      return engine.projectFn(lon, lat);
+    },
+    projectFn,
+  };
+  return { engine, projected };
+}
+
 function findAnnotationGroup(document) {
   const layer = document.body.children.find((child) => child.classList.contains('gev-screen-whiteboard'));
   const svg = layer.children.find((child) => child.classList.contains('gev-screen-whiteboard-svg'));
@@ -151,27 +170,8 @@ test('outline upgrade preserves the existing SVG group identity', (t) => {
     else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   });
 
-  const camera = {
-    positionWC: Cesium.Cartesian3.ZERO,
-    directionWC: Cesium.Cartesian3.ZERO,
-    positionCartographic: { height: 1000 },
-  };
-  const sampledAnchors = [];
-  const scene = {
-    camera,
-    canvas: { clientWidth: 1280, clientHeight: 720, width: 1280, height: 720 },
-    clampToHeightSupported: true,
-    clampToHeight(world) {
-      const cartographic = Cesium.Cartographic.fromCartesian(world);
-      sampledAnchors.push([
-        Number(Cesium.Math.toDegrees(cartographic.longitude).toFixed(4)),
-        Number(Cesium.Math.toDegrees(cartographic.latitude).toFixed(4)),
-      ]);
-      return world;
-    },
-    postRender: { addEventListener() {}, removeEventListener() {} },
-  };
-  const renderer = createScreenAnnotationRenderer({ scene, camera, trackedEntity: null });
+  const { engine, projected: sampledAnchors } = fakeEngine();
+  const renderer = createScreenAnnotationRenderer(engine);
   const anno = {
     id: 'anno-fb3',
     type: 'area',
@@ -204,33 +204,19 @@ test('outline upgrade preserves the existing SVG group identity', (t) => {
 test('annotation fade consumes the actual tracked host paint rectangle after layout', (t) => {
   const originalDocument = globalThis.document;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  const originalProjection = Cesium.SceneTransforms.worldToWindowCoordinates;
   globalThis.document = fakeDocument();
   globalThis.requestAnimationFrame = (callback) => { callback(); return 1; };
-  Cesium.SceneTransforms.worldToWindowCoordinates = () => ({ x: 0, y: 0 });
   t.after(() => {
-    Cesium.SceneTransforms.worldToWindowCoordinates = originalProjection;
     if (originalDocument === undefined) delete globalThis.document;
     else globalThis.document = originalDocument;
     if (originalRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
     else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   });
 
-  const positionWC = Cesium.Cartesian3.fromDegrees(0, 0, 1000);
-  const directionWC = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.negate(positionWC, new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
-  );
-  const camera = { positionWC, directionWC, positionCartographic: { height: 1000 } };
-  const scene = {
-    camera,
-    canvas: { clientWidth: 800, clientHeight: 600, width: 800, height: 600 },
-    clampToHeightSupported: false,
-    postRender: { addEventListener() {}, removeEventListener() {} },
-  };
+  const { engine } = fakeEngine({ width: 800, height: 600 });
   const paintRectCalls = [];
   const renderer = createScreenAnnotationRenderer(
-    { scene, camera, trackedEntity: null },
+    engine,
     {
       activeTrackedReadoutId: () => 'installations:test',
       overlayPaintRect(sourceId, entryId) {
@@ -270,30 +256,17 @@ test('annotation fade consumes the actual tracked host paint rectangle after lay
 test('an add that throws after inserting its group unwinds instead of orphaning it', (t) => {
   const originalDocument = globalThis.document;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  const originalProjection = Cesium.SceneTransforms.worldToWindowCoordinates;
   globalThis.document = fakeDocument();
   globalThis.requestAnimationFrame = (callback) => { callback(); return 1; };
   t.after(() => {
-    Cesium.SceneTransforms.worldToWindowCoordinates = originalProjection;
     if (originalDocument === undefined) delete globalThis.document;
     else globalThis.document = originalDocument;
     if (originalRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
     else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   });
 
-  const positionWC = Cesium.Cartesian3.fromDegrees(0, 0, 1000);
-  const directionWC = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.negate(positionWC, new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
-  );
-  const camera = { positionWC, directionWC, positionCartographic: { height: 1000 } };
-  const scene = {
-    camera,
-    canvas: { clientWidth: 1280, clientHeight: 720, width: 1280, height: 720 },
-    clampToHeightSupported: false,
-    postRender: { addEventListener() {}, removeEventListener() {} },
-  };
-  const renderer = createScreenAnnotationRenderer({ scene, camera, trackedEntity: null });
+  const { engine } = fakeEngine();
+  const renderer = createScreenAnnotationRenderer(engine);
   const anno = {
     id: 'anno-partial-screen',
     type: 'pin',
@@ -306,9 +279,9 @@ test('an add that throws after inserting its group unwinds instead of orphaning 
   // The group is in the document and recorded by the time add() reaches its
   // first projection pass — so a throw there is real partial state, not a
   // clean bail-out.
-  Cesium.SceneTransforms.worldToWindowCoordinates = () => { throw new Error('projection failed'); };
+  engine.projectFn = () => { throw new Error('projection failed'); };
   assert.throws(() => renderer.add(anno), /projection failed/);
-  Cesium.SceneTransforms.worldToWindowCoordinates = () => ({ x: 0, y: 0 });
+  engine.projectFn = () => ({ x: 0, y: 0, visible: true });
   const { svg } = findAnnotationGroup(globalThis.document);
   assert.equal(
     svg.children.filter((child) => child.classList.contains('gev-anno')).length,

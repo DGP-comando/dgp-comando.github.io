@@ -5,9 +5,9 @@ import { createScreenAnnotationRenderer } from './screenAnnotationRenderer.js';
  * Hybrid annotation renderer (Direction C — the recommended production blend).
  *
  * Routes each mark to the renderer that does it best:
- *   - `area` footprints  → WORLD-space, so the outline/fill drapes onto and
- *     conforms to the real 3D building/ground geometry (screen-space can only
- *     draw a flat polygon that ignores relief and building tops).
+ *   - `area` footprints and routes → WORLD-space (MapLibre GeoJSON layers), so
+ *     the outline/fill sits on the map and follows the globe/terrain without
+ *     per-frame reprojection (prédio isolado vira extrusão 2,5D).
  *   - everything else (highlight / pin / arrow / label) → SCREEN-space SVG, for
  *     the hand-drawn "whiteboard" aesthetic: pulsing reticles, bowed arrows,
  *     and glassy callout cards with leader lines.
@@ -43,7 +43,7 @@ export function createHybridAnnotationRenderer(viewer) {
         screen.add(entry.screenProxy);
       }
     } else if (anno.type === 'route' && Array.isArray(anno.path) && anno.path.length >= 2) {
-      // Drape the path on the tiles (world), caption it with a screen callout
+      // Draw the path as a map layer (world), caption it with a screen callout
       // at the path midpoint.
       entry.worldProxy = liveProxy(anno, { label: null });
       world.add(entry.worldProxy);

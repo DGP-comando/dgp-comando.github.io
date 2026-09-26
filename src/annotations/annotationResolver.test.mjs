@@ -154,15 +154,10 @@ test('refineScope: entityKind refines only an unresolved (auto) scope', () => {
   assert.equal(refineScope('neighborhood', 'street'), 'neighborhood');
 });
 
+/** Motor MapLibre falso com a câmera a 1 km sobre Austin (sem mapa: sem pick de tela). */
 function closeViewportViewer() {
   return {
-    camera: {
-      positionCartographic: {
-        latitude: 30.2672 * Math.PI / 180,
-        longitude: -97.7431 * Math.PI / 180,
-        height: 1000,
-      },
-    },
+    getCameraView: () => ({ lat: 30.2672, lon: -97.7431, alt: 1000, heading: 0, pitch: -90, zoom: 15 }),
   };
 }
 

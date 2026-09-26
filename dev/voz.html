@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bancada da voz (dev)</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0a0a0f; color: #e8eaed; font: 12px 'JetBrains Mono', monospace; }
+    #map { position: absolute; inset: 0; }
+    #log { position: absolute; left: 8px; bottom: 8px; max-width: 50%; max-height: 40%; overflow: auto; background: rgba(0,0,0,.7); padding: 6px 8px; white-space: pre-wrap; z-index: 10; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <pre id="log"></pre>
+  <script type="module" src="./voz.js"></script>
+</body>
+</html>

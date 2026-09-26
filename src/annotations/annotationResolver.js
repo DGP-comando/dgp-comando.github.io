@@ -1,8 +1,7 @@
-import * as Cesium from 'cesium';
 import { lookupNeighborhoodRing } from '../data/neighborhoodPolygons.js';
+import { cameraViewOf } from '../voice/geo3d.js';
 import { lookupNaturalRegionOutline, findNaturalRegion } from '../data/naturalEarthRegions.js';
 import { registerDynamicCredit, NATURAL_EARTH_CREDIT } from '../data/dataCredits.js';
-import { isPickedWorldPosition } from '../data/scenePick.js';
 
 /**
  * Annotation target resolver.
@@ -69,7 +68,7 @@ function linkAbort(controller, externalSignal) {
  * Resolve a single annotation target to a normalized world anchor.
  *
  * @param {object} opts
- * @param {Cesium.Viewer} opts.viewer
+ * @param {object} opts.viewer Motor MapLibre (src/maplibre/engine.js)
  * @param {string} [opts.target]      Place name to geocode.
  * @param {number} [opts.latitude]    Explicit latitude (wins over target).
  * @param {number} [opts.longitude]   Explicit longitude.
@@ -586,7 +585,7 @@ function exceedsScopeArea(fp, scope) {
 function ringAreaM2(ring) {
   if (!Array.isArray(ring) || ring.length < 3) return 0;
   const mLat = 111_320;
-  const mLon = mLat * Math.cos(Cesium.Math.toRadians(ring[0][1]));
+  const mLon = mLat * Math.cos((ring[0][1] * Math.PI) / 180);
   let area = 0;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const xi = ring[i][0] * mLon;
@@ -1726,7 +1725,7 @@ function approximateAreaM2(coords) {
   if (coords.length < 3) return 0;
   const lat0 = coords[0].lat;
   const mPerDegLat = 111_320;
-  const mPerDegLon = mPerDegLat * Math.cos(Cesium.Math.toRadians(lat0));
+  const mPerDegLon = mPerDegLat * Math.cos((lat0 * Math.PI) / 180);
   let area = 0;
   for (let i = 0, j = coords.length - 1; i < coords.length; j = i++) {
     const xi = coords[i].lon * mPerDegLon;
@@ -1740,7 +1739,7 @@ function approximateAreaM2(coords) {
 
 function approximateDistanceM(latA, lonA, latB, lonB) {
   const latScale = 111_320;
-  const lonScale = latScale * Math.cos(Cesium.Math.toRadians((latA + latB) / 2));
+  const lonScale = latScale * Math.cos((((latA + latB) / 2) * Math.PI) / 180);
   return Math.hypot((latB - latA) * latScale, (lonB - lonA) * lonScale);
 }
 
@@ -1792,11 +1791,10 @@ function wordOverlap(left, right) {
  */
 function viewportProximity(viewer) {
   try {
-    const carto = viewer?.camera?.positionCartographic;
-    if (!carto) return null;
-    const lat = Cesium.Math.toDegrees(carto.latitude);
-    const lon = Cesium.Math.toDegrees(carto.longitude);
-    const radiusKm = Math.max((carto.height / 1000) * 3, 5);
+    const view = cameraViewOf(viewer);
+    if (!view) return null;
+    const { lat, lon } = view;
+    const radiusKm = Math.max(((Number(view.alt) || 0) / 1000) * 3, 5);
     if (![lat, lon, radiusKm].every(Number.isFinite)) return null;
     return { lat, lon, radiusKm };
   } catch {
@@ -1807,12 +1805,17 @@ function viewportProximity(viewer) {
 /** Exported for searchAndFlyTo (src/locations.js), which shares this bias. */
 export function viewportBias(viewer) {
   try {
-    const rect = viewer?.camera?.computeViewRectangle?.();
-    if (!rect) return null;
-    const swLat = Cesium.Math.toDegrees(rect.south).toFixed(4);
-    const swLng = Cesium.Math.toDegrees(rect.west).toFixed(4);
-    const neLat = Cesium.Math.toDegrees(rect.north).toFixed(4);
-    const neLng = Cesium.Math.toDegrees(rect.east).toFixed(4);
+    // Globo muito afastado (horizonte em quadro): sem retângulo útil, como o
+    // computeViewRectangle do Cesium devolvia undefined.
+    const view = viewer?.getCameraView?.();
+    if (!view || view.pitch > -20 || view.zoom < 3) return null;
+    const bounds = viewer?.map?.getBounds?.();
+    if (!bounds) return null;
+    const clampLat = (v) => Math.max(-90, Math.min(90, v));
+    const swLat = clampLat(bounds.getSouth()).toFixed(4);
+    const swLng = bounds.getWest().toFixed(4);
+    const neLat = clampLat(bounds.getNorth()).toFixed(4);
+    const neLng = bounds.getEast().toFixed(4);
     if ([swLat, swLng, neLat, neLng].some((v) => v === 'NaN')) return null;
     return `${swLat},${swLng}|${neLat},${neLng}`;
   } catch {
@@ -1848,65 +1851,34 @@ export async function placesNearViewRecovery(viewer, query, geocoded = null, sig
  * name the place, and we anchor the mark to the actual world point under it.
  */
 function pickWorldFromScreen(viewer, nx, ny) {
-  const scene = viewer?.scene;
-  if (!scene) return null;
-  const canvas = scene.canvas;
-  const w = canvas.clientWidth || canvas.width || 0;
-  const h = canvas.clientHeight || canvas.height || 0;
+  const el = viewer?.container || viewer?.canvas;
+  if (!el || typeof viewer.unproject !== 'function') return null;
+  const w = el.clientWidth || el.width || 0;
+  const h = el.clientHeight || el.height || 0;
   if (!w || !h) return null;
   const px = Math.max(0, Math.min(1, nx)) * w;
   const py = Math.max(0, Math.min(1, ny)) * h;
-  const pos = new Cesium.Cartesian2(px, py);
-
-  // Each stage is validated before it is accepted: a depth pick over empty sky
-  // can return a NaN or centre-of-the-earth Cartesian, and converting one of
-  // those throws inside Cesium. A degenerate pick IS a missed pick, so it falls
-  // through to the next stage and ultimately to the caller's null.
-  let cart = null;
-  if (scene.pickPositionSupported && typeof scene.pickPosition === 'function') {
-    try { cart = scene.pickPosition(pos); } catch { cart = null; }
-  }
-  if (!isPickedWorldPosition(cart) && typeof viewer.camera.pickEllipsoid === 'function') {
-    try { cart = viewer.camera.pickEllipsoid(pos, Cesium.Ellipsoid.WGS84); } catch { cart = null; }
-  }
-  if (!isPickedWorldPosition(cart) && typeof viewer.camera.getPickRay === 'function') {
-    try {
-      const ray = viewer.camera.getPickRay(pos);
-      cart = ray ? (scene.globe?.pick(ray, scene) || null) : null;
-    } catch { cart = null; }
-  }
-  if (!isPickedWorldPosition(cart)) return null;
-  const carto = Cesium.Cartographic.fromCartesian(cart);
-  if (!carto) return null;
-  return {
-    lat: Cesium.Math.toDegrees(carto.latitude),
-    lon: Cesium.Math.toDegrees(carto.longitude),
-  };
+  // unproject já considera o relevo quando ligado. Fora do globo (céu) ou valor
+  // degenerado = pick perdido → null para o chamador.
+  let ll = null;
+  try { ll = viewer.unproject(px, py); } catch { ll = null; }
+  if (!ll || !Number.isFinite(ll.lat) || !Number.isFinite(ll.lon) || Math.abs(ll.lat) > 90) return null;
+  return { lat: ll.lat, lon: ((ll.lon + 540) % 360) - 180 };
 }
 
 /**
- * Best-effort ground height at a coordinate. The Cesium globe is hidden behind
- * the Google 3D tiles, so we try to clamp onto the photoreal tile surface; if
- * the tiles for that spot aren't loaded we fall back to the ellipsoid (0).
+ * Best-effort ground height at a coordinate: relevo do MapLibre quando ligado
+ * (o ladrilho pode não ter chegado — cai para 0), 0 sem relevo. As marcas são
+ * desenhadas coladas ao mapa, então a altura só informa a câmera de enquadramento.
  */
 function sampleGroundHeight(viewer, lon, lat) {
-  const scene = viewer?.scene;
-  if (!scene) return 0;
   try {
-    if (scene.clampToHeightSupported && typeof scene.clampToHeight === 'function') {
-      const carto = Cesium.Cartographic.fromDegrees(lon, lat);
-      const surface = Cesium.Cartographic.toCartesian(carto);
-      const clamped = scene.clampToHeight(surface);
-      if (clamped) {
-        const h = Cesium.Cartographic.fromCartesian(clamped).height;
-        if (Number.isFinite(h)) return h;
-      }
-    }
+    if (!viewer?.hasTerrain?.()) return 0;
+    const h = viewer.map?.queryTerrainElevation?.([lon, lat]);
+    return Number.isFinite(h) && h > 0 ? h : 0;
   } catch {
-    /* tiles not ready — fall through */
+    return 0;
   }
-  const globeHeight = scene.globe?.getHeight?.(Cesium.Cartographic.fromDegrees(lon, lat));
-  return Number.isFinite(globeHeight) && globeHeight > 0 ? globeHeight : 0;
 }
 
 function shortLabel(formattedAddress) {

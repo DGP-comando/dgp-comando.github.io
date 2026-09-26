@@ -1,5 +1,5 @@
-import * as Cesium from 'cesium';
 import { getOverlayPaintRect } from '../overlays/worldOverlay.js';
+import { cameraViewOf } from '../voice/geo3d.js';
 import {
   getActiveTrackedReadoutId,
   TRACKED_OVERLAY_SOURCE_ID,
@@ -10,16 +10,16 @@ import {
  *
  * Same world-anchored data model as the world-space renderer, but drawn as an
  * SVG overlay that is RE-PROJECTED every frame from the world coordinates via
- * `SceneTransforms.worldToWindowCoordinates`. That gives the best of both:
+ * `engine.project` (MapLibre; considera o relevo quando ligado). That gives the best of both:
  *
  *   - World-anchored, so marks PERSIST and track as the camera moves/orbits
  *     (unlike a frame-bound pixel overlay that has to clear on camera motion).
  *   - SVG-rendered, so we get the hand-drawn explainer look — sketchy strokes,
  *     pulsing rings, draw-on outlines, arrows, and glassy callout cards with
- *     leader lines — that native Cesium primitives can't express as nicely.
+ *     leader lines — that native map layers can't express as nicely.
  *
- * Marks behind the globe horizon are culled with an EllipsoidalOccluder, and
- * anything that projects off-screen / behind the camera is hidden.
+ * Marks behind the globe horizon (engine.project → visible:false) and anything
+ * that projects far off-screen are hidden.
  *
  * Screen-renderer contract (update is used by the hybrid outline-upgrade path):
  *   add(anno) / update(anno) / remove(anno) / sync(map) / destroy()
@@ -59,75 +59,31 @@ export function createScreenAnnotationRenderer(viewer, {
   const { layer, svg, defs } = buildOverlay();
   document.body.appendChild(layer);
 
-  const scene = viewer.scene;
-  const occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, scene.camera.positionWC);
+  const engine = viewer;
   const records = new Map(); // anno.id -> { anno, group, parts }
-  const scratch = new Cesium.Cartesian2();
-  const scratchDir = new Cesium.Cartesian3();
-  // Per-point ground height cache. Marks must sit on the real surface, not at
-  // sea level — otherwise in elevated cities (Austin ~150 m) they project
-  // underground and parallax sinks them at oblique angles. Sampled once the
-  // tiles under the point load, then settled (stable, no per-frame jitter).
-  const heightCache = new Map();
-  const HEIGHT_CACHE_SOFT = 600; // target size; over this we evict keys not used this frame
-  const HEIGHT_CACHE_HARD = 8000; // absolute ceiling (one big ring + others) — never exceeded
-  let projGen = 0; // bumped each projection frame; entries used this frame are "hot"
-  function trimHeightCache() {
-    if (heightCache.size <= HEIGHT_CACHE_SOFT) return;
-    // Evict COLD keys first (not touched this frame), so a single large area/route
-    // — the screen renderer can project a ring up to ~4000 points — cannot churn its
-    // OWN active heights out of cache and force a clampToHeight every frame.
-    for (const [k, v] of heightCache) {
-      if (heightCache.size <= HEIGHT_CACHE_SOFT) break;
-      if (v.gen !== projGen) heightCache.delete(k);
-    }
-    // Backstop if a single frame legitimately needs more than the soft cap.
-    while (heightCache.size > HEIGHT_CACHE_HARD) {
-      const oldest = heightCache.keys().next().value;
-      if (oldest === undefined) break;
-      heightCache.delete(oldest);
-    }
-  }
 
   // Re-project every annotation each rendered frame so marks stay glued to the
-  // world. postRender runs after the camera/tiles update, so positions are exact.
-  const onPostRender = () => projectAll();
-  scene.postRender.addEventListener(onPostRender);
+  // world ('render' do motor dispara a cada quadro desenhado, inclusive durante
+  // voos e arrastes).
+  const onRender = () => projectAll();
+  const removeRenderListener = typeof engine?.on === 'function' ? engine.on('render', onRender) : () => {};
 
   function color(anno) {
     return PALETTE[anno.color] || PALETTE.primary;
   }
 
-  // Best-effort surface height under a coordinate (clamps onto the 3D tiles).
-  // Returns 0 until the tile loads, then caches the validated height.
-  function groundHeight(lon, lat) {
-    const key = `${lon.toFixed(5)},${lat.toFixed(5)}`;
-    const cached = heightCache.get(key);
-    if (cached && cached.settled) {
-      // Mark hot for this frame + bump to most-recently-used so heights for live
-      // marks survive eviction while places we've navigated away from age out.
-      cached.gen = projGen;
-      heightCache.delete(key);
-      heightCache.set(key, cached);
-      return cached.h;
-    }
+  /** Retângulo do mapa na página (a camada SVG é fixa na viewport). */
+  function viewportRect() {
+    const el = engine?.container || engine?.canvas || null;
+    const w = el?.clientWidth || el?.width || 0;
+    const h = el?.clientHeight || el?.height || 0;
+    let left = 0;
+    let top = 0;
     try {
-      if (scene.clampToHeightSupported && typeof scene.clampToHeight === 'function') {
-        const c = scene.clampToHeight(Cesium.Cartesian3.fromDegrees(lon, lat, 0));
-        if (c) {
-          const h = Cesium.Cartographic.fromCartesian(c).height;
-          if (Number.isFinite(h) && h > -430 && h < 9000) {
-            heightCache.set(key, { h, settled: true, gen: projGen });
-            trimHeightCache();
-            return h;
-          }
-        }
-      }
-    } catch { /* tiles not ready */ }
-    const fallback = cached ? cached.h : 0;
-    heightCache.set(key, { h: fallback, settled: false, gen: projGen });
-    trimHeightCache();
-    return fallback;
+      const r = el?.getBoundingClientRect?.();
+      if (r) { left = r.left || 0; top = r.top || 0; }
+    } catch { /* sem layout */ }
+    return { left, top, w, h };
   }
 
   function add(anno) {
@@ -192,7 +148,7 @@ export function createScreenAnnotationRenderer(viewer, {
     }
 
     // Record the mark BEFORE it touches the live document, then unwind on any
-    // throw from here down (projectAll reaches into Cesium and can fail on a
+    // throw from here down (projectAll reaches into the map engine and can fail on a
     // lost context). Previously a throw past the DOM insert left an ORPHANED
     // <g>: the engine's rollback only deletes its own map entry, so the next
     // annotate of the same geometry stacked a fresh mark on top of the corpse.
@@ -221,7 +177,6 @@ export function createScreenAnnotationRenderer(viewer, {
       // fade out, and the caller (engine rollback) must find a clean board.
       records.delete(anno.id);
       try { group.remove(); } catch { /* never inserted */ }
-      if (records.size === 0) heightCache.clear();
       throw error;
     }
   }
@@ -266,25 +221,15 @@ export function createScreenAnnotationRenderer(viewer, {
   }
 
   function project(lon, lat) {
-    // Anchor at the real surface height (cached + validated), so marks sit on
-    // the ground/building instead of at sea level. The settle-once cache keeps
-    // it stable (no per-frame jitter that earlier broke nearby projections).
-    const world = Cesium.Cartesian3.fromDegrees(lon, lat, groundHeight(lon, lat));
-    // Reject points behind the camera (they produce wrapped/extreme coords).
-    Cesium.Cartesian3.subtract(world, scene.camera.positionWC, scratchDir);
-    if (Cesium.Cartesian3.dot(scratchDir, scene.camera.directionWC) <= 0) return null;
-    // Reject points beyond the globe horizon.
-    if (!occluder.isPointVisible(world)) return null;
-    const win = Cesium.SceneTransforms.worldToWindowCoordinates(scene, world, scratch);
-    if (!win || !Number.isFinite(win.x) || !Number.isFinite(win.y)) return null;
+    const p = engine.project(lon, lat, 0);
+    if (!p || p.visible === false || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
     // Reject absurd off-screen projections (anchor not in view).
-    const w = scene.canvas.clientWidth || scene.canvas.width;
-    const h = scene.canvas.clientHeight || scene.canvas.height;
-    if (win.x < -w || win.x > 2 * w || win.y < -h || win.y > 2 * h) return null;
-    return { x: win.x, y: win.y };
+    const { w, h } = viewportRect();
+    if (w && h && (p.x < -w || p.x > 2 * w || p.y < -h || p.y > 2 * h)) return null;
+    return { x: p.x, y: p.y };
   }
 
-  // Tracked-entity z-order: the tracked aircraft is a Cesium billboard in the
+  // Tracked-entity z-order: the tracked aircraft is drawn in the map
   // CANVAS, which sits BELOW this SVG overlay (z-90, HTML over canvas). So a screen mark
   // could hide it. After layout, any mark whose ACTUAL projected bounding box (rings,
   // leader, polygon, route line, callout card — not just the anchor) INTERSECTS the
@@ -294,15 +239,8 @@ export function createScreenAnnotationRenderer(viewer, {
   const TRACKED_BBOX_MARGIN = 8;     // px buffer added around the footprint
   const TRACKED_FADE_EASE = 0.22;    // per-frame ease toward hidden(0) / visible(1)
   const TRACKED_HYSTERESIS_PX = 18;  // dead-band so the overlap test can't flip-flop
-  const _scratchTrackedWin = new Cesium.Cartesian2();
+  const TRACKED_ICON_PX = 28;        // pegada nominal do ícone do alvo seguido no mapa
 
-  // Evaluate a NearFarScalar (billboard scaleByDistance) at a camera distance.
-  function nearFarValue(nfs, dist) {
-    if (dist <= nfs.near) return nfs.nearValue;
-    if (dist >= nfs.far) return nfs.farValue;
-    const t = (dist - nfs.near) / (nfs.far - nfs.near);
-    return nfs.nearValue + t * (nfs.farValue - nfs.nearValue);
-  }
   // Tracked-subject screen footprint, or null when neither host card nor native
   // tracked graphic painted. The host rectangle is authoritative for the card.
   function trackedEntityRect() {
@@ -315,32 +253,18 @@ export function createScreenAnnotationRenderer(viewer, {
     let top = painted?.y;
     let bottom = painted ? painted.y + painted.h : undefined;
 
-    const ent = viewer.trackedEntity;
-    const now = Cesium.JulianDate.now();
-    const world = typeof ent?.gevDisplayPosition === 'function'
-      ? ent.gevDisplayPosition()
-      : null;
-    const win = world
-      ? Cesium.SceneTransforms.worldToWindowCoordinates(scene, world, _scratchTrackedWin)
-      : null;
-
-    // Billboard box — centered on the anchor, magnified by scaleByDistance.
-    const bb = ent?.billboard;
-    if (bb && win && Number.isFinite(win.x) && Number.isFinite(win.y)) {
-      const baseW = bb.width?.getValue?.(now) ?? 28;
-      const baseH = bb.height?.getValue?.(now) ?? 28;
-      let scale = 1;
-      const sbd = bb.scaleByDistance?.getValue?.(now);
-      if (sbd) scale = nearFarValue(sbd, Cesium.Cartesian3.distance(scene.camera.positionWC, world));
-      const hw = (baseW * scale) / 2; const hh = (baseH * scale) / 2;
-      const bbLeft = win.x - hw;
-      const bbRight = win.x + hw;
-      const bbTop = win.y - hh;
-      const bbBottom = win.y + hh;
-      left = Number.isFinite(left) ? Math.min(left, bbLeft) : bbLeft;
-      right = Number.isFinite(right) ? Math.max(right, bbRight) : bbRight;
-      top = Number.isFinite(top) ? Math.min(top, bbTop) : bbTop;
-      bottom = Number.isFinite(bottom) ? Math.max(bottom, bbBottom) : bbBottom;
+    // Ícone do alvo seguido pelo motor (engine.track): caixa nominal no ponto projetado.
+    let win = null;
+    try {
+      const pos = engine?.trackedTarget?.getPosition?.();
+      win = pos ? engine.project(pos.lon, pos.lat, pos.alt || 0) : null;
+    } catch { win = null; }
+    if (win && win.visible !== false && Number.isFinite(win.x) && Number.isFinite(win.y)) {
+      const half = TRACKED_ICON_PX / 2;
+      left = Number.isFinite(left) ? Math.min(left, win.x - half) : win.x - half;
+      right = Number.isFinite(right) ? Math.max(right, win.x + half) : win.x + half;
+      top = Number.isFinite(top) ? Math.min(top, win.y - half) : win.y - half;
+      bottom = Number.isFinite(bottom) ? Math.max(bottom, win.y + half) : win.y + half;
     }
     if (![left, right, top, bottom].every(Number.isFinite)) return null;
 
@@ -350,14 +274,24 @@ export function createScreenAnnotationRenderer(viewer, {
 
   function projectAll() {
     if (!records.size) return;
-    projGen += 1; // new frame: entries touched below are "hot" and survive trimming
     const trackedRect = trackedEntityRect();
-    occluder.cameraPosition = scene.camera.positionWC;
-    const h = scene.canvas.clientHeight || scene.canvas.height;
-    const w = scene.canvas.clientWidth || scene.canvas.width;
+    const { left, top, w, h } = viewportRect();
+    // A camada cobre exatamente o mapa, então as coordenadas do engine.project
+    // (px CSS do container) valem direto no viewBox.
+    if (layer.style) {
+      layer.style.left = `${left}px`;
+      layer.style.top = `${top}px`;
+      layer.style.width = `${w}px`;
+      layer.style.height = `${h}px`;
+    }
     svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
     // Shrink point-marker geometry as the camera pulls back (declutter the blob).
-    const mScale = markScale(viewer.camera.positionCartographic?.height ?? 1000);
+    let camAlt = 1000;
+    try {
+      const alt = cameraViewOf(engine)?.alt;
+      if (Number.isFinite(alt)) camAlt = alt;
+    } catch { /* motor em desmontagem */ }
+    const mScale = markScale(camAlt);
 
     for (const rec of records.values()) {
       const { anno, group, parts } = rec;
@@ -503,20 +437,17 @@ export function createScreenAnnotationRenderer(viewer, {
     const node = rec.group;
     window.setTimeout(() => { try { node.remove(); } catch { /* gone */ } }, 360);
     records.delete(anno.id);
-    // Board emptied → drop accumulated height samples (natural reset point).
-    if (records.size === 0) heightCache.clear();
   }
 
   function sync() {
-    // Positioning is driven by the postRender loop; nothing to batch here.
+    // Positioning is driven by the render loop; this catches alpha changes too.
     projectAll();
   }
 
   function destroy() {
-    try { scene.postRender.removeEventListener(onPostRender); } catch { /* torn down */ }
+    try { removeRenderListener(); } catch { /* torn down */ }
     try { layer.remove(); } catch { /* gone */ }
     records.clear();
-    heightCache.clear();
   }
 
   return { add, update, remove, sync, destroy };
@@ -645,7 +576,7 @@ function injectStyles() {
   const style = document.createElement('style');
   style.id = 'gev-screen-whiteboard-styles';
   style.textContent = `
-  .gev-screen-whiteboard { position: fixed; inset: 0; pointer-events: none; z-index: 90; }
+  .gev-screen-whiteboard { position: fixed; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 90; }
   .gev-screen-whiteboard-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
   /* No CSS opacity transition here on purpose: group opacity is driven per-frame in JS
      (the 260ms fade-in via computeAlpha, and the tracked-entity z-order ease). A CSS

@@ -89,8 +89,8 @@ test('voice Cockpit entry reaches the camera only through stamping seams', () =>
   //
   // The transaction has exactly two camera-owner mutations, and each one
   // stamps:
-  //   1. selectedLayer.trackById(id) -> viewer.trackedEntity
-  //        -> viewer.trackedEntityChanged -> _stampNavigation()
+  //   1. selectedLayer.trackById(id) -> engine.track(target)
+  //        -> engine 'trackedchange' -> _stampNavigation()
   //   2. cockpitView.enter() -> onCameraTakeover() -> _stampNavigation()
   const transaction = body(
     cockpitTracking,
@@ -110,7 +110,7 @@ test('voice Cockpit entry reaches the camera only through stamping seams', () =>
   // Seam 1: any tracker handoff stamps, so the adoption step is covered.
   assert.match(
     ui,
-    /viewer\.trackedEntityChanged\.addEventListener\(\(entity\) => \{\s*if \(entity && !this\._disposed\) this\._stampNavigation\(\{ cancelPendingSelection: false \}\);/,
+    /viewer\.on\('trackedchange', \(target\) => \{\s*if \(target && !this\._disposed\) this\._stampNavigation\(\{ cancelPendingSelection: false \}\);/,
     'tracker handoff must stamp',
   );
   // Seam 2 is pinned by "Cockpit takeover invalidates deferred work" above.
@@ -186,10 +186,11 @@ test('accepted navigation releases through PR15-aware ownership before flight', 
     'origin: trackingOrigin',
     'satellitesLayer.stopTracking?.({ origin: trackingOrigin })',
     'rocketLaunchesLayer.releaseCameraOwnership?.()',
-    'this.viewer.trackedEntity = undefined;',
+    // MapLibre: engine.track(null) solta o alvo acompanhado (era
+    // viewer.trackedEntity = undefined + lookAtTransform(IDENTITY)).
+    'this.viewer.track(null);',
     "interruptCameraMotion('explicit-navigation')",
-    'this.viewer.camera.cancelFlight();',
-    'this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);',
+    'this.viewer.cancelFlight();',
   ], 'follow release');
   assert.match(release, /flightsLayer\.stopTracking\?\.\(\{ origin: trackingOrigin \}\)/);
   assert.match(release, /militaryFlightsLayer\.stopTracking\?\.\(\{ origin: trackingOrigin \}\)/);
@@ -236,10 +237,10 @@ test('validated voice camera destinations share the UI navigation authority faca
     'const start = () => {',
     "return typeof runNavigation === 'function' ? runNavigation(start) : start();",
   ], 'route validation before handoff');
-  // The corridor warm is injected the same way the floor READ is — the dolly
-  // never reaches into the data layer itself, and the voice dispatch is the one
-  // place that binds both.
-  assert.match(voice, /\(lat, lon\) => cachedGroundFloor\(lat, lon\),[\s\S]{0,200}?\(cells\) => warmGroundFloor\(cells\),/);
+  // The floor READ is injected by the voice dispatch — the dolly never reaches
+  // into a data layer itself. No MapLibre, o piso é o relevo do motor (ou 0 m
+  // sem relevo), que se carrega sozinho: não há corredor para pré-aquecer.
+  assert.match(voice, /\(lat, lon\) => engineGroundFloorM\(viewer, lat, lon\),[\s\S]{0,200}?\(navigate\) => runManagedVoiceNavigation\(styleManager, 'route', 'fly_route', navigate\),\s*null,/);
 });
 
 test('deferred search releases only after its final authority check', () => {
