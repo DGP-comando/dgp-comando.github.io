@@ -138,6 +138,40 @@ export function earthquakeTooltip(p) {
 }
 
 let quakeCounts = { red: 0, orange: 0, yellow: 0 };
+let lastQuakes = [];
+
+const num = (v) => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : null);
+const text = (v) => {
+  const t = String(v ?? '').trim();
+  return t || null;
+};
+const limitOf = (maxCount) => (Number.isFinite(maxCount) ? Math.max(1, Math.floor(maxCount)) : 2000);
+
+/** Registro de terremoto para o analista da voz (formato da camada Cesium). */
+export function quakeAnalystRecords(features, maxCount = 2000) {
+  return features.slice(0, limitOf(maxCount)).map((f, i) => ({
+    id: text(f.properties?.id) || `QUAKE-${String(i).padStart(4, '0')}`,
+    magnitude: num(f.properties?.mag),
+    depthKm: num(f.properties?.depth),
+    lat: num(f.geometry?.coordinates?.[1]),
+    lon: num(f.geometry?.coordinates?.[0]),
+    timeMs: num(f.properties?.time),
+    place: text(f.properties?.place),
+  }));
+}
+
+/** Registro de foco de calor para o analista da voz (formato da camada Cesium). */
+export function fireAnalystRecords(fires, maxCount = 2000) {
+  return fires.slice(0, limitOf(maxCount)).map((fire, i) => ({
+    id: `FIRE-${String(fire?.index ?? i).padStart(5, '0')}`,
+    lat: num(fire?.lat),
+    lon: num(fire?.lon),
+    frp: num(fire?.frp),
+    confidence: num(fire?.confidence),
+    satellite: text(fire?.satellite) || text(fire?.sensor),
+    acqTime: Number.isFinite(fire?.acqMs) && fire.acqMs > 0 ? fire.acqMs : null,
+  }));
+}
 
 const earthquakes = defineLayer({
   id: 'earthquakes',
@@ -189,8 +223,10 @@ const earthquakes = defineLayer({
     quakeCounts = { red: 0, orange: 0, yellow: 0 };
     for (const f of data.features) quakeCounts[earthquakeDepthBand(f.properties.depth ?? 0)] += 1;
     ctx.setData('dg-earthquakes', data);
+    lastQuakes = data.features;
     return data.features.length;
   },
+  analystRecords: (maxCount) => quakeAnalystRecords(lastQuakes, maxCount),
   interactive: ['dg-earthquakes-disc'],
   tooltip: (p) => earthquakeTooltip(p),
   rowControls: () => ({
@@ -632,6 +668,7 @@ export function fireTooltip(p) {
 }
 
 let firmsState = { count: 0, sev: { red: 0, orange: 0, yellow: 0 }, info: null };
+let lastFires = [];
 let selectedKey = null;
 let clearHandler = null;
 
@@ -650,6 +687,7 @@ export function applyFiresPayload(ctx, payload, nowMs = Date.now()) {
   fires.forEach((fire, i) => {
     fire.municipality = raw[i]?.municipality ?? '';
   });
+  lastFires = fires;
   const points = buildFireFeatures(fires, nowMs);
   ctx.setData('dg-firms', points);
   ctx.setData('dg-firms-lbl', points);
@@ -687,6 +725,7 @@ const fireCardLayout = (padding) => ({
 const firms = defineLayer({
   id: 'local-firms',
   name: 'Focos de calor (queimadas)',
+  analystRecords: (maxCount) => fireAnalystRecords(lastFires, maxCount),
   category: 'Ambiente',
   icon: '▲',
   source: 'NASA FIRMS · DataGeo PR',

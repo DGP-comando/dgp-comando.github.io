@@ -144,6 +144,16 @@ export function toManagerModule(def, host) {
     focusOn(bbox) {
       if (host.isVisible(def.id)) def.focusOn?.(bbox ?? null, ctx);
     },
+
+    // Analista da voz (src/voice/gevActions.js): só camadas ligadas respondem.
+    ...(def.analystRecords
+      ? {
+        getAnalystRecords(maxCount = 2000) {
+          if (!host.isVisible(def.id)) return [];
+          return def.analystRecords(maxCount, ctx) ?? [];
+        },
+      }
+      : {}),
   };
 }
 
@@ -176,6 +186,9 @@ export function lazyManagerModule(def, extra = {}) {
       return getActiveLayerHost()?.ctx ?? null;
     },
   };
+  if (def.analystRecords) {
+    proxy.getAnalystRecords = (maxCount) => (inner ? inner.getAnalystRecords(maxCount) : []);
+  }
   for (const name of ['init', 'enable', 'disable', 'update', 'destroy', 'getStats', 'getRowControls', 'getParams', 'setParams', 'focusOn']) {
     proxy[name] = (...args) => {
       if (name === 'getStats' && !inner) return { count: 0, lastUpdate: null, error: null, loading: false, source: def.source };

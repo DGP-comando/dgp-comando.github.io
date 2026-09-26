@@ -43,7 +43,9 @@
 //
 //     rowControls: (ctx) => ({ chips: [{id, label, active}], legend: [{label, color, count?}] })
 //     onChip:      (chipId, ctx) => void        // o registro redesenha a linha depois
-//     focusOn:     (bbox|null, ctx) => void     // município em foco (ver navigation.js):
+//     analystRecords: (maxCount, ctx) => [...]  // registros para o analista da voz
+//         (mesmo formato que a camada Cesium tinha em getAnalystRecords)
+//     focusOn:     (bbox|null, ctx) => void     // município em foco:
 //         camadas que se escondem por escala devem aparecer dentro do bbox
 //         [w, s, e, n] qualquer que seja o zoom; null desarma.
 //   }
@@ -115,7 +117,7 @@ export function zoomForHeight(heightM) {
 const LAYER_KEYS = new Set([
   'id', 'name', 'category', 'icon', 'source', 'detail', 'defaultOn', 'sources', 'layers', 'load', 'count',
   'refreshMs', 'onEnable', 'onDisable', 'interactive', 'hoverState', 'tooltip', 'click', 'rowControls', 'onChip',
-  'focusOn',
+  'focusOn', 'analystRecords',
 ]);
 
 /**

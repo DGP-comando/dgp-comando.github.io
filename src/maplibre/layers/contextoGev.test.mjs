@@ -195,3 +195,16 @@ test('nada de Cesium no módulo da camada', () => {
   const src = readFileSync(new URL('./contextoGev.js', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /from 'cesium'/);
 });
+
+test('analista da voz: terremotos e focos voltam no formato da camada Cesium', async () => {
+  const { quakeAnalystRecords, fireAnalystRecords } = await import('./contextoGev.js');
+  const quakes = quakeAnalystRecords([
+    { geometry: { coordinates: [-70.5, -33.4] }, properties: { id: 'us7000abc', mag: 5.2, depth: 110, time: 1700000000000, place: 'Chile' } },
+    { geometry: { coordinates: [10, 20] }, properties: {} },
+  ]);
+  assert.deepEqual(quakes[0], { id: 'us7000abc', magnitude: 5.2, depthKm: 110, lat: -33.4, lon: -70.5, timeMs: 1700000000000, place: 'Chile' });
+  assert.equal(quakes[1].id, 'QUAKE-0001');
+  assert.equal(quakeAnalystRecords(new Array(5).fill({ properties: {}, geometry: { coordinates: [0, 0] } }), 2).length, 2);
+  const [fire] = fireAnalystRecords([{ index: 7, lat: -25, lon: -50, frp: 12.5, confidence: 0.8, satellite: 'N20', acqMs: 1700000000000 }]);
+  assert.deepEqual(fire, { id: 'FIRE-00007', lat: -25, lon: -50, frp: 12.5, confidence: 0.8, satellite: 'N20', acqTime: 1700000000000 });
+});
