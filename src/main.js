@@ -32,6 +32,7 @@ import { MapStackController } from './mapStackController.js';
 import { initAnnotations } from './annotations/index.js';
 import { initLogoGaze } from './logoGaze.js';
 import { initCockpitCloudEffects } from './cockpitCloudEffects.js';
+import { installRenderGovernor } from './renderGovernor.js';
 import { installScopeMask } from './scopeMask.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
 import { requireLogin } from './datageoLogin.js';
@@ -242,6 +243,9 @@ async function init() {
       loadingScreen.addEventListener('transitionend', revealFirstRun, { once: true });
       setTimeout(revealFirstRun, 900);
     });
+
+    // Animadores por quadro (holdContinuousRender) pedem quadros ao MapLibre.
+    installRenderGovernor(engine);
 
     // Máscara circular (scope) — src/scopeMask.js.
     installScopeMask(engine);
