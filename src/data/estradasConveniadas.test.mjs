@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import { centroidByName } from './prCentroids.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
@@ -8,11 +8,16 @@ import {
   conveniadasHitFilter, contarPorGrupo, estradasConveniadasLayer as layer,
 } from '../maplibre/layers/transporte.js';
 
-const raw = readFileSync(new URL('../../data/privado/estradas-conveniadas-pr.geojson', import.meta.url), 'utf8');
+// O arquivo mora em data/privado/ (fora do git, vai para o bucket privado):
+// sem ele na máquina, os testes que leem os dados são pulados, não falham.
+const DATA_URL = new URL('../../data/privado/estradas-conveniadas-pr.geojson', import.meta.url);
+const hasData = existsSync(DATA_URL);
+const dataTest = hasData ? test : (name, fn) => test(name, { skip: 'sem data/privado/estradas-conveniadas-pr.geojson' }, fn);
+const raw = hasData ? readFileSync(DATA_URL, 'utf8') : '{"features":[]}';
 const { features } = JSON.parse(raw);
 const doGrupo = (id) => features.filter((f) => f.properties.grupo === id);
 
-test('os três conjuntos estão lá, cada trecho no PR e desenhável', () => {
+dataTest('os três conjuntos estão lá, cada trecho no PR e desenhável', () => {
   assert.equal(doGrupo('conveniadas').length, 96);
   assert.ok(doGrupo('protocolos').length >= 350);
   assert.ok(doGrupo('automatizado').length >= 490);
@@ -26,12 +31,12 @@ test('os três conjuntos estão lá, cada trecho no PR e desenhável', () => {
   }
 });
 
-test('sem CNPJ nem caminho de máquina na saída', () => {
+dataTest('sem CNPJ nem caminho de máquina na saída', () => {
   assert.doesNotMatch(raw, /CNPJ|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/);
   assert.doesNotMatch(raw, /[A-Z]:[\\/]/);
 });
 
-test('toda conveniada tem município oficial do PR e acentos quase todos reparados', () => {
+dataTest('toda conveniada tem município oficial do PR e acentos quase todos reparados', () => {
   for (const f of doGrupo('conveniadas')) {
     assert.ok(centroidByName(f.properties['Município']), f.properties['Município']);
   }
@@ -73,7 +78,7 @@ test('chips ligam e desligam cada conjunto; chip desconhecido é ignorado', () =
   assert.ok(chips().every((c) => c.active));
 });
 
-test('contagem por conjunto ignora grupo desconhecido', () => {
+dataTest('contagem por conjunto ignora grupo desconhecido', () => {
   const counts = contarPorGrupo(features);
   assert.equal(counts.conveniadas, 96);
   assert.equal(Object.values(counts).reduce((a, b) => a + b, 0), features.length);

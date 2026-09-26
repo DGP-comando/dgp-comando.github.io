@@ -33,11 +33,13 @@ test('Cockpit takeover invalidates deferred work before camera cancellation', ()
     /enter\(\) \{([\s\S]*?)\n  \}\n\n  exit\(/,
     'Cockpit enter',
   );
+  // MapLibre: o alvo segue em engine.track (a perseguição centra no mesmo
+  // ponto); a garantia é invalidar o trabalho diferido ANTES de cancelar o voo.
   ordered(enter, [
-    'if (!info || !entity?.position) return false;',
+    'if (!info || !entity) return false;',
     'this.onCameraTakeover?.();',
-    'this.viewer.camera.cancelFlight();',
-    'this.viewer.trackedEntity = undefined;',
+    'this.engine?.cancelFlight?.();',
+    'this.trackedEntity = entity;',
   ], 'Cockpit takeover');
   assert.match(
     ui,
@@ -388,15 +390,17 @@ test('vessel layer announces valid clicks and never flies cameras', () => {
     assert.match(source, /requestWorldFocus\(\{/);
     assert.doesNotMatch(source, /camera\.flyTo/);
   }
+  // MapLibre: o clique chega por engine.on('click'); um chevron/cartão válido
+  // seleciona e foca; um clique que é de outra camada preserva a seleção.
   const vesselClick = body(
     vessels,
-    /handler\.setInputAction\(\(click\) => \{([\s\S]*?)\n  \}, Cesium\.ScreenSpaceEventType\.LEFT_CLICK\);/,
+    /function handleVesselClick\(engine, click\) \{([\s\S]*?)\n\}/,
     'vessel click',
   );
   ordered(vesselClick, [
-    "isOwnedByOtherLayer('ais-live-vessels', pickedId)",
-    '_vesselOverlayHost.hitTest?.(',
+    'engine.pick?.(x, y, { layers: VESSEL_PICK_LAYERS',
     'selectAndFocusVessel(record)',
+    'isOwnedByOtherLayer(LAYER_ID, id)',
   ], 'vessel sibling ownership');
   const vesselFocus = body(
     vessels,
