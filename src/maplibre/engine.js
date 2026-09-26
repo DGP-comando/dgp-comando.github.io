@@ -38,6 +38,7 @@
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BASEMAPS, buildBaseStyle } from './basemaps.js';
+import { mapViewForSceneCamera, sceneCameraFromMap } from './cameraMath.js';
 
 export { BASEMAPS };
 
@@ -165,36 +166,19 @@ export function createEngine({
 
   // ------------------------------------------------------------- câmera
 
-  // No MapLibre 6 o transform mora no provedor de câmera (`map._camera`); o
-  // getter público `map.transform` existe só em algumas versões.
-  const cameraTransform = () => map._camera?.transform ?? map.transform;
-
-  // Posição da câmera derivada da geometria da vista (centro, zoom, pitch e
-  // a distância câmera-centro em pixels do transform): no MapLibre 6
-  // getCameraAltitude() pode devolver null. Tiles de 512 px.
-  function cameraGeometry() {
-    const t = cameraTransform();
-    const center = map.getCenter();
-    const zoom = map.getZoom();
-    const pitchRad = map.getPitch() * DEG;
-    const mpp = (40_075_016.686 * Math.cos(center.lat * DEG)) / (512 * 2 ** zoom);
-    const distPx = Number(t?.cameraToCenterDistance);
-    const distM = Number.isFinite(distPx) ? distPx * mpp : NaN;
-    const ground = state.terrain ? (map.queryTerrainElevation?.(center) ?? 0) : 0;
-    const alt = ground + distM * Math.cos(pitchRad);
-    const horizontal = distM * Math.sin(pitchRad);
-    const cam = horizontal > 0.5 ? destinationPoint(center.lng, center.lat, (map.getBearing() + 180 + 360) % 360, horizontal) : { lon: center.lng, lat: center.lat };
-    return { lon: cam.lon, lat: cam.lat, alt, center };
-  }
-
+  // Câmera em semântica Cesium <-> centro/zoom/pitch/bearing, sobre a ESFERA
+  // (cameraMath.js): a conversão plana do MapLibre erra longe da superfície
+  // (a 19 000 km, 25° fora do nadir "acertava" o polo).
   function getCameraView() {
-    const { lon, lat, alt, center } = cameraGeometry();
+    const cam = sceneCameraFromMap(map);
+    const center = map.getCenter();
+    const ground = state.terrain ? (map.queryTerrainElevation?.(center) ?? 0) : 0;
     return {
-      lat,
-      lon,
-      alt,
-      heading: (map.getBearing() + 360) % 360,
-      pitch: toCesiumPitch(map.getPitch()),
+      lat: cam?.lat ?? center.lat,
+      lon: cam?.lon ?? center.lng,
+      alt: (cam?.alt ?? NaN) + ground,
+      heading: cam ? (cam.heading + 360) % 360 : (map.getBearing() + 360) % 360,
+      pitch: cam?.pitch ?? toCesiumPitch(map.getPitch()),
       roll: map.getRoll?.() ?? 0,
       zoom: map.getZoom(),
       targetLat: center.lat,
@@ -202,15 +186,10 @@ export function createEngine({
     };
   }
 
-  function cameraOptionsFor({ lat, lon, alt, heading = 0, pitch = -90, roll = 0 }) {
-    const opts = map.calculateCameraOptionsFromCameraLngLatAltRotation(
-      [Number(lon), Number(lat)],
-      Math.max(1, Number(alt) || 1),
-      Number(heading) || 0,
-      toMapPitch(pitch),
-      Number(roll) || 0,
-    );
-    return opts;
+  function cameraOptionsFor({ lat, lon, alt, heading = 0, pitch = -90 }) {
+    const view = mapViewForSceneCamera(map, { lat: Number(lat), lon: Number(lon), alt: Number(alt), heading, pitch });
+    if (!view) throw new Error('câmera inválida');
+    return view;
   }
 
   function beginFlight({ complete, cancel } = {}) {

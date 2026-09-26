@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-import { SceneDirector } from './director.js';
+import { SceneDirector, cameraStateFromEngine, cubicInOut } from './director.js';
 import { SCENE_TRACKING_PARAM_KEYS } from './scenePolicy.js';
 import { SCENE_RECIPES } from './recipes.js';
 
@@ -145,20 +145,21 @@ function fakeStyleManager({ contextMode = null, exitFails = false } = {}) {
   return manager;
 }
 
-/** Cesium viewer double whose flights complete on the next microtask turn. */
-function fakeViewer() {
+/** MapLibre engine double (src/maplibre/engine.js) whose flights complete on the next microtask turn. */
+function fakeViewer({ view = { lat: -25.43, lon: -49.27, alt: 12000, heading: 15, pitch: -45, roll: 0, zoom: 11 } } = {}) {
   const flights = [];
   let cancelled = 0;
   return {
+    kind: 'maplibre',
     flights,
+    view,
     get cancelledFlights() { return cancelled; },
-    camera: {
-      flyTo(options) {
-        flights.push(options);
-        Promise.resolve().then(() => options.complete?.());
-      },
-      cancelFlight() { cancelled++; },
+    getCameraView: () => ({ ...view }),
+    flyToCamera(target, options = {}) {
+      flights.push({ view: target, ...options });
+      Promise.resolve().then(() => options.complete?.());
     },
+    cancelFlight() { cancelled++; },
   };
 }
 
@@ -619,6 +620,100 @@ test('a scene run supersedes a LOAD still suspended on its visual await', async 
       dataManager.setEnabledCalls.map((call) => call.id),
       ['flights', 'traffic'],
     );
+  } finally {
+    restore();
+  }
+});
+
+test('captureShot reads the camera from the MapLibre engine in Cesium semantics', () => {
+  const { director, viewer, restore } = makeDirector();
+  try {
+    const writes = [];
+    globalThis.localStorage.setItem = (key, value) => writes.push({ key, value });
+    Object.assign(viewer.view, { lat: -25.4284123456, lon: -49.2733123456, alt: 15234.56, heading: 33.333, pitch: -52.25, roll: 0, zoom: 10 });
+    director._selectedSceneId = 'scene-1';
+    const before = director._getSelectedScene().shots.length;
+    director.captureShot();
+    const shots = director._getSelectedScene().shots;
+    assert.equal(shots.length, before + 1);
+    assert.deepEqual(shots.at(-1).camera, {
+      lat: -25.428412, lon: -49.273312, alt: 15234.6, heading: 33.33, pitch: -52.25, roll: 0,
+    });
+    // Persisted under the unchanged storage key, so old players read it.
+    assert.equal(writes.at(-1).key, 'godsEyeView.sceneProject.v2');
+    const stored = JSON.parse(writes.at(-1).value);
+    assert.ok(stored.scenes.some((scene) => scene.shots.some((shot) => shot.camera.alt === 15234.6)));
+  } finally {
+    restore();
+  }
+});
+
+test('a shot flies through engine.flyToCamera with its duration and cubic easing', async () => {
+  const { director, viewer, restore } = makeDirector();
+  try {
+    await director.loadShot('scene-1', 'shot-a', { flyDuration: 1.5 });
+    assert.equal(viewer.flights.length, 1);
+    const [flight] = viewer.flights;
+    assert.deepEqual(flight.view, { lat: 10, lon: 20, alt: 500000, heading: 0, pitch: -40, roll: 0 });
+    assert.equal(flight.duration, 1.5);
+    assert.equal(flight.easing, cubicInOut);
+  } finally {
+    restore();
+  }
+});
+
+test('cameraStateFromEngine rejects an engine without a finite camera', () => {
+  assert.equal(cameraStateFromEngine(null), null);
+  assert.equal(cameraStateFromEngine({ getCameraView: () => ({ lat: 1, lon: 2, alt: NaN }) }), null);
+  assert.equal(cameraStateFromEngine({ getCameraView: () => { throw new Error('not ready'); } }), null);
+  assert.equal(cubicInOut(0), 0);
+  assert.equal(cubicInOut(1), 1);
+  assert.equal(cubicInOut(0.5), 0.5);
+});
+
+test('a GEV layer missing from this build is skipped with a warning, not pushed at the manager', async () => {
+  const { director, dataManager, restore } = makeDirector();
+  const warn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = await director._applyLayerStates({
+      'not-in-this-build': { enabled: true },
+      traffic: { enabled: true },
+    });
+    assert.deepEqual(result.unavailable, ['not-in-this-build']);
+    assert.ok(!dataManager.setEnabledCalls.some((call) => call.id === 'not-in-this-build'));
+    assert.ok(warnings.some((line) => line.includes('not-in-this-build')));
+    assert.ok(director._activeRun.events.some((event) => event.type === 'shot_layers_unavailable'));
+  } finally {
+    console.warn = warn;
+    restore();
+  }
+});
+
+test('with a MapLibre map the shot flies through map.flyTo with the spherical conversion', async () => {
+  const { director, viewer, restore } = makeDirector();
+  const flights = [];
+  viewer.map = {
+    getContainer: () => ({ clientHeight: 850 }),
+    getVerticalFieldOfView: () => 36.86989764584402,
+    getMaxPitch: () => 85,
+    getMinZoom: () => -2,
+    getMaxZoom: () => 22,
+    flyTo(options) { flights.push(options); },
+    once(type, fn) { if (type === 'moveend') Promise.resolve().then(fn); },
+    stop() {},
+  };
+  try {
+    await director.loadShot('scene-1', 'shot-a', { flyDuration: 2 });
+    assert.equal(flights.length, 1);
+    assert.equal(viewer.flights.length, 0, 'engine.flyToCamera is only the no-map fallback');
+    const [flight] = flights;
+    assert.equal(flight.duration, 2000);
+    assert.equal(flight.easing, cubicInOut);
+    // 500 km up, 50° off nadir: the look ray meets the globe a few degrees north.
+    assert.ok(flight.center[1] > 10 && flight.center[1] < 20, `lat ${flight.center[1]}`);
+    assert.ok(flight.zoom > 2 && flight.zoom < 8, `zoom ${flight.zoom}`);
   } finally {
     restore();
   }

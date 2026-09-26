@@ -7,7 +7,7 @@
  * multi-step ENTRY TRANSACTION (adopt → enter → roll back).
  */
 
-/** Force the prior aircraft layer to reacquire Cesium and durable tracking ownership. */
+/** Force the prior aircraft layer to reacquire engine and durable tracking ownership. */
 export function restoreAircraftTrackingOwner(layer, id, { origin = 'programmatic' } = {}) {
   if (!layer?.trackById || !id) return false;
   layer.stopTracking?.({ origin });

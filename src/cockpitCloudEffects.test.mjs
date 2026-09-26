@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  cockpitCameraPoint,
   cockpitCloudRenderSize,
   cockpitWeatherRefreshDue,
   cockpitWeatherEnabledFromStoredValue,
@@ -53,4 +54,15 @@ test('cockpit weather refreshes after time or meaningful movement', () => {
     point: { latitude: 30.3, longitude: -97 },
     hasWeather: true,
   }), true);
+});
+
+test('cockpit weather point comes from the MapLibre engine camera', () => {
+  const engine = { getCameraView: () => ({ lat: -25.4, lon: -49.3, alt: 3200, heading: 0, pitch: -8 }) };
+  assert.deepEqual(cockpitCameraPoint(engine), { latitude: -25.4, longitude: -49.3, altitudeM: 3200 });
+  assert.deepEqual(
+    cockpitCameraPoint({ getCameraView: () => ({ lat: 1, lon: 2, alt: NaN }) }),
+    { latitude: 1, longitude: 2, altitudeM: 0 },
+  );
+  assert.equal(cockpitCameraPoint(null), null);
+  assert.equal(cockpitCameraPoint({ getCameraView: () => { throw new Error('not ready'); } }), null);
 });

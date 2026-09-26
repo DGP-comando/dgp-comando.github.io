@@ -364,3 +364,56 @@ test('tracked-identity resolution falls back to layer precedence', () => {
   assert.equal(resolveTrackedAircraftInfo({ trackedId: 'flights:aaa077' }), null);
   assert.equal(resolveTrackedAircraftInfo(), null);
 });
+
+// --- Câmera de perseguição MapLibre -------------------------------------
+import {
+  cockpitChaseMapView,
+  ecefToGeodetic,
+  localDeltaM,
+  offsetLatLon,
+  positionLatLon,
+  COCKPIT_CHASE_MIN_DISTANCE_M,
+  COCKPIT_CHASE_PITCH_DEG,
+} from './cockpitMath.js';
+
+test('offsetLatLon and localDeltaM are inverse on the tangent plane', () => {
+  const from = { lat: -25.5, lon: -49.2, alt: 900 };
+  const moved = offsetLatLon(from.lat, from.lon, 1200, -800);
+  const delta = localDeltaM(from, { ...moved, alt: 950 });
+  assert.ok(Math.abs(delta.east - 1200) < 0.5);
+  assert.ok(Math.abs(delta.north + 800) < 0.5);
+  assert.equal(delta.up, 50);
+});
+
+test('cockpitChaseMapView centers on the aircraft, faces its course and lifts the camera to its altitude', () => {
+  const base = { lat: -25.5, lon: -49.2, headingDeg: -60, viewportHeight: 850 };
+  const cruise = cockpitChaseMapView({ ...base, altitudeM: 10_900, groundM: 900 });
+  assert.deepEqual(cruise.center, [-49.2, -25.5]);
+  assert.equal(cruise.bearing, 300);
+  assert.equal(cruise.pitch, COCKPIT_CHASE_PITCH_DEG);
+  // Camera height above ground = distance * cos(pitch) = 10 000 m + headroom.
+  const heightM = cruise.distanceM * Math.cos(cruise.pitch * Math.PI / 180);
+  assert.ok(Math.abs(heightM - 10_150) < 1, `height ${heightM}`);
+  // A parked aircraft keeps the minimum chase distance, i.e. a closer (higher) zoom.
+  const parked = cockpitChaseMapView({ ...base, altitudeM: 950, groundM: 900, onGround: true });
+  assert.equal(parked.distanceM, COCKPIT_CHASE_MIN_DISTANCE_M);
+  assert.ok(parked.zoom > cruise.zoom + 2);
+  assert.equal(cockpitChaseMapView({ ...base, lat: NaN }), null);
+});
+
+test('positionLatLon reads every published position shape, including Cartesian3', () => {
+  assert.deepEqual(positionLatLon({ lat: 1, lon: 2 }), { lat: 1, lon: 2 });
+  assert.deepEqual(positionLatLon({ latitude: 3, longitude: 4 }), { lat: 3, lon: 4 });
+  assert.deepEqual(positionLatLon([5, 6]), { lat: 6, lon: 5 });
+  assert.equal(positionLatLon(null), null);
+  // Curitiba in ECEF (WGS84) at h = 0.
+  const lat = -25.43 * Math.PI / 180;
+  const lon = -49.27 * Math.PI / 180;
+  const a = 6378137.0;
+  const e2 = (1 / 298.257223563) * (2 - 1 / 298.257223563);
+  const n = a / Math.sqrt(1 - e2 * Math.sin(lat) ** 2);
+  const ecef = { x: n * Math.cos(lat) * Math.cos(lon), y: n * Math.cos(lat) * Math.sin(lon), z: n * (1 - e2) * Math.sin(lat) };
+  const geo = positionLatLon(ecef);
+  assert.ok(Math.abs(geo.lat + 25.43) < 1e-6 && Math.abs(geo.lon + 49.27) < 1e-6);
+  assert.ok(Math.abs(ecefToGeodetic(ecef.x, ecef.y, ecef.z).alt) < 0.01);
+});
