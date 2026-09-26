@@ -165,23 +165,30 @@ export function createEngine({
 
   // ------------------------------------------------------------- câmera
 
-  function getCameraView() {
-    const t = map.transform;
-    let lon;
-    let lat;
-    let alt;
-    try {
-      const ll = t.getCameraLngLat();
-      lon = ll.lng;
-      lat = ll.lat;
-      alt = t.getCameraAltitude();
-    } catch {
-      const c = map.getCenter();
-      lon = c.lng;
-      lat = c.lat;
-      alt = NaN;
-    }
+  // No MapLibre 6 o transform mora no provedor de câmera (`map._camera`); o
+  // getter público `map.transform` existe só em algumas versões.
+  const cameraTransform = () => map._camera?.transform ?? map.transform;
+
+  // Posição da câmera derivada da geometria da vista (centro, zoom, pitch e
+  // a distância câmera-centro em pixels do transform): no MapLibre 6
+  // getCameraAltitude() pode devolver null. Tiles de 512 px.
+  function cameraGeometry() {
+    const t = cameraTransform();
     const center = map.getCenter();
+    const zoom = map.getZoom();
+    const pitchRad = map.getPitch() * DEG;
+    const mpp = (40_075_016.686 * Math.cos(center.lat * DEG)) / (512 * 2 ** zoom);
+    const distPx = Number(t?.cameraToCenterDistance);
+    const distM = Number.isFinite(distPx) ? distPx * mpp : NaN;
+    const ground = state.terrain ? (map.queryTerrainElevation?.(center) ?? 0) : 0;
+    const alt = ground + distM * Math.cos(pitchRad);
+    const horizontal = distM * Math.sin(pitchRad);
+    const cam = horizontal > 0.5 ? destinationPoint(center.lng, center.lat, (map.getBearing() + 180 + 360) % 360, horizontal) : { lon: center.lng, lat: center.lat };
+    return { lon: cam.lon, lat: cam.lat, alt, center };
+  }
+
+  function getCameraView() {
+    const { lon, lat, alt, center } = cameraGeometry();
     return {
       lat,
       lon,
