@@ -1234,7 +1234,8 @@ body.cockpit-mode #cockpit-cloud-effects.active {
 
 .map-stack-chip-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 3 mapas base na 1ª linha; rótulos, globo/2D e relevo na 2ª. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -1311,6 +1312,10 @@ body.cockpit-mode #cockpit-cloud-effects.active {
   border-color: rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.02);
   cursor: not-allowed;
+}
+
+.map-stack-chip.map-stack-toggle {
+  border-style: dashed;
 }
 
 .map-stack-chip-req {
@@ -9505,4 +9510,11 @@ body.scene-playback-mode #first-run-launcher {
   white-space: nowrap;
   font-size: 12px;
   letter-spacing: 1px;
+}
+
+/* MapLibre: os controles do rodapé (atribuição e "Data attribution") ficam
+   acima da faixa "PR AO VIVO" (#datageo-ticker, 26px fixa no rodapé). */
+body:has(#datageo-ticker) .maplibregl-ctrl-bottom-right,
+body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
+  bottom: 26px;
 }

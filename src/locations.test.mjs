@@ -6,14 +6,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import * as Cesium from 'cesium';
 import {
   CANCELLED_SEARCH,
   placeFramingViewport,
   PLACE_VIEWPORT_MAX_SPAN_KM,
   PLACE_ANCHOR_OFFSET_RATIO,
   flyToGlobeView,
+  flyToMunicipio,
   flyToPresetLocation,
+  geometryBbox,
+  municipioFramingBbox,
+  MUNICIPIO_VIEW_PITCH_DEG,
   geocodeNavigationMode,
   regionFramingPlan,
   REGION_SWATH_SPAN_KM,
@@ -21,23 +24,25 @@ import {
   searchAndFlyTo,
 } from './locations.js';
 
-function stubViewer() {
+// Motor MapLibre de mentira: registra cada voo pedido (câmera, alvo, bbox).
+function stubViewer({ trackedTarget = null } = {}) {
   const flights = [];
+  const calls = { track: [] };
   return {
     flights,
-    scene: { globe: null, canvas: { clientWidth: 0, clientHeight: 0 } },
-    camera: {
-      positionCartographic: {
-        longitude: Cesium.Math.toRadians(-97.7431),
-        latitude: Cesium.Math.toRadians(30.2672),
-        height: 1200,
-      },
-      cancelFlight() {},
-      flyTo(options) { flights.push(options); },
-      flyToBoundingSphere(sphere, options) { flights.push({ sphere, ...options }); },
-      lookAt() {},
-      lookAtTransform() {},
-    },
+    calls,
+    trackedTarget,
+    container: { clientWidth: 0, clientHeight: 0 },
+    hasTerrain: () => false,
+    getCameraView: () => ({
+      lat: 30.2672, lon: -97.7431, alt: 1200, heading: 0, pitch: -90, roll: 0,
+      zoom: 10, targetLat: 30.2672, targetLon: -97.7431,
+    }),
+    cancelFlight() {},
+    track(target) { calls.track.push(target); },
+    flyToCamera(view, options = {}) { flights.push({ kind: 'camera', view, ...options }); },
+    flyToTarget(target, options = {}) { flights.push({ kind: 'target', target, ...options }); },
+    flyToBounds(bbox, options = {}) { flights.push({ kind: 'bounds', bbox, ...options }); },
   };
 }
 
@@ -70,19 +75,21 @@ async function runSearch(viewer, options, { result = AUSTIN_RESULT, query = 'aus
   }
 }
 
-/** Read a recorded viewport flight back as a degrees rectangle. */
+/** Read a recorded viewport flight ([w, s, e, n] bbox) back as a degrees rectangle. */
 function flownRectangleDegrees(viewer, index = 0) {
-  const rectangle = viewer.flights[index]?.destination;
-  assert.ok(rectangle instanceof Cesium.Rectangle, 'expected a rectangle (viewport) flight');
+  const flight = viewer.flights[index];
+  assert.equal(flight?.kind, 'bounds', 'expected a rectangle (viewport) flight');
+  const [west, south, east, north] = flight.bbox;
+  const wrap = (lng) => ((lng + 180) % 360 + 360) % 360 - 180;
   return {
-    south: Cesium.Math.toDegrees(rectangle.south),
-    north: Cesium.Math.toDegrees(rectangle.north),
-    west: Cesium.Math.toDegrees(rectangle.west),
-    east: Cesium.Math.toDegrees(rectangle.east),
-    // Cesium's own width, which adds a full turn when the box crosses the
-    // antimeridian — the number the camera actually frames.
-    widthDeg: Cesium.Math.toDegrees(rectangle.width),
-    crossesAntimeridian: rectangle.east < rectangle.west,
+    south,
+    north,
+    west: wrap(west),
+    // MapLibre recebe leste > 180 numa caixa que cruza o antimeridiano; aqui
+    // ele volta a [-180, 180] para as asserções.
+    east: east === 180 ? 180 : wrap(east),
+    widthDeg: east - west,
+    crossesAntimeridian: east > 180,
   };
 }
 
@@ -486,10 +493,10 @@ test('GLOBE_VIEW preset height sits in the global view band', () => {
 });
 
 // The globe flight's callbacks are what resolves Reset Globe / zoom_to_globe.
-// They were published under this module's OWN option names (`onComplete` /
-// `onCancel`), which Cesium's Camera.flyTo ignores — so neither ever fired and
-// every caller resolved off its ~4.2 s watchdog timeout instead of the flight.
-test('the globe flight publishes its callbacks under Cesium\'s own option names', () => {
+// They were once published under this module's OWN option names (`onComplete` /
+// `onCancel`), which the camera ignores — so neither ever fired and every
+// caller resolved off its ~4.2 s watchdog timeout instead of the flight.
+test('the globe flight publishes its callbacks under the engine\'s own option names', () => {
   const viewer = stubViewer();
   const fired = [];
   flyToGlobeView(viewer, {
@@ -498,12 +505,16 @@ test('the globe flight publishes its callbacks under Cesium\'s own option names'
   });
 
   const flight = viewer.flights[0];
-  assert.equal(typeof flight.complete, 'function', 'Cesium resolves arrival through `complete`');
-  assert.equal(typeof flight.cancel, 'function', 'Cesium reports supersession through `cancel`');
+  assert.equal(typeof flight.complete, 'function', 'the engine resolves arrival through `complete`');
+  assert.equal(typeof flight.cancel, 'function', 'the engine reports supersession through `cancel`');
   // Not merely present under both spellings: the ignored names must be gone,
   // or a later reader can "fix" the wrong one back.
-  assert.equal('onComplete' in flight, false, 'Cesium ignores onComplete — do not publish it');
-  assert.equal('onCancel' in flight, false, 'Cesium ignores onCancel — do not publish it');
+  assert.equal('onComplete' in flight, false, 'the engine ignores onComplete — do not publish it');
+  assert.equal('onCancel' in flight, false, 'the engine ignores onCancel — do not publish it');
+  // Straight out over the current view centre, at the globe height, nadir.
+  assert.equal(flight.view.alt, GLOBE_VIEW.heightM);
+  assert.equal(flight.view.pitch, -90);
+  assert.equal(flight.view.lat, 30.2672);
 
   flight.complete();
   flight.cancel();
@@ -537,20 +548,57 @@ test('geocoded Location branches forward the resolved-navigation ownership hook'
   assert.ok(search.indexOf('return null;') < search.indexOf('onStart: options.onStart'));
 });
 
-test('globe and city-overview flights name the world frame explicitly', () => {
-  const globeViewer = stubViewer();
+test('globe and city-overview flights release a followed target first', () => {
+  const tracked = { getPosition: () => ({ lon: 0, lat: 0 }) };
+  const globeViewer = stubViewer({ trackedTarget: tracked });
   flyToGlobeView(globeViewer);
-  assert.equal(globeViewer.flights[0].endTransform, Cesium.Matrix4.IDENTITY);
+  assert.deepEqual(globeViewer.calls.track, [null]);
 
-  const cityViewer = stubViewer();
-  flyToPresetLocation(cityViewer, 'austin', { viewMode: 'overview' });
-  assert.equal(cityViewer.flights[0].endTransform, Cesium.Matrix4.IDENTITY);
+  const cityViewer = stubViewer({ trackedTarget: tracked });
+  flyToPresetLocation(cityViewer, 'curitiba', { viewMode: 'overview' });
+  assert.deepEqual(cityViewer.calls.track, [null]);
+  assert.equal(cityViewer.flights[0].kind, 'bounds');
+});
+
+test('a POI flight looks at the landmark from its hand-tuned range, heading and pitch', () => {
+  const viewer = stubViewer();
+  const result = flyToPresetLocation(viewer, 'curitiba');
+  const flight = viewer.flights[0];
+  assert.equal(flight.kind, 'target');
+  assert.equal(flight.target.lat, -25.4184);
+  assert.equal(flight.target.lon, -49.2699);
+  assert.equal(flight.rangeM, 600);
+  assert.equal(flight.pitch, -28);
+  assert.equal(flight.heading, 0);
+  assert.deepEqual(result.targetPosition, { lat: -25.4184, lon: -49.2699, height: 0 });
+});
+
+test('a municipio frames its padded outline at the -68 degree pitch', () => {
+  const viewer = stubViewer();
+  const result = flyToMunicipio(viewer, { lat: -25, lon: -50, bbox: [-50.2, -25.1, -49.8, -24.9] });
+  const flight = viewer.flights[0];
+  assert.equal(flight.kind, 'bounds');
+  assert.equal(flight.pitch, MUNICIPIO_VIEW_PITCH_DEG);
+  const [w, s, e, n] = flight.bbox;
+  assert.ok(w < -50.2 && e > -49.8 && s < -25.1 && n > -24.9, 'the outline gets breathing room');
+  assert.deepEqual(result.targetPosition, { lat: -25, lon: -50, height: 0 });
+  // Without the outline, a typical municipio radius around the centre.
+  const fallback = municipioFramingBbox(null, -25, -50);
+  assert.ok(fallback[0] < -50 && fallback[2] > -50 && fallback[1] < -25 && fallback[3] > -25);
+});
+
+test('geometryBbox measures nested polygon coordinates', () => {
+  assert.deepEqual(
+    geometryBbox({ coordinates: [[[[-50, -25], [-49, -24.5], [-49.5, -26]]]] }),
+    [-50, -26, -49, -24.5],
+  );
+  assert.equal(geometryBbox({ coordinates: [] }), null);
 });
 
 test('city and landmark flights expose completion and cancellation hooks', () => {
   const overviewViewer = stubViewer();
   const overviewEvents = [];
-  flyToPresetLocation(overviewViewer, 'austin', {
+  flyToPresetLocation(overviewViewer, 'curitiba', {
     viewMode: 'overview',
     onComplete: () => overviewEvents.push('complete'),
     onCancel: () => overviewEvents.push('cancel'),
@@ -561,7 +609,7 @@ test('city and landmark flights expose completion and cancellation hooks', () =>
 
   const landmarkViewer = stubViewer();
   const landmarkEvents = [];
-  flyToPresetLocation(landmarkViewer, 'austin', {
+  flyToPresetLocation(landmarkViewer, 'curitiba', {
     onComplete: () => landmarkEvents.push('complete'),
     onCancel: () => landmarkEvents.push('cancel'),
   });

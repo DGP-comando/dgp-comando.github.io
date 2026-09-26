@@ -1,10 +1,10 @@
-import * as Cesium from 'cesium';
 import { retroShader } from './styles/retro.js';
 import { animeShader } from './styles/anime.js';
 import { noirShader } from './styles/noir.js';
 import { snowShader } from './styles/snow.js';
 import { nightVisionShader } from './styles/surveillance.js';
 import { thermalShader } from './styles/thermal.js';
+import { createPostProcess } from './maplibre/postProcess.js';
 import {
   BLOOM_INTENSITY_DEFAULT,
   BLOOM_SCALE_VERSION,
@@ -12,7 +12,7 @@ import {
   clampBloomIntensity,
   decodeBloomIntensity,
 } from './bloom.js';
-import { LOCATIONS, CITY_POIS, GLOBE_VIEW, flyToGlobeView, flyToMunicipio, flyToPresetLocation, flyToPOI, searchAndFlyTo } from './locations.js';
+import { LOCATIONS, CITY_POIS, GLOBE_VIEW, flyToGlobeView, flyToMunicipio, flyToPresetLocation, flyToPOI, loadMunicipioBboxes, searchAndFlyTo } from './locations.js';
 import { PARANA_OVERVIEW, flyToParanaOverview } from './camera.js';
 import { locationMiniStatus } from './locationStatus.js';
 import {
@@ -32,6 +32,7 @@ import {
   LayerStateCoordinator,
 } from './data/layerState.js';
 import { renderMapStackChips, syncMapStackChips } from './mapStackChips.js';
+import { LEGACY_STACK_IDS, normalizeStackId } from './mapStackController.js';
 import { OrbitController } from './orbit.js';
 import {
   CelestialRing,
@@ -79,7 +80,8 @@ import aisLiveVesselsLayer from './data/aisLiveVessels.js';
 import militaryAwarenessLayer from './data/militaryAwareness.js';
 import militaryInstallationsLayer from './data/militaryInstallations.js';
 import rocketLaunchesLayer from './data/rocketLaunches.js';
-import { datageoMunicipiosLayer } from './data/datageoMunicipios.js';
+import { openMunicipioFicha } from './maplibre/layers/municipios.js';
+import { getActiveLayerHost } from './maplibre/layerHost.js';
 import { MUNICIPIO_SELECIONADO_EVENT, getMunicipioSelecionado } from './datageoFicha.js';
 import {
   aggregateLayerLoading,
@@ -157,14 +159,6 @@ import {
   runExplicitNavigation,
   stampInitialShareGesture,
 } from './navigationPolicy.js';
-import {
-  cachedGroundFloor,
-  cachedMeshFloor,
-  GROUND_FLOOR_LIFT_M,
-  meshFloorPreferred,
-  warmGroundFloor,
-} from './data/groundFloor.js';
-import { sampleMeshFloorCells } from './data/meshFloorSampler.js';
 import { holdContinuousRender, releaseContinuousRender, governorRequestRender } from './renderGovernor.js';
 import {
   setScopeMaskEnabled,
@@ -184,10 +178,9 @@ import {
   altitudeRulerCurveInset,
   altitudeRulerTicks,
   bearingBetweenCoordinates,
-  cockpitAnchorCorrectionStep,
+  cockpitChaseMapView,
+  positionLatLon,
   cockpitAltitudeDisplayFt,
-  cockpitGroundSafeHeight,
-  cockpitSurfaceWaitExpired,
   cockpitUiUpdateDue,
   compassDivisions,
   formatAltitudeRulerTick,
@@ -240,10 +233,6 @@ const DETECTION_ALLOCATION_STORAGE_KEY = 'gev:detection-allocation:v1';
 const PANEL_Z_BASE = 100;
 const PANEL_Z_MAX = 139;
 const COCKPIT_HEADING_SLEW_DPS = 28;
-const COCKPIT_FORWARD_OFFSET_M = 7;
-const COCKPIT_UP_OFFSET_M = 2.6;
-const COCKPIT_MIN_GROUND_CLEARANCE_M = 12;
-const COCKPIT_VIEW_PITCH_DEG = -4;
 const COCKPIT_CAMERA_UPDATE_MS = 50;
 const COCKPIT_HUD_UPDATE_MS = 100;
 const COCKPIT_CONTEXT_UPDATE_MS = 250;
@@ -255,8 +244,6 @@ const COCKPIT_UTILITY_SIGNAL_GAP_PX = 8;
 const COCKPIT_UTILITY_MIN_TOP_PX = 96;
 const COCKPIT_UTILITY_MIN_TOP_RATIO = 0.12;
 const COCKPIT_UTILITY_LAUNCHER_MIN_HEIGHT_PX = 50;
-const COCKPIT_GROUND_PROBE_MS = 500;
-const COCKPIT_GROUND_WAIT_TIMEOUT_MS = 5000;
 const COCKPIT_BRIEF_ROTATE_MS = 9000;
 const COCKPIT_BRIEF_CYCLE_OFF_HELP = 'Cycle briefing pages automatically every 9 seconds (Signals → News → Local). Pauses while you hover or focus the panel. Live signal data refreshes continuously either way.';
 const COCKPIT_BRIEF_CYCLE_ON_HELP = 'Stop automatic page cycling. Previous, Next, and the SIG/NEWS/LOCAL tabs stay available.';
@@ -666,8 +653,37 @@ function setCockpitRollingValue(element, text, numericValue, {
   element.replaceChildren(fragment);
 }
 
+/**
+ * COCKPIT sobre o motor MapLibre (src/maplibre/engine.js).
+ *
+ * Entrada: um alvo rastreado (`engine.trackedTarget`, publicado pela camada de
+ * voos/militar com `getPosition() -> {lon, lat, alt}` e `gevTrackedId`
+ * `<layerId>:<icao24>`) cuja camada descreve a aeronave em `getTrackedInfo()`
+ * (latitude, longitude, altitudeM, velocityMps, track, onGround, stale...).
+ *
+ * Câmera: PERSEGUIÇÃO sobre o alvo rastreado (cockpitChaseMapView). O centro
+ * da vista é a posição da aeronave (`getPosition()` do alvo) — o mesmo ponto
+ * que o laço de `engine.track` usa, então o acompanhamento do motor continua
+ * ligado e os dois nunca disputam a câmera (o alvo NÃO é solto: a camada de
+ * voos trata `trackedchange` para outro alvo como liberação). Bearing = rumo
+ * (slew de 28°/s), pitch 76° (-14° Cesium), distância escolhida para a câmera
+ * ficar na altitude da aeronave + 150 m (mínimo 1,2 km), olhando o horizonte
+ * à frente. Escrita por `map.jumpTo` num laço rAF próprio a 20 Hz. Enquanto
+ * ativo, o relevo raster-dem fica ligado com exagero 1 (altitude MSL bate com
+ * o chão) e as interações de arrastar/zoom do mapa ficam desligadas; tudo é
+ * restaurado na saída. `gev:cockpit-mode-changed` avisa as camadas.
+ *
+ * Degradações em relação ao Cesium: sem modelo 3D nem visão de dentro da
+ * cabine — a câmera fica atrás da aeronave, cujo ícone (desenhado no chão
+ * pelo MapLibre) fica no centro da tela; sem malha fotorrealista nem espera
+ * por "surface acquiring" (o chão é o relevo raster-dem); pitch limitado a
+ * 85° pelo MapLibre (não dá para olhar acima do horizonte); sem âncora
+ * inercial própria (a camada já interpola a posição exibida); a visão
+ * (CRT/NVG/FLIR/Noir) depende do que o gerenciador de estilos oferecer via
+ * onVisionChange.
+ */
 class CockpitViewController {
-  constructor(viewer, {
+  constructor(engine, {
     onVisionChange = null,
     onCameraTakeover = null,
     isEntryAllowed = null,
@@ -676,7 +692,7 @@ class CockpitViewController {
     getInheritedVisionLabel = null,
     restoreTrackingFrame = null,
   } = {}) {
-    this.viewer = viewer;
+    this.engine = engine;
     this.active = false;
     this.trackedEntity = null;
     this.trackedEntityWasShown = true;
@@ -788,32 +804,36 @@ class CockpitViewController {
     this.regionalBriefSubjectId = null;
     this.contextLayoutFrame = null;
     this.contextLayoutStamp = null;
-    this.scratchTarget = new Cesium.Cartesian3();
-    this.cockpitAnchor = new Cesium.Cartesian3();
+    /** @type {{lat:number, lon:number, alt:number}|null} âncora inercial da câmera */
+    this.cockpitAnchor = null;
     this.cockpitAnchorValid = false;
-    this.scratchCamera = new Cesium.Cartesian3();
-    this.scratchAdvance = new Cesium.Cartesian3();
-    this.scratchCorrection = new Cesium.Cartesian3();
-    this.scratchForward = new Cesium.Cartesian3();
-    this.scratchHorizontal = new Cesium.Cartesian3();
-    this.scratchUp = new Cesium.Cartesian3();
-    this.scratchLocal = new Cesium.Cartesian3();
-    this.scratchEnu = new Cesium.Matrix4();
-    this.scratchAnchorCartographic = new Cesium.Cartographic();
-    this.scratchCameraCartographic = new Cesium.Cartographic();
-    this.scratchTargetCartographic = new Cesium.Cartographic();
+    /** Estado do mapa a restaurar na saída (relevo, interações). */
+    this._mapRestore = null;
+    this._frame = null;
     this._listenerRemovers = [];
 
-    // Camera mutations belong before scene update/culling. Changing the camera
-    // from preRender makes 3D Tiles discover a new view after traversal and can
-    // create a self-sustaining refinement loop under a moving cockpit camera.
-    this._listenerRemovers.push(
-      viewer.scene.preUpdate.addEventListener(() => this.update()),
-      viewer.trackedEntityChanged.addEventListener(() => {
-        if (this.active) this._adoptTrackedEntity(performance.now());
-        else this.syncEntry();
-      }),
-    );
+    // Laço próprio: a 250 ms fora do cockpit (disponibilidade da entrada) e a
+    // cada quadro dentro (a câmera é escrita a COCKPIT_CAMERA_UPDATE_MS).
+    const loop = () => {
+      this._frame = null;
+      try {
+        this.update();
+      } catch (error) {
+        console.warn('[Cockpit] update failed:', error);
+      }
+      this._scheduleFrame();
+    };
+    this._loop = loop;
+    this._scheduleFrame();
+    if (typeof engine?.on === 'function') {
+      this._listenerRemovers.push(engine.on('trackedchange', (target) => {
+        if (this.active) {
+          if (target) this._adoptTrackedEntity(performance.now());
+        } else {
+          this.syncEntry();
+        }
+      }));
+    }
     this._listen(this.entry, 'click', () => this.enter());
     this._listen(this.tr3bToggle, 'click', () => this.toggleTrackedTr3b());
     this._listen(this.mapViewButton, 'click', () => this.exit());
@@ -881,10 +901,91 @@ class CockpitViewController {
     if (this.weatherState) this.weatherState.textContent = active ? 'ON' : 'OFF';
   }
 
+  _scheduleFrame() {
+    if (this._frame !== null || this._disposed) return;
+    if (this.active && typeof requestAnimationFrame === 'function') {
+      this._frame = { raf: requestAnimationFrame(this._loop) };
+    } else {
+      this._frame = { timeout: setTimeout(this._loop, 250) };
+    }
+  }
+
+  _cancelFrame() {
+    if (!this._frame) return;
+    if (this._frame.raf !== undefined) cancelAnimationFrame(this._frame.raf);
+    if (this._frame.timeout !== undefined) clearTimeout(this._frame.timeout);
+    this._frame = null;
+  }
+
+  /** Alvo rastreado pelo motor com posição utilizável, ou null. */
+  _engineTrackedTarget() {
+    const target = this.engine?.trackedTarget || null;
+    return target && typeof target.getPosition === 'function' ? target : null;
+  }
+
+  /** Posição {lat, lon, alt} do alvo do cockpit: getPosition() do alvo, senão a info da camada. */
+  _targetPosition(info) {
+    let pos = null;
+    try {
+      pos = this.trackedEntity?.getPosition?.() || null;
+    } catch {
+      pos = null;
+    }
+    const lat = Number.isFinite(pos?.lat) ? pos.lat : info?.latitude;
+    const lon = Number.isFinite(pos?.lon) ? pos.lon : info?.longitude;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    let alt = Number.isFinite(info?.altitudeM) ? info.altitudeM : pos?.alt;
+    if (info?.onGround === true || !Number.isFinite(alt)) alt = Number.isFinite(pos?.alt) ? pos.alt : 0;
+    return { lat, lon, alt };
+  }
+
+  /** Altura do relevo (m) em lat/lon, ou null sem relevo carregado. */
+  _terrainFloorM(lat, lon) {
+    const map = this.engine?.map;
+    if (!map?.getTerrain?.() || typeof map.queryTerrainElevation !== 'function') return null;
+    try {
+      const value = map.queryTerrainElevation([lon, lat]);
+      return Number.isFinite(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Desliga as interações do mapa e liga o relevo (exagero 1) durante o cockpit. */
+  _takeMap() {
+    const map = this.engine?.map;
+    const handlers = ['dragPan', 'dragRotate', 'scrollZoom', 'boxZoom', 'doubleClickZoom', 'touchZoomRotate', 'touchPitch', 'keyboard'];
+    const restore = { terrain: !!this.engine?.hasTerrain?.(), handlers: [] };
+    for (const name of handlers) {
+      const handler = map?.[name];
+      if (handler?.isEnabled?.()) {
+        handler.disable();
+        restore.handlers.push(name);
+      }
+    }
+    try {
+      this.engine?.setTerrain?.(true, { exaggeration: 1 });
+    } catch (error) {
+      console.warn('[Cockpit] terrain unavailable:', error);
+    }
+    this._mapRestore = restore;
+  }
+
+  _releaseMap() {
+    const restore = this._mapRestore;
+    this._mapRestore = null;
+    if (!restore) return;
+    const map = this.engine?.map;
+    for (const name of restore.handlers) map?.[name]?.enable?.();
+    try {
+      this.engine?.setTerrain?.(restore.terrain);
+    } catch { /* relevo é best-effort */ }
+  }
+
   readAircraftInfo() {
-    // In cockpit mode the controller takes the entity off `viewer.trackedEntity`
-    // (see update()), so the cockpit's own handle is the tracked identity there.
-    const trackedEntity = this.viewer?.trackedEntity || this.trackedEntity;
+    // In cockpit mode the controller takes the target off `engine.trackedTarget`
+    // (see enter()), so the cockpit's own handle is the tracked identity there.
+    const trackedEntity = this._engineTrackedTarget() || this.trackedEntity;
     return resolveTrackedAircraftInfo({
       civilian: flightsLayer.getTrackedInfo?.() || null,
       military: militaryFlightsLayer.getTrackedInfo?.() || null,
@@ -943,7 +1044,7 @@ class CockpitViewController {
   syncEntry() {
     if (this.active) return;
     const info = this.readAircraftInfo();
-    const trackedContact = !!(info && this.viewer.trackedEntity?.position);
+    const trackedContact = !!(info && this._engineTrackedTarget());
     this.syncTr3bToggle(trackedContact ? info : null);
     const available = !!(this.isEntryAllowed() && trackedContact);
     // Change-only DOM writes: this runs on a preUpdate cadence, and
@@ -978,17 +1079,12 @@ class CockpitViewController {
 
   /** Adopt a newly selected aircraft without ever leaving Cockpit. */
   _adoptTrackedEntity(nowMs, suppliedInfo = null) {
-    const nextEntity = this.viewer.trackedEntity;
-    if (!this.active || !nextEntity?.position || nextEntity === this.trackedEntity) return false;
+    const nextEntity = this._engineTrackedTarget();
+    if (!this.active || !nextEntity || nextEntity === this.trackedEntity) return false;
     const info = suppliedInfo || this.readAircraftInfo();
     if (!info) return false;
-    if (this.trackedEntity && this.viewer.entities.contains(this.trackedEntity)) {
-      this.trackedEntity.show = this.trackedEntityWasShown;
-    }
     this.trackedEntity = nextEntity;
-    this.trackedEntityWasShown = nextEntity.show;
-    nextEntity.show = false;
-    this.viewer.trackedEntity = undefined;
+    this.cockpitAnchor = null;
     this.cockpitAnchorValid = false;
     this.heading = normalizeHeading(info.track ?? 0);
     this.lastFrameMs = nowMs;
@@ -1041,7 +1137,7 @@ class CockpitViewController {
     const key = event.key?.toLowerCase();
     if (key === 'c' && !event.metaKey && !event.ctrlKey && !event.altKey) {
       if (!this.active) {
-        const cockpitAttempt = !!(this.readAircraftInfo() && this.viewer.trackedEntity?.position);
+        const cockpitAttempt = !!(this.readAircraftInfo() && this._engineTrackedTarget());
         if (!cockpitAttempt) return;
       }
       event.preventDefault();
@@ -1056,17 +1152,16 @@ class CockpitViewController {
     if (this.active) return false;
     if (!this.isEntryAllowed()) return false;
     const info = this.readAircraftInfo();
-    const entity = this.viewer.trackedEntity;
-    if (!info || !entity?.position) return false;
+    const entity = this._engineTrackedTarget();
+    if (!info || !entity) return false;
     this.entryFocusOrigin = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
     // Retire deferred navigation before cancelFlight can run its callbacks.
     this.onCameraTakeover?.();
-    this.viewer.camera.cancelFlight();
+    this.engine?.cancelFlight?.();
     this.trackedEntity = entity;
-    this.trackedEntityWasShown = entity.show;
-    entity.show = false;
+    this.cockpitAnchor = null;
     this.heading = normalizeHeading(info.track ?? 0);
     this.lastFrameMs = performance.now();
     this.lastCameraUpdateMs = 0;
@@ -1081,13 +1176,14 @@ class CockpitViewController {
     this.cockpitAnchorValid = false;
     this.lastCameraUpdateMs = 0;
     this.active = true;
-    // Cockpit animates the camera from preUpdate every frame — preUpdate only
-    // runs on rendered frames, so idle mode would freeze the cockpit solid.
-    // (perf wave 2)
+    // The cockpit camera moves every frame; keep the render governor awake.
     holdContinuousRender('cockpit');
-    this.viewer.trackedEntity = undefined;
-    this.viewer.scene.screenSpaceCameraController.enableInputs = false;
+    // O alvo continua em engine.track: a perseguição centra no mesmo ponto.
     document.body.classList.add('cockpit-mode');
+    this.dispatchCockpitModeChanged(true, info);
+    this._takeMap();
+    this._cancelFrame();
+    this._scheduleFrame();
     // Activation writes entry/quick/map visibility directly, bypassing
     // syncEntry's change-only cache — invalidate it so the exit-path
     // syncEntry re-applies every write (notably re-hiding mapViewButton).
@@ -1119,7 +1215,6 @@ class CockpitViewController {
     this.scheduleContextLayout();
     this.mapViewButton?.focus({ preventScroll: true });
     this.onEntered?.();
-    this.dispatchCockpitModeChanged(true, info);
     return true;
   }
 
@@ -1130,6 +1225,7 @@ class CockpitViewController {
     releaseContinuousRender('cockpit');
     this.trackedEntity = null;
     this.heading = null;
+    this.cockpitAnchor = null;
     this.cockpitAnchorValid = false;
     this.surfaceWaitStartedMs = 0;
     this.surfaceAcquiring = false;
@@ -1153,12 +1249,10 @@ class CockpitViewController {
     this.setVisionMode('optical');
     if (this.signalStream) this.signalStream.hidden = true;
     this.hud?.classList.remove('signals-active');
-    this.viewer.scene.screenSpaceCameraController.enableInputs = true;
-    if (entity && this.viewer.entities.contains(entity)) entity.show = this.trackedEntityWasShown;
-    this.trackedEntityWasShown = true;
+    this._releaseMap();
     this.dispatchCockpitModeChanged(false);
-    if (restoreTracking && entity && this.viewer.entities.contains(entity)) {
-      this.viewer.trackedEntity = entity;
+    // O alvo nunca saiu de engine.track; só reenquadra se ainda é o rastreado.
+    if (restoreTracking && entity && this.engine?.trackedTarget === entity) {
       this.restoreTrackingFrame(entity);
     }
     this.syncEntry();
@@ -1175,15 +1269,9 @@ class CockpitViewController {
   update() {
     if (!this.active) {
       // Entry availability changes on a human timescale (tracking start/stop,
-      // info arriving after a poll) — polling it every rendered frame ran
-      // readAircraftInfo() + DOM pokes at display rate in plain map mode.
-      // 250 ms keeps the chip imperceptibly fresh; trackedEntityChanged still
-      // fires syncEntry immediately on the events that matter. (perf item 9)
-      const nowMs = performance.now();
-      if (nowMs - (this._lastEntrySyncMs || 0) >= 250) {
-        this._lastEntrySyncMs = nowMs;
-        this.syncEntry();
-      }
+      // info arriving after a poll); the idle loop runs every 250 ms and the
+      // engine's trackedchange still fires syncEntry immediately. (perf item 9)
+      this.syncEntry();
       return;
     }
 
@@ -1194,7 +1282,7 @@ class CockpitViewController {
     // NEXT/PREV selection can otherwise spend one frame driving the old
     // aircraft with the new aircraft's metadata.
     this._adoptTrackedEntity(nowMs, info);
-    if (!info || !this.trackedEntity || !this.viewer.entities.contains(this.trackedEntity)) {
+    if (!info || !this.trackedEntity) {
       if (nowMs < this.contextNavigationDeadlineMs) return;
       this.exit({ restoreTracking: false });
       return;
@@ -1202,7 +1290,7 @@ class CockpitViewController {
     if (!cockpitUiUpdateDue(nowMs, this.lastCameraUpdateMs, COCKPIT_CAMERA_UPDATE_MS)) return;
     this.lastCameraUpdateMs = nowMs;
 
-    const target = this.trackedEntity.position.getValue(this.viewer.clock.currentTime, this.scratchTarget);
+    const target = this._targetPosition(info);
     if (!target) return;
     const dtSec = Math.min(0.1, Math.max(0, (nowMs - this.lastFrameMs) / 1000));
     this.lastFrameMs = nowMs;
@@ -1212,180 +1300,31 @@ class CockpitViewController {
       );
     }
 
-    if (!this.cockpitAnchorValid) {
-      Cesium.Cartesian3.clone(target, this.cockpitAnchor);
-      this.cockpitAnchorValid = true;
-    }
-
-    // First-person motion cannot use the delayed feed correction as a raw
-    // camera destination: a harmless icon re-anchor becomes a whole-world
-    // surge/reversal in cockpit view. Advance the camera anchor inertially
-    // from the reported course/speed and converge on the authoritative layer
-    // display position at a bounded rate. This preserves the layer's required
-    // 15/30-second interpolation and per-frame cache without exposing its
-    // sample-boundary corrections to the camera.
-    const headingRad = Cesium.Math.toRadians(this.heading ?? 0);
-    const pitchRad = Cesium.Math.toRadians(COCKPIT_VIEW_PITCH_DEG);
-    const speedMps = Number.isFinite(info.velocityMps) ? Math.max(0, info.velocityMps) : 0;
-
-    if (info.stale) {
-      // A feed backoff has no authoritative velocity epoch to advance from.
-      // Hold the cockpit on the exact layer-rendered position so the camera
-      // cannot coast away while the icon correctly remains fixed.
-      Cesium.Cartesian3.clone(target, this.cockpitAnchor);
-    } else {
-      Cesium.Transforms.eastNorthUpToFixedFrame(
-        this.cockpitAnchor, Cesium.Ellipsoid.WGS84, this.scratchEnu,
-      );
-      this.scratchLocal.x = Math.sin(headingRad);
-      this.scratchLocal.y = Math.cos(headingRad);
-      this.scratchLocal.z = 0;
-      Cesium.Matrix4.multiplyByPointAsVector(this.scratchEnu, this.scratchLocal, this.scratchHorizontal);
-      Cesium.Cartesian3.normalize(this.scratchHorizontal, this.scratchHorizontal);
-      Cesium.Cartesian3.multiplyByScalar(
-        this.scratchHorizontal, speedMps * dtSec, this.scratchAdvance,
-      );
-      Cesium.Cartesian3.add(this.cockpitAnchor, this.scratchAdvance, this.cockpitAnchor);
-      Cesium.Cartesian3.subtract(target, this.cockpitAnchor, this.scratchCorrection);
-      const correctionDistanceM = Cesium.Cartesian3.magnitude(this.scratchCorrection);
-      const correctionStepM = cockpitAnchorCorrectionStep(correctionDistanceM, speedMps, dtSec);
-      if (correctionStepM > 0 && correctionDistanceM > 0) {
-        Cesium.Cartesian3.multiplyByScalar(
-          this.scratchCorrection, correctionStepM / correctionDistanceM, this.scratchCorrection,
-        );
-        Cesium.Cartesian3.add(this.cockpitAnchor, this.scratchCorrection, this.cockpitAnchor);
-      }
-    }
-
-    // The inertial anchor is independent of the layer's render-floor clamp and
-    // can otherwise coast into a photoreal mesh while a landing contact is
-    // between fixes. Clamp it against the same mesh-first shared floor used by
-    // aircraft rendering. For a slow contact whose floor cell is still cold,
-    // its already-clamped render position is a conservative temporary floor.
-    const anchorCartographic = Cesium.Cartographic.fromCartesian(
-      this.cockpitAnchor, Cesium.Ellipsoid.WGS84, this.scratchAnchorCartographic,
-    );
-    const targetCartographic = Cesium.Cartographic.fromCartesian(
-      target, Cesium.Ellipsoid.WGS84, this.scratchTargetCartographic,
-    );
-    let cockpitFloorM = cachedGroundFloor(info.latitude, info.longitude);
-    if (info.onGround === true) {
-      const groundPoint = [{ lat: info.latitude, lon: info.longitude }];
-      warmGroundFloor(groundPoint);
-      const meshFloorM = cachedMeshFloor(info.latitude, info.longitude);
-      if (meshFloorPreferred() && !Number.isFinite(meshFloorM)) {
-        if (cockpitUiUpdateDue(nowMs, this.lastGroundProbeMs, COCKPIT_GROUND_PROBE_MS)) {
-          this.lastGroundProbeMs = nowMs;
-          const viewerCartographic = this.viewer.camera.positionCartographic;
-          sampleMeshFloorCells(this.viewer.scene, groundPoint, {
-            excludeObjects: [this.trackedEntity],
-            viewerLat: Cesium.Math.toDegrees(viewerCartographic.latitude),
-            viewerLon: Cesium.Math.toDegrees(viewerCartographic.longitude),
-          });
-        }
-        cockpitFloorM = cachedMeshFloor(info.latitude, info.longitude);
-        if (!Number.isFinite(cockpitFloorM)) {
-          if (!this.surfaceWaitStartedMs) this.surfaceWaitStartedMs = nowMs;
-          if (!cockpitSurfaceWaitExpired(nowMs, this.surfaceWaitStartedMs, COCKPIT_GROUND_WAIT_TIMEOUT_MS)) {
-            // Keep the already-safe map camera in place while the photoreal
-            // surface under a parked aircraft is acquired. The bounded wait
-            // prevents a permanently cold mesh cell from freezing cockpit.
-            this.surfaceAcquiring = true;
-            this.surfaceFallback = false;
-            if (cockpitUiUpdateDue(nowMs, this.lastHudUpdateMs, COCKPIT_HUD_UPDATE_MS)) {
-              this.lastHudUpdateMs = nowMs;
-              this.updateHud(info, nowMs);
-            }
-            return;
-          }
-          this.surfaceAcquiring = false;
-          this.surfaceFallback = true;
-        } else {
-          this.surfaceWaitStartedMs = 0;
-          this.surfaceAcquiring = false;
-          this.surfaceFallback = false;
-        }
-      }
-    } else {
-      this.surfaceWaitStartedMs = 0;
-      this.surfaceAcquiring = false;
-      this.surfaceFallback = false;
-    }
-    if (!Number.isFinite(cockpitFloorM)
-        && speedMps < 90
-        && Number.isFinite(targetCartographic?.height)) {
-      cockpitFloorM = targetCartographic.height - GROUND_FLOOR_LIFT_M;
-    }
-    if (anchorCartographic && Number.isFinite(cockpitFloorM)) {
-      const minimumAnchorHeightM = cockpitGroundSafeHeight(
-        anchorCartographic.height,
-        cockpitFloorM,
-        COCKPIT_MIN_GROUND_CLEARANCE_M - COCKPIT_UP_OFFSET_M,
-      );
-      if (minimumAnchorHeightM !== anchorCartographic.height) {
-        anchorCartographic.height = minimumAnchorHeightM;
-        Cesium.Ellipsoid.WGS84.cartographicToCartesian(anchorCartographic, this.cockpitAnchor);
-      }
-    }
-
-    // Rebuild the local frame at the stabilized anchor after advancing it.
-    Cesium.Transforms.eastNorthUpToFixedFrame(
-      this.cockpitAnchor, Cesium.Ellipsoid.WGS84, this.scratchEnu,
-    );
-    this.scratchLocal.x = Math.sin(headingRad);
-    this.scratchLocal.y = Math.cos(headingRad);
-    this.scratchLocal.z = 0;
-    Cesium.Matrix4.multiplyByPointAsVector(this.scratchEnu, this.scratchLocal, this.scratchHorizontal);
-    Cesium.Cartesian3.normalize(this.scratchHorizontal, this.scratchHorizontal);
-
-    this.scratchLocal.x = Math.sin(headingRad) * Math.cos(pitchRad);
-    this.scratchLocal.y = Math.cos(headingRad) * Math.cos(pitchRad);
-    this.scratchLocal.z = Math.sin(pitchRad);
-    Cesium.Matrix4.multiplyByPointAsVector(this.scratchEnu, this.scratchLocal, this.scratchForward);
-    Cesium.Cartesian3.normalize(this.scratchForward, this.scratchForward);
-
-    this.scratchLocal.x = -Math.sin(headingRad) * Math.sin(pitchRad);
-    this.scratchLocal.y = -Math.cos(headingRad) * Math.sin(pitchRad);
-    this.scratchLocal.z = Math.cos(pitchRad);
-    Cesium.Matrix4.multiplyByPointAsVector(this.scratchEnu, this.scratchLocal, this.scratchUp);
-    Cesium.Cartesian3.normalize(this.scratchUp, this.scratchUp);
-
-    Cesium.Cartesian3.multiplyByScalar(
-      this.scratchHorizontal, COCKPIT_FORWARD_OFFSET_M, this.scratchCamera,
-    );
-    Cesium.Cartesian3.add(this.cockpitAnchor, this.scratchCamera, this.scratchCamera);
-    Cesium.Matrix4.getTranslation(this.scratchEnu, this.scratchTarget);
-    Cesium.Cartesian3.normalize(this.scratchTarget, this.scratchTarget);
-    Cesium.Cartesian3.multiplyByScalar(this.scratchTarget, COCKPIT_UP_OFFSET_M, this.scratchTarget);
-    Cesium.Cartesian3.add(this.scratchCamera, this.scratchTarget, this.scratchCamera);
-
-    // Recheck at the final forward-offset camera coordinate because a taxiing
-    // aircraft can cross into an adjacent coarse floor cell between updates.
-    const cameraCartographic = Cesium.Cartographic.fromCartesian(
-      this.scratchCamera, Cesium.Ellipsoid.WGS84, this.scratchCameraCartographic,
-    );
-    if (cameraCartographic) {
-      const cameraLat = Cesium.Math.toDegrees(cameraCartographic.latitude);
-      const cameraLon = Cesium.Math.toDegrees(cameraCartographic.longitude);
-      const cameraFloorM = cachedGroundFloor(cameraLat, cameraLon);
-      if (Number.isFinite(cameraFloorM)) {
-        cockpitFloorM = Math.max(cockpitFloorM ?? Number.NEGATIVE_INFINITY, cameraFloorM);
-      }
-      const safeHeightM = cockpitGroundSafeHeight(
-        cameraCartographic.height,
-        cockpitFloorM,
-        COCKPIT_MIN_GROUND_CLEARANCE_M,
-      );
-      if (safeHeightM !== cameraCartographic.height) {
-        cameraCartographic.height = safeHeightM;
-        Cesium.Ellipsoid.WGS84.cartographicToCartesian(cameraCartographic, this.scratchCamera);
-      }
-    }
-
-    this.viewer.camera.setView({
-      destination: this.scratchCamera,
-      orientation: { direction: this.scratchForward, up: this.scratchUp },
+    // Perseguição: centro = posição exibida pela camada (a mesma do laço de
+    // engine.track), distância pela altitude da aeronave acima do relevo.
+    const map = this.engine?.map;
+    const groundM = this._terrainFloorM(target.lat, target.lon);
+    const view = cockpitChaseMapView({
+      lat: target.lat,
+      lon: target.lon,
+      altitudeM: target.alt,
+      groundM: Number.isFinite(groundM) ? groundM : 0,
+      headingDeg: this.heading ?? info.track ?? 0,
+      onGround: info.onGround === true,
+      viewportHeight: map?.getContainer?.().clientHeight || 800,
+      fovDeg: map?.getVerticalFieldOfView?.() || undefined,
     });
+    this.cockpitAnchor = { lat: target.lat, lon: target.lon, alt: target.alt };
+    this.cockpitAnchorValid = true;
+    this.surfaceAcquiring = false;
+    this.surfaceFallback = !this.engine?.hasTerrain?.();
+    if (view && map?.jumpTo) {
+      try {
+        map.jumpTo({ center: view.center, zoom: view.zoom, bearing: view.bearing, pitch: view.pitch });
+      } catch (error) {
+        console.warn('[Cockpit] camera update failed:', error);
+      }
+    }
     if (cockpitUiUpdateDue(nowMs, this.lastHudUpdateMs, COCKPIT_HUD_UPDATE_MS)) {
       this.lastHudUpdateMs = nowMs;
       this.updateHud(info, nowMs);
@@ -1627,12 +1566,13 @@ class CockpitViewController {
     let relative = null;
     if (readout.aircraftRelative
       && closest?.position && Number.isFinite(info.latitude) && Number.isFinite(info.longitude)) {
-      const cartographic = Cesium.Cartographic.fromCartesian(closest.position);
-      const bearing = cartographic ? bearingBetweenCoordinates(
+      // {lat, lon}, {latitude, longitude}, [lon, lat] ou Cartesian3 herdado.
+      const point = positionLatLon(closest.position);
+      const bearing = point ? bearingBetweenCoordinates(
         info.latitude,
         info.longitude,
-        Cesium.Math.toDegrees(cartographic.latitude),
-        Cesium.Math.toDegrees(cartographic.longitude),
+        point.lat,
+        point.lon,
       ) : null;
       relative = relativeBearing(bearing, heading);
     }
@@ -2113,6 +2053,8 @@ class CockpitViewController {
 
   dispose() {
     this.exit({ restoreTracking: false });
+    this._disposed = true;
+    this._cancelFrame();
     this.regionalBriefAbort?.abort();
     this.regionalBriefAbort = null;
     this.regionalBriefRequestToken += 1;
@@ -2123,9 +2065,53 @@ class CockpitViewController {
   }
 }
 
+/**
+ * Migração MapLibre: isola a inicialização de um módulo de outro agente que
+ * ainda pode não ter sido portado do Cesium (HUD, detecção, overlays, anel
+ * celeste, cockpit, pós-processamento). Se lançar, o app sobe mesmo assim com
+ * um aviso no console e um substituto inerte.
+ * @template T
+ * @param {string} label
+ * @param {() => T} fn
+ * @param {T} [fallback]
+ * @returns {T}
+ */
+function guardedInit(label, fn, fallback = undefined) {
+  try {
+    return fn();
+  } catch (error) {
+    console.warn(`[ui] ${label} indisponível (migração MapLibre em curso):`, error);
+    return fallback;
+  }
+}
+
+/**
+ * Substituto inerte para um módulo que não subiu: qualquer método é um no-op
+ * que devolve undefined, e as propriedades de ESTADO conhecidas (active,
+ * enabled, visible…) leem como falsas, para que ui.js não quebre ao chamar a
+ * API pública dele nem trate o módulo ausente como ativo.
+ * @param {string} label
+ * @returns {any}
+ */
+const INERT_STATE_PROPS = new Set([
+  'active', 'enabled', 'visible', 'isActive', 'isEnabled', 'tracking', 'mode', 'variant',
+  'element', 'container', 'root', 'target', 'entity', 'currentTarget', 'state', 'status',
+]);
+function inertModule(label) {
+  const noop = () => undefined;
+  return new Proxy({}, {
+    get(_t, prop) {
+      if (prop === '__inert') return label;
+      if (typeof prop !== 'string' || prop === 'then' || INERT_STATE_PROPS.has(prop)) return undefined;
+      return noop;
+    },
+    set() { return true; },
+  });
+}
+
 export class StyleManager {
   /**
-   * @param {Cesium.Viewer} viewer - The CesiumJS viewer instance.
+   * @param {object} viewer - O motor MapLibre (src/maplibre/engine.js), no lugar do antigo Cesium.Viewer.
    * @param {object} [options]
    */
   constructor(viewer, { mapStackController = null } = {}) {
@@ -2402,7 +2388,7 @@ export class StyleManager {
     this._activeLocationId = null;
     this._expandedCityId = null;
     this._activePoiIndex = null;
-    this._currentTarget = null; // Cesium.Cartesian3 of current POI target
+    this._currentTarget = null; // {lat, lon, height} of current POI target (orbit)
     this._currentPoi = null;    // Current POI data object
     // Formatted address of the last free-text geocode search. Preset pills set
     // _activeLocationId instead; a search has no preset record, so this is the
@@ -2414,10 +2400,12 @@ export class StyleManager {
 
     // Orbit controller
     this.orbitController = new OrbitController(viewer);
+    // Arrastar/rolar o mapa encerra a órbita: apaga o indicador junto.
+    this.orbitController.onStop = () => this._orbitIndicator?.classList.remove('active');
     this._orbitIndicator = null;
 
     // Intel HUD
-    this.hud = new IntelHUD(viewer);
+    this.hud = guardedInit('IntelHUD (hud.js)', () => new IntelHUD(viewer), inertModule('hud'));
     this._cockpitVisionMode = 'optical';
     this._cockpitVisionRestore = null;
     this._cockpitPanelRestore = null;
@@ -2427,7 +2415,7 @@ export class StyleManager {
     this._cockpitContextCollapsedForDataPanel = false;
     /** Pre-Contacts detection state, restored on deactivation (see _syncContactsDetection). */
     this._contactsDetectionRestore = null;
-    this.cockpitView = new CockpitViewController(viewer, {
+    this.cockpitView = guardedInit('CockpitViewController', () => new CockpitViewController(viewer, {
       onVisionChange: (mode, active, options) => this._setCockpitVision(mode, active, options),
       onCameraTakeover: () => this._stampNavigation({ cancelPendingSelection: false }),
       getInheritedVisionLabel: () => (
@@ -2479,17 +2467,17 @@ export class StyleManager {
         if (layerId === 'military') return militaryFlightsLayer.refocusTrackedById?.(trackedId) === true;
         return false;
       },
-    });
+    }), inertModule('cockpitView'));
 
     // Full-globe sun/moon ring. It is a crisp screen-space overlay above the
-    // Cesium canvas but below the HUD/detection/readout z ladder.
-    this.celestialRing = new CelestialRing(viewer, {
+    // map canvas but below the HUD/detection/readout z ladder.
+    this.celestialRing = guardedInit('CelestialRing', () => new CelestialRing(viewer, {
       enabled: false,
       onAutoDisable: () => this.setCelestialRingEnabled(false, {
         syncShare: !!this.shareLinkManager,
         focus: false,
       }),
-    });
+    }), inertModule('celestialRing'));
 
     // Share Link Manager
     this.shareLinkManager = new ShareLinkManager(viewer, {
@@ -2513,6 +2501,9 @@ export class StyleManager {
           scopeFeatherPct,
           scopeTerminusPct,
           mapStack,
+          mapGlobe,
+          mapTerrain,
+          mapLabels,
           panelState,
           styleParams,
         } = state || {};
@@ -2582,6 +2573,16 @@ export class StyleManager {
           const pinned = clampScopeTerminusPct(scopeTerminusPct);
           setScopeTerminusOverride(pinned == null ? null : pinned / 100);
         }
+        // Globo/2D e relevo (parâmetros opcionais `gl`/`rel`) antes do mapa base.
+        if (typeof mapGlobe === 'boolean' && this.mapStackController?.isGlobe?.() !== mapGlobe) {
+          this._setMapToggle('globe', mapGlobe, { syncShare: false });
+        }
+        if (typeof mapTerrain === 'boolean' && this.mapStackController?.hasTerrain?.() !== mapTerrain) {
+          this._setMapToggle('terrain', mapTerrain, { syncShare: false });
+        }
+        if (typeof mapLabels === 'boolean' && this.mapStackController?.getLabels?.() !== mapLabels) {
+          this._setMapToggle('labels', mapLabels, { syncShare: false });
+        }
         const mapStackRestore = mapStack
           ? this._setMapStack(mapStack, { syncShare: false })
           : Promise.resolve();
@@ -2590,7 +2591,7 @@ export class StyleManager {
         this._syncShareState();
       },
       isNavigationCurrent: (generation) => generation === this._navigationGeneration,
-      cancelOwnedNavigation: () => this.viewer.camera.cancelFlight(),
+      cancelOwnedNavigation: () => this.viewer.cancelFlight(),
     });
     this.shareLinkManager.setPanelStateProvider(() => this._buildSharePanelState());
     this.shareLinkManager.setStyleParamStateProvider((styleName) => {
@@ -2625,19 +2626,19 @@ export class StyleManager {
     // The shared world-overlay host must own its one postRender lane before
     // detection and tracked-readout initialize. It stays transparent until a
     // production source explicitly registers entries.
-    initWorldOverlay(viewer);
+    guardedInit('initWorldOverlay', () => initWorldOverlay(viewer));
 
     // Initialize detection overlay BEFORE style stages so the composite
     // stage is first in the post-process pipeline
-    initDetection(viewer, [trafficLayer, flightsLayer, militaryFlightsLayer, satellitesLayer, cctvLayer, bikeshareLayer, aisLiveVesselsLayer], (modeLabel) => {
+    guardedInit('initDetection', () => initDetection(viewer, [trafficLayer, flightsLayer, militaryFlightsLayer, satellitesLayer, cctvLayer, bikeshareLayer, aisLiveVesselsLayer], (modeLabel) => {
       this._updateDetectionButton(modeLabel);
-    });
-    initTrackedReadout(viewer);
-    setDetectionStyle(this.activeStyle);
-    this._applyDetectionDensityFromUi();
+    }));
+    guardedInit('initTrackedReadout', () => initTrackedReadout(viewer));
+    guardedInit('setDetectionStyle', () => setDetectionStyle(this.activeStyle));
+    guardedInit('detection density', () => this._applyDetectionDensityFromUi());
 
-    this._initStages();
-    this._initBloomSharpen();
+    guardedInit('_initStages (pós-processamento)', () => this._initStages());
+    guardedInit('_initBloomSharpen (pós-processamento)', () => this._initBloomSharpen());
     this._initUI();
     this._initMapStackControl();
     this._initPanelChrome();
@@ -2766,8 +2767,9 @@ export class StyleManager {
       window,
       this._worldRequestFocusHandler,
     );
-    this._navigationOwnerChangedRemover = viewer.trackedEntityChanged.addEventListener((entity) => {
-      if (entity && !this._disposed) this._stampNavigation({ cancelPendingSelection: false });
+    // Acompanhamento de alvo (engine.track) — antes viewer.trackedEntityChanged.
+    this._navigationOwnerChangedRemover = viewer.on('trackedchange', (target) => {
+      if (target && !this._disposed) this._stampNavigation({ cancelPendingSelection: false });
     });
     // Vessel/installation focus flies without ever assigning a tracked entity,
     // so it cannot reach the listener above. It announces instead.
@@ -2859,13 +2861,10 @@ export class StyleManager {
     }
     try { satellitesLayer.stopTracking?.({ origin: trackingOrigin }); } catch { /* best-effort release */ }
     try { rocketLaunchesLayer.releaseCameraOwnership?.(); } catch { /* best-effort release */ }
-    this.viewer.trackedEntity = undefined;
-    interruptCameraMotion('explicit-navigation');
+    this.viewer.track(null);
+    try { interruptCameraMotion('explicit-navigation'); } catch { /* cameraVerbs ainda em migração */ }
     this._stopOrbit();
-    if (!preserveCameraFlight) this.viewer.camera.cancelFlight();
-    try {
-      this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-    } catch { /* teardown race */ }
+    if (!preserveCameraFlight) this.viewer.cancelFlight();
     return contactSelected;
   }
 
@@ -2964,12 +2963,15 @@ export class StyleManager {
   }
 
   /**
-   * Creates one CesiumJS PostProcessStage per visual style and registers
-   * it with the scene. Each stage starts with intensity 0 (invisible)
-   * so crossfade transitions can animate it in later.
+   * Creates one post-process stage per visual style in the MapLibre
+   * post-process chain (src/maplibre/postProcess.js — a WebGL2 overlay that
+   * runs the same GLSL on a copy of the map canvas). Stages keep the
+   * Cesium.PostProcessStage shape ({uniforms, enabled}). Each stage starts
+   * with intensity 0 (invisible) so crossfade transitions can animate it in.
    * @returns {void}
    */
   _initStages() {
+    if (!this._post) this._post = createPostProcess(this.viewer);
     for (const [name, shader] of Object.entries(STYLES)) {
       const uniforms = { intensity: 0.0 };
 
@@ -2986,7 +2988,7 @@ export class StyleManager {
         }
       }
 
-      const stage = new Cesium.PostProcessStage({
+      const stage = this._post.addStage({
         name: `godsEyeView_${name}`,
         fragmentShader: shader.fragmentShader,
         uniforms,
@@ -3000,7 +3002,6 @@ export class StyleManager {
       // featherable zero-per-frame canvas), which frees these passes for
       // real. If the scope ever looks wrong, look there — not here.
       stage.enabled = false;
-      this.viewer.scene.postProcessStages.add(stage);
       this.stages[name] = stage;
     }
     // Frozen after init — cached so the per-frame animation loop doesn't
@@ -3200,13 +3201,16 @@ export class StyleManager {
   }
 
   /**
-   * Configures Cesium's built-in bloom stage and adds a custom unsharp-mask
-   * sharpen stage to the post-process pipeline. Both start disabled.
+   * Configures the bloom stage (Cesium's bloom shaders, ported into the
+   * MapLibre post-process chain) and adds the custom unsharp-mask sharpen
+   * stage after the style stages. Both start disabled.
    * @returns {void}
    */
   _initBloomSharpen() {
-    // Bloom — use Cesium's built-in bloom
-    this._bloomStage = this.viewer.scene.postProcessStages.bloom;
+    if (!this._post) this._post = createPostProcess(this.viewer);
+    // Bloom — Cesium's bloom (contrast/bias → gaussian x/y → composite),
+    // always first in the chain like postProcessStages.bloom was.
+    this._bloomStage = this._post.bloom;
     this._bloomStage.enabled = false;
     this._bloomStage.uniforms.glowOnly = false;
     this._bloomStage.uniforms.contrast = 256.0;
@@ -3216,7 +3220,7 @@ export class StyleManager {
     this._bloomStage.uniforms.stepSize = 1.0;
 
     // Sharpen — custom unsharp mask PostProcessStage
-    this._sharpenStage = new Cesium.PostProcessStage({
+    this._sharpenStage = this._post.addStage({
       name: 'godsEyeView_sharpen',
       fragmentShader: SHARPEN_SHADER,
       uniforms: {
@@ -3224,7 +3228,6 @@ export class StyleManager {
       },
     });
     this._sharpenStage.enabled = false;
-    this.viewer.scene.postProcessStages.add(this._sharpenStage);
     if (this._sharpenSlider) {
       this._applySharpenIntensity(parseInt(this._sharpenSlider.value, 10) / 100);
     }
@@ -3505,9 +3508,9 @@ export class StyleManager {
   }
 
   /**
-   * Renders the validated map stack chip row from the matching controller
-   * entries. Cesium ion/Bing chips remain keyboard-focusable but unavailable,
-   * with an accessible explanation, until a CESIUM_ION_TOKEN is configured.
+   * Renders the map stack chip row: the MapLibre basemaps (Satélite, OSM, OSM
+   * vetorial) from the controller, then the presentation toggles (rótulos,
+   * globo/2D, relevo 3D).
    * @returns {void}
    */
   _initMapStackControl() {
@@ -3516,9 +3519,73 @@ export class StyleManager {
     renderMapStackChips(this._mapStackChips, this.mapStackController.getStacks(), {
       activeId: this.mapStackController.getActiveId(),
       onSelect: (stackId) => { this._setMapStack(stackId); },
+      toggles: this._mapToggleModels(),
     });
 
     this._renderMapStackState(this.mapStackController.getState());
+  }
+
+  /** Chips de apresentação do mapa (rótulos, globo/2D, relevo). */
+  _mapToggleModels() {
+    const state = this.mapStackController?.getState?.() || {};
+    const toggles = this._mapToggleState(state);
+    return [
+      {
+        id: 'labels',
+        label: 'Rótulos',
+        title: 'Rótulos de lugares e divisas por cima do satélite',
+        ...toggles.labels,
+        onToggle: (on) => this._setMapToggle('labels', on),
+      },
+      {
+        id: 'globe',
+        label: toggles.globe.active ? 'Globo' : '2D',
+        title: 'Alterna entre o globo e o mapa plano (2D)',
+        ...toggles.globe,
+        onToggle: (on) => this._setMapToggle('globe', on),
+      },
+      {
+        id: 'terrain',
+        label: 'Relevo 3D',
+        title: 'Relevo do terreno em 3D (incline o mapa para ver)',
+        ...toggles.terrain,
+        onToggle: (on) => this._setMapToggle('terrain', on),
+      },
+    ];
+  }
+
+  /** Estado {active, available} de cada chip de apresentação. */
+  _mapToggleState(state = this.mapStackController?.getState?.() || {}) {
+    return {
+      labels: { active: state.labels !== false && state.activeId === 'esri', available: state.activeId === 'esri' },
+      globe: { active: state.globe !== false, available: true },
+      terrain: { active: !!state.terrain, available: true },
+    };
+  }
+
+  /**
+   * Liga/desliga rótulos, globo ou relevo e sincroniza chips e link.
+   * @param {'labels'|'globe'|'terrain'} toggleId
+   * @param {boolean} on
+   * @param {{syncShare?: boolean}} [options]
+   */
+  _setMapToggle(toggleId, on, { syncShare = true } = {}) {
+    const controller = this.mapStackController;
+    if (!controller) return;
+    if (syncShare) this.shareLinkManager?.claimRestoreLane?.('map');
+    let state = null;
+    if (toggleId === 'labels') state = controller.setLabels(on);
+    else if (toggleId === 'globe') state = controller.setGlobe(on);
+    else if (toggleId === 'terrain') {
+      state = controller.setTerrain(on);
+      // Relevo sem inclinação não aparece: inclina um pouco ao ligar de cima.
+      // Só num gesto do usuário: na restauração de um link a câmera é do link.
+      if (on && syncShare && (this.viewer.getCameraView?.().pitch ?? -90) < -80) {
+        try { this.viewer.map?.easeTo({ pitch: 55, duration: 900 }); } catch { /* sem mapa */ }
+      }
+    }
+    this._renderMapStackState(state || controller.getState());
+    if (syncShare) this._syncShareState();
   }
 
   /**
@@ -3551,7 +3618,9 @@ export class StyleManager {
    */
   _renderMapStackState(state) {
     if (!state) return;
-    syncMapStackChips(this._mapStackChips, state.activeId);
+    syncMapStackChips(this._mapStackChips, state.activeId, this._mapToggleState(state));
+    const globeChip = this._mapStackChips?.querySelector?.('[data-toggle-id="globe"] .map-stack-chip-label');
+    if (globeChip) globeChip.textContent = state.globe === false ? '2D' : 'Globo';
     if (this._mapStackStatus) {
       const stack = state.activeStack;
       const label = state.status === 'switching'
@@ -3592,7 +3661,7 @@ export class StyleManager {
       fadeRatio: fadePct / 100,
       outsideOpacity: outsideOpacityPct / 100,
     });
-    this.viewer.scene.requestRender?.();
+    this.viewer.requestRender?.();
   }
 
   _setDetectionAllocation(strategy, { syncShare = true, persist = true } = {}) {
@@ -3860,7 +3929,10 @@ export class StyleManager {
       scopeTerminusPct: getScopeTerminusOverride() == null
         ? null
         : Math.round(getScopeTerminusOverride() * 100),
-      mapStack: this.mapStackController?.getActiveId?.() || 'photoreal',
+      mapStack: this.mapStackController?.getActiveId?.() || 'esri',
+      mapGlobe: this.mapStackController?.isGlobe?.() ?? true,
+      mapTerrain: this.mapStackController?.hasTerrain?.() ?? false,
+      mapLabels: this.mapStackController?.getLabels?.() ?? true,
     });
   }
 
@@ -6492,7 +6564,8 @@ export class StyleManager {
       target,
       setEnabled: (next) => this._dataManager.setEnabled('cctv', next, { origin: 'user' }),
       readOwnership: () => ({
-        trackedEntity: this.viewer?.trackedEntity,
+        // engine.trackedTarget substitui viewer.trackedEntity (mesmo papel: dono do seguimento).
+        trackedEntity: this.viewer?.trackedTarget,
         cockpitActive: !!this.cockpitView?.active,
       }),
       shouldFocus: () => !this._cctvState?.activeCameraId,
@@ -7963,16 +8036,19 @@ export class StyleManager {
       return { ok: false, error: 'Map stack controller unavailable' };
     }
     const stacks = this.mapStackController.getStacks();
-    const target = stacks.find((stack) => stack.id === stackId);
+    // Ids da era Cesium (photoreal, bing-*) caem no Satélite (esri).
+    const resolvedId = normalizeStackId(stackId);
+    const target = stacks.find((stack) => stack.id === String(stackId ?? '').trim())
+      || (LEGACY_STACK_IDS[String(stackId ?? '').trim()] ? stacks.find((stack) => stack.id === resolvedId) : null);
     if (!target) {
       return { ok: false, error: `Unknown map stack: ${stackId}`, available: stacks.map((s) => s.id) };
     }
     if (!target.available) {
-      return { ok: false, error: `${target.label} requires a Cesium ion token`, activeStack: this.mapStackController.getActiveId() };
+      return { ok: false, error: `${target.label} indisponível`, activeStack: this.mapStackController.getActiveId() };
     }
-    await this._setMapStack(stackId);
+    await this._setMapStack(target.id);
     const state = this.mapStackController.getState();
-    const landed = state.activeId === stackId;
+    const landed = state.activeId === target.id;
     return {
       ok: landed,
       activeStack: state.activeId,
@@ -8288,14 +8364,14 @@ export class StyleManager {
     const active = Boolean(this.cockpitView?.active);
     const gateOpen = Boolean(this.cockpitView?.isEntryAllowed?.());
     // "Could Cockpit be ENTERED right now" — so it is false while already
-    // inside, unconditionally. Cockpit takes the entity off
-    // `viewer.trackedEntity` on entry and NEXT puts one back, which made this
+    // inside, unconditionally. Cockpit takes the target off
+    // `engine.trackedTarget` on entry and NEXT puts one back, which made this
     // flip true/false between calls while `active` stayed true; readers
     // (including the voice model) read that as a broken half-entered state.
     const entryAllowed = !active && Boolean(
       gateOpen
       && info
-      && this.viewer?.trackedEntity?.position,
+      && this.viewer?.trackedTarget?.getPosition?.(),
     );
     return {
       active,
@@ -8557,15 +8633,15 @@ export class StyleManager {
    * @returns {{lat: number, lon: number, alt: number, heading: number, pitch: number, roll: number}|null}
    */
   getCameraState() {
-    const carto = this.viewer.camera.positionCartographic;
-    if (!carto) return null;
+    const view = this.viewer.getCameraView?.();
+    if (!view || !Number.isFinite(view.lat) || !Number.isFinite(view.lon)) return null;
     return {
-      lat: Cesium.Math.toDegrees(carto.latitude),
-      lon: Cesium.Math.toDegrees(carto.longitude),
-      alt: carto.height,
-      heading: Cesium.Math.toDegrees(this.viewer.camera.heading),
-      pitch: Cesium.Math.toDegrees(this.viewer.camera.pitch),
-      roll: Cesium.Math.toDegrees(this.viewer.camera.roll),
+      lat: view.lat,
+      lon: view.lon,
+      alt: view.alt,
+      heading: view.heading,
+      pitch: view.pitch,
+      roll: view.roll,
     };
   }
 
@@ -8577,19 +8653,15 @@ export class StyleManager {
    */
   applyCameraState(cameraState, duration = 2.8) {
     if (!cameraState) return;
-    this.viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(
-        cameraState.lon,
-        cameraState.lat,
-        cameraState.alt
-      ),
-      orientation: {
-        heading: Cesium.Math.toRadians(cameraState.heading || 0),
-        pitch: Cesium.Math.toRadians(cameraState.pitch || -35),
-        roll: Cesium.Math.toRadians(cameraState.roll || 0),
-      },
+    this.viewer.flyToCamera({
+      lat: cameraState.lat,
+      lon: cameraState.lon,
+      alt: cameraState.alt,
+      heading: cameraState.heading || 0,
+      pitch: cameraState.pitch || -35,
+      roll: cameraState.roll || 0,
+    }, {
       duration: Math.max(0.2, duration || 0),
-      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
     });
   }
 
@@ -8635,7 +8707,7 @@ export class StyleManager {
         enabled: isScopeMaskEnabled(),
         featherPct: Math.round(getScopeMaskFeather() * 100),
       },
-      mapStack: this.mapStackController?.getActiveId?.() || 'photoreal',
+      mapStack: this.mapStackController?.getActiveId?.() || 'esri',
       styleParams,
     };
   }
@@ -9733,7 +9805,7 @@ export class StyleManager {
     this._closeMunicipioSuggestions();
     // Divisa real quando o GeoJSON já carregou (enquadra ilhas e formatos
     // alongados corretamente); centroide quando ainda não.
-    const focus = datageoMunicipiosLayer.getMunicipioFocus?.(match.code) || null;
+    const focus = this._municipioBboxes?.get(String(match.code)) || null;
     // Mesmo critério do clique numa cidade-polo: só é salto de mundo quando já
     // havia um destino enquadrado para deixar para trás.
     const result = this._flyWithTransition(
@@ -9741,7 +9813,7 @@ export class StyleManager {
       (hooks) => flyToMunicipio(this.viewer, {
         lat: match.lat,
         lon: match.lon,
-        boundingSphere: focus?.boundingSphere || null,
+        bbox: focus?.bbox || null,
       }, hooks),
     );
     if (result === false) return;
@@ -9755,7 +9827,7 @@ export class StyleManager {
     if (result) this._currentTarget = result.targetPosition;
     this._updateLocationMiniStatus();
     this._resetLocationSearchInput();
-    void datageoMunicipiosLayer.openMunicipioFicha?.({ ibge: match.code, nome: match.name });
+    void openMunicipioFicha(match.code, match.name);
   }
 
   /**
@@ -9849,9 +9921,28 @@ export class StyleManager {
       return;
     }
 
+    // Sem POI (município, cidade inteira, busca): órbita na distância e
+    // inclinação atuais da câmera ao alvo.
+    let radius = this._currentPoi?.alt || 0;
+    let pitch = this._currentPoi?.pitch || 0;
+    if (!radius || !pitch) {
+      const view = this.viewer.getCameraView?.();
+      const target = this._currentTarget;
+      if (view && Number.isFinite(view.alt)) {
+        const R = 6_371_008.8;
+        const toRad = Math.PI / 180;
+        const dLat = (view.lat - target.lat) * toRad;
+        const dLon = (view.lon - target.lon) * toRad;
+        const a = Math.sin(dLat / 2) ** 2
+          + Math.cos(view.lat * toRad) * Math.cos(target.lat * toRad) * Math.sin(dLon / 2) ** 2;
+        const ground = 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+        radius ||= Math.max(300, Math.hypot(ground, view.alt - (target.height || 0)));
+      }
+      pitch ||= Math.max(-80, Math.min(-15, Number(view?.pitch) || -30));
+    }
     const isActive = this.orbitController.toggle(this._currentTarget, {
-      radius: this._currentPoi?.alt || 500,
-      pitch: this._currentPoi?.pitch || -30,
+      radius: radius || 500,
+      pitch: pitch || -30,
     });
 
     this._orbitIndicator.classList.toggle('active', isActive);
@@ -9897,8 +9988,8 @@ export class StyleManager {
     // altura das camadas voltam a valer, senão a malha municipal ficaria
     // pendurada na vista estadual de um município central.
     this._setLayerFocusRectangle(null);
-    this.viewer.trackedEntity = undefined;
-    this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    this._stopOrbit();
+    this.viewer.track(null);
     flyToParanaOverview(this.viewer);
     return {
       ok: true,
@@ -9925,6 +10016,49 @@ export class StyleManager {
     };
     document.addEventListener(MUNICIPIO_SELECIONADO_EVENT, this._municipioSelecionadoHandler);
     this._municipioSelecionadoHandler({ detail: getMunicipioSelecionado() });
+
+    // Divisa branca do município selecionado (feature-state `selected` da
+    // camada datageo-municipios). A troca de mapa base recria a fonte e apaga
+    // os feature-states, então reaplica depois dela.
+    this._selectedMunicipioIbge = null;
+    this._markSelectedMunicipioHandler = (event) => this._markSelectedMunicipio(event?.detail?.ibge ?? null);
+    document.addEventListener(MUNICIPIO_SELECIONADO_EVENT, this._markSelectedMunicipioHandler);
+    this._removeBasemapSelectedListener = this.viewer.on?.('basemapchange', () => {
+      const ibge = this._selectedMunicipioIbge;
+      this._selectedMunicipioIbge = null;
+      if (ibge) setTimeout(() => this._markSelectedMunicipio(ibge), 0);
+    });
+    // O foco municipal se desarma sozinho quando o centro da vista sai da divisa.
+    this._removeFocusDisarmListener = this.viewer.on?.('moveend', () => {
+      const bbox = this._layerFocusBbox;
+      if (!bbox) return;
+      const view = this.viewer.getCameraView?.();
+      const lon = view?.targetLon;
+      const lat = view?.targetLat;
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+      const [w, s, e, n] = bbox;
+      if (lon < w || lon > e || lat < s || lat > n) this._setLayerFocusRectangle(null);
+    });
+    // Pré-carrega as divisas: a busca e o botão enquadram pelo bbox real.
+    this._municipioBboxes = null;
+    void loadMunicipioBboxes().then((bboxes) => {
+      if (bboxes && !this._disposed) this._municipioBboxes = bboxes;
+    });
+  }
+
+  /** Aplica o destaque (feature-state) do município selecionado no mapa. */
+  _markSelectedMunicipio(ibge) {
+    const map = this.viewer?.map;
+    const next = ibge ? String(ibge) : null;
+    const prev = this._selectedMunicipioIbge;
+    this._selectedMunicipioIbge = next;
+    if (!map?.getSource?.('dg-municipios')) return;
+    try {
+      if (prev && prev !== next) map.setFeatureState({ source: 'dg-municipios', id: prev }, { selected: false });
+      if (next) map.setFeatureState({ source: 'dg-municipios', id: next }, { selected: true });
+    } catch (error) {
+      console.warn('[ui] destaque do município', error);
+    }
   }
 
   /**
@@ -9933,15 +10067,24 @@ export class StyleManager {
    * o implementa simplesmente não tem teto de altura para suspender, então o
    * laço é duck-typed em vez de manter uma lista de camadas gated que ficaria
    * desatualizada na próxima camada nova.
-   * @param {Cesium.Rectangle|null} rectangle
+   *
+   * No MapLibre o retângulo é um bbox [w, s, e, n] em graus. As camadas do
+   * adaptador (`module.maplibre`) recebem o foco pelo anfitrião
+   * (`layerHost.setFocus`), que também o guarda para as camadas ligadas
+   * depois; as demais recebem `module.focusOn(bbox)` diretamente.
+   * @param {number[]|null} bbox
    * @returns {number} quantas camadas aceitaram o foco
    */
-  _setLayerFocusRectangle(rectangle) {
+  _setLayerFocusRectangle(bbox) {
+    this._layerFocusBbox = bbox || null;
+    const host = getActiveLayerHost?.();
+    try { host?.setFocus?.(bbox || null); } catch (error) { console.warn('[ui] foco municipal (anfitrião)', error); }
     let n = 0;
     for (const entry of this._dataManager?.layers?.values?.() ?? []) {
       if (typeof entry?.module?.focusOn !== 'function') continue;
-      entry.module.focusOn(rectangle);
       n += 1;
+      if (host && entry.module.maplibre) continue;
+      try { entry.module.focusOn(bbox || null); } catch (error) { console.warn(`[ui] focusOn ${entry?.module?.id}`, error); }
     }
     return n;
   }
@@ -9963,19 +10106,23 @@ export class StyleManager {
       this._showToast('Selecione um município primeiro');
       return { ok: false, reason: 'sem-selecao' };
     }
-    const focus = datageoMunicipiosLayer.getMunicipioFocus?.(selecionado.ibge) || null;
-    if (!focus?.boundingSphere) {
+    const focus = this._municipioBboxes?.get(String(selecionado.ibge)) || null;
+    if (!focus?.bbox) {
       this._showToast('Divisas ainda carregando');
+      if (!this._municipioBboxes) {
+        void loadMunicipioBboxes().then((bboxes) => {
+          if (bboxes && !this._disposed) this._municipioBboxes = bboxes;
+        });
+      }
       return { ok: false, reason: 'sem-divisa' };
     }
-    const camadas = this._setLayerFocusRectangle(focus.rectangle ?? null);
-    const carto = Cesium.Cartographic.fromCartesian(focus.boundingSphere.center);
-    this.viewer.trackedEntity = undefined;
-    this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    const camadas = this._setLayerFocusRectangle(focus.bbox);
+    this._stopOrbit();
+    this.viewer.track(null);
     flyToMunicipio(this.viewer, {
-      lat: Cesium.Math.toDegrees(carto.latitude),
-      lon: Cesium.Math.toDegrees(carto.longitude),
-      boundingSphere: focus.boundingSphere,
+      lat: focus.lat,
+      lon: focus.lon,
+      bbox: focus.bbox,
     });
     return { ok: true, ibge: selecionado.ibge, nome: focus.nome || selecionado.nome, camadas };
   }
@@ -10014,7 +10161,7 @@ export class StyleManager {
     this._globalContextFlightsBtn && (this._globalContextFlightsBtn.disabled = true);
     this._globalContextMissionsBtn && (this._globalContextMissionsBtn.disabled = true);
     this._clearSelectedLayersBtn.disabled = true;
-    this._clearSelectedLayersBtn.setAttribute('aria-label', 'Clearing selected data layers');
+    this._clearSelectedLayersBtn.setAttribute('aria-label', 'Desligando as camadas selecionadas');
 
     const managerOperation = this._dataManager.clearSelectedLayers({
       origin: 'user',
@@ -10049,7 +10196,7 @@ export class StyleManager {
         this._globalContextMissionsBtn && (this._globalContextMissionsBtn.disabled = false);
       }
       this._clearSelectedLayersBtn.disabled = false;
-      this._clearSelectedLayersBtn.setAttribute('aria-label', 'Clear selected data layers');
+      this._clearSelectedLayersBtn.setAttribute('aria-label', 'Desligar todas as camadas');
       this._preservePanelStateDuringLayerClear = false;
       this._clearSelectedLayersManagerPromise = null;
       this._clearSelectedLayersPromise = null;
@@ -10066,7 +10213,7 @@ export class StyleManager {
   resetToGlobeView() {
     if (this._globeResetPromise) return this._globeResetPromise;
     this._stampNavigation();
-    interruptCameraMotion('reset-globe');
+    try { interruptCameraMotion('reset-globe'); } catch { /* cameraVerbs ainda em migração */ }
     this._stopOrbit();
     this.cockpitView?.exit({ restoreTracking: false });
     try {
@@ -10079,9 +10226,8 @@ export class StyleManager {
     }
     try { satellitesLayer.stopTracking?.({ origin: 'tool' }); } catch { /* best-effort release */ }
     try { rocketLaunchesLayer.releaseCameraOwnership?.(); } catch { /* best-effort release */ }
-    this.viewer.trackedEntity = undefined;
-    this.viewer.camera.cancelFlight();
-    this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    this.viewer.track(null);
+    this.viewer.cancelFlight();
     this._beginWorldJumpTransition();
 
     let resolveReset;
@@ -10094,27 +10240,27 @@ export class StyleManager {
       settled = true;
       clearTimeout(timer);
       this._endWorldJumpTransition();
-      const carto = this.viewer.camera.positionCartographic;
+      const view = this.viewer.getCameraView();
       const result = {
         ok: !cancelled,
         action: 'zoom_to_globe',
         cancelled,
         heightKm: Math.round(GLOBE_VIEW.heightM / 1000),
         centeredOn: {
-          latitude: Number(Cesium.Math.toDegrees(carto.latitude).toFixed(2)),
-          longitude: Number(Cesium.Math.toDegrees(carto.longitude).toFixed(2)),
+          latitude: Number(Number(view?.lat).toFixed(2)),
+          longitude: Number(Number(view?.lon).toFixed(2)),
         },
       };
-      this._resetGlobeBtn?.setAttribute('aria-label', 'Reset to full globe view');
+      this._resetGlobeBtn?.setAttribute('aria-label', 'Voltar à visão geral');
       this._cockpitResetGlobeBtn?.setAttribute('aria-label', 'Reset cockpit to full globe view');
       this._globeResetPromise = null;
       resolveReset(result);
     };
     timer = window.setTimeout(() => {
-      const height = this.viewer.camera.positionCartographic?.height;
-      finish(!Number.isFinite(height) || Math.abs(height - GLOBE_VIEW.heightM) > 1000);
+      const height = this.viewer.getCameraView?.()?.alt;
+      finish(!Number.isFinite(height) || Math.abs(height - GLOBE_VIEW.heightM) > GLOBE_VIEW.heightM * 0.02);
     }, 4200);
-    this._resetGlobeBtn?.setAttribute('aria-label', 'Resetting to full globe view');
+    this._resetGlobeBtn?.setAttribute('aria-label', 'Voltando à visão geral');
     this._cockpitResetGlobeBtn?.setAttribute('aria-label', 'Resetting cockpit to full globe view');
     const target = flyToGlobeView(this.viewer, {
       onComplete: () => finish(false),
@@ -10564,6 +10710,14 @@ export class StyleManager {
       this._cockpitResetGlobeBtn?.removeEventListener('click', this._globeResetHandler);
       this._globeResetHandler = null;
     }
+    if (this._markSelectedMunicipioHandler) {
+      document.removeEventListener(MUNICIPIO_SELECIONADO_EVENT, this._markSelectedMunicipioHandler);
+      this._markSelectedMunicipioHandler = null;
+    }
+    this._removeBasemapSelectedListener?.();
+    this._removeBasemapSelectedListener = null;
+    this._removeFocusDisarmListener?.();
+    this._removeFocusDisarmListener = null;
     if (this._municipioSelecionadoHandler) {
       document.removeEventListener(MUNICIPIO_SELECIONADO_EVENT, this._municipioSelecionadoHandler);
       this._municipioSelecionadoHandler = null;
@@ -10610,6 +10764,8 @@ export class StyleManager {
       this._animFrameId = null;
     }
     releaseContinuousRender('style-anim');
+    this._post?.destroy();
+    this._post = null;
     if (this._trafficChipTicker) {
       clearInterval(this._trafficChipTicker);
       this._trafficChipTicker = null;
