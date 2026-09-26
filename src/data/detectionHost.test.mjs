@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import * as Cesium from 'cesium';
 import {
   countFadingRenderEntries,
   destroyDetection,
@@ -232,17 +231,28 @@ function installEnvironment({ width = 800, height = 600, dpr = 2, search = '' } 
   root.appendChild(canvas);
 
   const postRender = new MockEvent();
+  const moveEnd = new MockEvent();
+  // Mock MapLibre engine: lon/lat ARE normalized device coordinates (the old
+  // identity-matrix harness), camera over (0°, 0°) at 1 000 km, flat map.
   const viewer = {
     container,
     canvas: { clientWidth: width, clientHeight: height },
-    camera: {
-      positionWC: new Cesium.Cartesian3(0, 0, 10_000_000),
-      positionCartographic: { height: 1_000_000 },
-      viewMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY),
-      frustum: { projectionMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY) },
-      moveEnd: new MockEvent(),
+    camera: { positionCartographic: { height: 1_000_000 } },
+    on(type, fn) {
+      if (type === 'render') return postRender.addEventListener(fn);
+      if (type === 'moveend') return moveEnd.addEventListener(fn);
+      return () => {};
     },
-    scene: { postRender, requestRender() {} },
+    requestRender() {},
+    isGlobe() { return false; },
+    getCameraView() {
+      return { lon: 0, lat: 0, alt: this.camera.positionCartographic.height, heading: 0, pitch: -90, zoom: 5 };
+    },
+    projectInto(p, out) {
+      out.x = (p.lon * 0.5 + 0.5) * width;
+      out.y = (0.5 - p.lat * 0.5) * height;
+      return true;
+    },
   };
 
   return {
@@ -270,10 +280,15 @@ function installEnvironment({ width = 800, height = 600, dpr = 2, search = '' } 
   };
 }
 
+/** Neutral WorldPosition; in this harness lon/lat are normalized device coords. */
+function pos(x, y, height = 0) {
+  return { lon: x, lat: y, height };
+}
+
 function detectableLayer() {
   const positions = [
-    new Cesium.Cartesian3(0, 0, 6_356_752),
-    new Cesium.Cartesian3(10_000, 0, 6_356_740),
+    pos(0, 0),
+    pos(10_000, 0),
   ];
   return {
     id: 'flights',
@@ -294,7 +309,7 @@ function militaryLayer() {
     id: 'military',
     getDetectableObjects() {
       return [{
-        position: new Cesium.Cartesian3(0, 0, 6_356_752),
+        position: pos(0, 0),
         sourceId: 'military-pin',
         id: 'MIL-PIN',
         metric: 'FL450',
@@ -315,14 +330,14 @@ function mixedTierLayer() {
     getDetectableObjects() {
       return [
         {
-          position: new Cesium.Cartesian3(-0.4, 0.2, 6_356_752),
+          position: pos(-0.4, 0.2),
           sourceId: 'air-1',
           id: 'AIRONE',
           metric: 'FL350',
           type: 'AIR',
         },
         {
-          position: new Cesium.Cartesian3(0.4, -0.2, 6_356_752),
+          position: pos(0.4, -0.2),
           sourceId: 'sat-1',
           id: 'SATONE',
           metric: '412KM',
@@ -492,7 +507,7 @@ test('callouts stop painting the moment the last detectable object goes away', (
   // shared canvas after the last data layer is switched off.
   const env = installEnvironment();
   let objects = [{
-    position: new Cesium.Cartesian3(0, 0, 6_356_752),
+    position: pos(0, 0),
     sourceId: 'lonely-1',
     id: 'LASTONE',
     metric: 'FL120',
@@ -627,7 +642,7 @@ test('pathological detection paint holds alternate frames without freezing share
     initDetection(env.viewer, [detectableLayer()], () => {});
     setOverlayEntries('valve-card', [{
       id: 'ambient-card',
-      position: new Cesium.Cartesian3(0, 0, 0),
+      position: pos(0, 0),
       variant: 'label',
       title: 'AMBIENT-CONTINUES',
       selected: true,
@@ -684,7 +699,9 @@ test('detection cannot resurrect a private canvas, listener, matrix, resize, cle
   assert.match(source, /_hostSurface\.style\.filter = `\$\{_theme\.filter\} drop-shadow\(0 0 \$\{GLOW_PX\}px \$\{_theme\.glow\}\)`;/);
   assert.match(source, /const LABEL_SOLVE_INTERVAL_MS = 125;/);
   assert.match(source, /const _labelArbiter = new LabelArbiter\(\);/);
-  assert.match(source, /const clipW = vp3 \* px \+ vp7 \* py \+ vp11 \* pz \+ vp15;/);
+  // MapLibre engine: every target goes through the host frame's projector.
+  assert.doesNotMatch(source, /from 'cesium'/);
+  assert.match(source, /projector\.project\(_resolved, _screen, true\)/);
   assert.match(source, /registerWorldOverlayPaintLane\('detection', _paintDetectionLane/);
   assert.match(source, /target: 'detection'/);
   assert.match(source, /shouldPaint: _shouldPaintDetectionLane/);
@@ -778,7 +795,7 @@ test('civilian and military AIR brackets cover front, left, and right at Sparse 
     const env = installEnvironment({ width: 900, height: 600, dpr: 1 });
     try {
       const objects = [-0.82, 0, 0.82].map((x, index) => ({
-        position: new Cesium.Cartesian3(x, 0, 6_356_752),
+        position: pos(x, 0),
         sourceId: `${layerId}-${index}`,
         id: `${layerId.toUpperCase()}-${index}`,
         metric: 'FL120',
@@ -809,13 +826,11 @@ test('civilian and military AIR brackets cover front, left, and right at Sparse 
 });
 
 /**
- * Two air contacts at the same screen radius, one with the planet behind it and
- * one with sky. The mock camera sits at (0, 0, 10 000 km) and projects through
- * an identity view-projection, so a position's x/y ARE its NDC and z is free:
- * the pole-surface contact looks straight down the axis into the planet, while
- * its mirror sits 10 000 km FURTHER out, so the view ray through it escapes.
- * Equal screen radius keeps the keyhole's radial fade identical for both, which
- * makes the two painted plate alphas directly comparable.
+ * Two air contacts at the same screen radius: one on the ground, one at
+ * 10 000 km. The Cesium build lightened the plate of a callout seen against
+ * open sky; MapLibre projects every target onto the GROUND (where its symbol
+ * layer draws it), so both callouts sit over the map and get the same full
+ * per-theme plate.
  */
 function backdropLayer() {
   return {
@@ -823,11 +838,11 @@ function backdropLayer() {
     getDetectableObjects() {
       return [
         {
-          position: new Cesium.Cartesian3(-0.4, 0.2, 6_356_752),
+          position: pos(-0.4, 0.2, 0),
           sourceId: 'ground-1', id: 'GROUNDED', metric: 'FL100', type: 'AIR',
         },
         {
-          position: new Cesium.Cartesian3(0.4, -0.2, 20_000_000),
+          position: pos(0.4, -0.2, 10_000_000),
           sourceId: 'sky-1', id: 'SKYBACK', metric: 'FL400', type: 'AIR',
         },
       ];
@@ -835,11 +850,7 @@ function backdropLayer() {
   };
 }
 
-test('the backdrop feather reaches the canvas as a lighter plate against sky', () => {
-  // The discriminator and the painter are pinned in their own modules, but both
-  // pins still pass if detection stops carrying the factor between them. This
-  // drives the real collect → solve → stash → replay path and reads the alpha
-  // the shared canvas actually received for each plate.
+test('every callout plate is the full ground plate on the MapLibre engine', () => {
   const env = installEnvironment();
   try {
     initWorldOverlay(env.viewer);
@@ -851,23 +862,15 @@ test('the backdrop feather reaches the canvas as a lighter plate against sky', (
     settleFrame(env);
 
     const painted = (text) => env.ctx.calls.some(([name, value]) => name === 'fillText' && value === text);
-    assert.ok(painted('GROUNDED') && painted('SKYBACK'), 'both backdrops reached the frame under test');
+    assert.ok(painted('GROUNDED') && painted('SKYBACK'), 'both contacts reached the frame under test');
 
     const plate = DETECTION_THEME_MAP._default.calloutPlate;
     const plateAlphas = env.ctx.calls
       .filter(([name, , fillStyle]) => name === 'fill' && fillStyle === plate)
       .map(([, , , globalAlpha]) => globalAlpha);
     assert.equal(plateAlphas.length, 2, 'exactly one plate per contact');
-
-    const heaviest = Math.max(...plateAlphas);
-    const lightest = Math.min(...plateAlphas);
-    assert.ok(heaviest > 0, 'the grounded contact still gets a plate');
-    assert.ok(lightest > 0, 'the sky contact keeps a whisper rather than vanishing');
-    // Reverting the feature makes both plates equal, which fails here first.
-    assert.ok(
-      lightest < heaviest * 0.5,
-      `sky plate ${lightest} must be markedly lighter than ground plate ${heaviest}`,
-    );
+    assert.ok(plateAlphas[0] > 0);
+    assert.ok(Math.abs(plateAlphas[0] - plateAlphas[1]) < 1e-9, `plates must match: ${plateAlphas}`);
   } finally {
     env.cleanup();
   }

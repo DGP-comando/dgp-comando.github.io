@@ -1,7 +1,5 @@
-import * as Cesium from 'cesium';
-
 /**
- * Per-layer data attribution registered into Cesium's credit display.
+ * Per-layer data attribution shown in the "Data attribution" lightbox.
  *
  * Legal requirement (see DATA_SOURCES.md, findings H10/H11 in
  * every third-party data layer this app can
@@ -10,10 +8,14 @@ import * as Cesium from 'cesium';
  * cables), NASA FIRMS, CelesTrak, USGS, City of Austin, GBFS operators, OpenSky.
  * The MIT code license does NOT cover this data.
  *
- * These credits are registered ONCE at init as STATIC credits with
- * showOnScreen=false, so they live in the expandable bottom-left "Data
- * attribution" lightbox (Cesium's credit popover) rather than cluttering the
- * on-globe line. Always-present is intentional and reversible: the lightbox is
+ * MOTOR: MapLibre. `registerDataCredits(engine)` adds ONE map control next to
+ * MapLibre's AttributionControl (bottom-right, inside the map container, so it
+ * stays visible in the clean view like the Cesium credit line did): a "Data
+ * attribution" link that opens a lightbox with these credits plus the base
+ * map/terrain attributions of the current style. The lightbox reuses the
+ * `.cesium-credit-lightbox` sizing rules of style.css and carries its own base
+ * look (`.dg-credit-lightbox*`, injected once). Credits never go on the map's
+ * own attribution line, so it stays short. Always-present is intentional and reversible: the lightbox is
  * the app's canonical attribution surface and DATA_SOURCES.md is the
  * machine-readable index. Strings are copied verbatim from DATA_SOURCES.md — if
  * you add a data source, add it there AND here.
@@ -284,43 +286,196 @@ export const NATURAL_EARTH_CREDIT = {
     '<a href="https://www.naturalearthdata.com" target="_blank" rel="noopener">Natural Earth</a> (public domain)',
 };
 
-/** @type {Set<string>} Keys of dynamic credits already registered this session. */
-const _dynamicCreditKeys = new Set();
+/** @type {Map<string, string>} Dynamic credits registered this session (key → html). */
+const _dynamicCredits = new Map();
+/** Controls added per map (idempotent registration). */
+const _controlsByMap = new WeakMap();
+/** Open lightbox (at most one). */
+let _openLightbox = null;
+
+const STYLE_ID = 'dg-data-credits-style';
+const CREDITS_CSS = `
+.dg-data-credits.maplibregl-ctrl { margin: 0 10px 10px 0; clear: both; }
+.dg-data-credits button {
+  font: 10px/1.6 var(--font-mono, ui-monospace, monospace);
+  color: rgba(232, 234, 237, 0.85);
+  background: rgba(8, 12, 18, 0.62);
+  border: 0; border-radius: 10px; padding: 1px 8px; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.dg-data-credits button:hover, .dg-data-credits button:focus-visible { color: #fff; background: rgba(8, 12, 18, 0.85); }
+.dg-credit-lightbox-overlay {
+  position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.dg-credit-lightbox {
+  position: relative; box-sizing: border-box; color: #e8eaed; background: #10151c;
+  border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 6px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.dg-credit-lightbox-title { margin: 0; padding: 14px 44px 8px 20px; font-size: 14px; font-weight: 600; letter-spacing: 0.04em; }
+.dg-credit-lightbox-close {
+  position: absolute; top: 8px; right: 10px; width: 28px; height: 28px; border: 0; border-radius: 4px;
+  background: transparent; color: #e8eaed; font-size: 20px; line-height: 1; cursor: pointer;
+}
+.dg-credit-lightbox-close:hover, .dg-credit-lightbox-close:focus-visible { background: rgba(255, 255, 255, 0.12); }
+.dg-credit-lightbox a { color: #8ecbff; }
+.dg-credit-lightbox > ul { list-style: disc; }
+`;
+
+function ensureCreditsStyle(doc) {
+  if (!doc?.head || doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = CREDITS_CSS;
+  doc.head.appendChild(style);
+}
+
+/**
+ * Base-map / terrain attributions of the current style (the `attribution` of
+ * each source), deduplicated.
+ * @param {object} [map] maplibregl.Map
+ * @returns {string[]}
+ */
+function styleAttributions(map) {
+  try {
+    const sources = map?.getStyle?.()?.sources ?? {};
+    return [...new Set(Object.values(sources).map((src) => src?.attribution).filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Every credit line the lightbox shows, in order: the map style's own
+ * attributions, the always-on data credits, then conditional credits.
+ * @param {object} [map] maplibregl.Map (optional)
+ * @returns {string[]} Credit HTML strings (trusted, from this module and the style).
+ */
+export function getDataCreditsHtml(map) {
+  return [
+    ...styleAttributions(map),
+    ...DATA_CREDITS.map(({ html }) => html),
+    ..._dynamicCredits.values(),
+  ];
+}
+
+function closeLightbox() {
+  if (!_openLightbox) return;
+  const { overlay, onKey, opener } = _openLightbox;
+  _openLightbox = null;
+  overlay.ownerDocument?.removeEventListener('keydown', onKey, true);
+  overlay.remove();
+  opener?.focus?.();
+}
+
+function renderCreditList(list, map) {
+  list.replaceChildren();
+  for (const html of getDataCreditsHtml(map)) {
+    const li = list.ownerDocument.createElement('li');
+    li.innerHTML = html;
+    list.appendChild(li);
+  }
+}
+
+/** Open the "Data attribution" lightbox. */
+export function openDataCreditsLightbox(map, opener = null) {
+  const doc = opener?.ownerDocument || globalThis.document;
+  if (!doc?.body) return null;
+  closeLightbox();
+  ensureCreditsStyle(doc);
+  const overlay = doc.createElement('div');
+  overlay.className = 'cesium-credit-lightbox-overlay dg-credit-lightbox-overlay';
+  const box = doc.createElement('div');
+  box.className = 'cesium-credit-lightbox dg-credit-lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-labelledby', 'dg-credit-lightbox-title');
+  const title = doc.createElement('h2');
+  title.id = 'dg-credit-lightbox-title';
+  title.className = 'dg-credit-lightbox-title';
+  title.textContent = 'Data attribution';
+  const close = doc.createElement('button');
+  close.type = 'button';
+  close.className = 'dg-credit-lightbox-close';
+  close.setAttribute('aria-label', 'Fechar');
+  close.textContent = '×';
+  const list = doc.createElement('ul');
+  renderCreditList(list, map);
+  box.append(title, close, list);
+  overlay.appendChild(box);
+  close.addEventListener('click', closeLightbox);
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeLightbox();
+  });
+  const onKey = (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      closeLightbox();
+    }
+  };
+  doc.addEventListener('keydown', onKey, true);
+  doc.body.appendChild(overlay);
+  _openLightbox = { overlay, onKey, opener, list, map };
+  close.focus?.();
+  return overlay;
+}
+
+/** MapLibre IControl: the "Data attribution" link beside the AttributionControl. */
+class DataCreditsControl {
+  onAdd(map) {
+    this._map = map;
+    const doc = map.getContainer?.()?.ownerDocument || globalThis.document;
+    ensureCreditsStyle(doc);
+    const el = doc.createElement('div');
+    el.className = 'maplibregl-ctrl dg-data-credits';
+    el.id = 'dg-data-credits';
+    const button = doc.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Data attribution';
+    button.setAttribute('aria-haspopup', 'dialog');
+    button.title = 'Fontes e licenças dos dados do mapa';
+    button.addEventListener('click', () => openDataCreditsLightbox(map, button));
+    el.appendChild(button);
+    this._el = el;
+    return el;
+  }
+
+  onRemove() {
+    this._el?.remove();
+    this._el = null;
+    this._map = null;
+  }
+}
 
 /**
  * Register a conditional credit at the moment its data source activates.
- * Idempotent per `credit.key`; lands in the same "Data attribution" popover
- * as the static credits (showOnScreen=false).
- * @param {Cesium.Viewer} viewer — the initialized Cesium viewer
+ * Idempotent per `credit.key`; lands in the same "Data attribution" lightbox
+ * as the static credits.
+ * @param {object} [_engine] — the map engine (kept for the old call shape; unused)
  * @param {{ key: string, html: string }} credit — e.g. `TOMTOM_CREDIT`
  * @returns {boolean} True when the credit is (now) registered.
  */
-export function registerDynamicCredit(viewer, credit) {
-  const creditDisplay = viewer?.creditDisplay;
-  if (!creditDisplay || typeof creditDisplay.addStaticCredit !== 'function') {
-    return false;
-  }
+export function registerDynamicCredit(_engine, credit) {
   if (!credit?.key || !credit?.html) return false;
-  if (_dynamicCreditKeys.has(credit.key)) return true;
-  creditDisplay.addStaticCredit(new Cesium.Credit(credit.html, false));
-  _dynamicCreditKeys.add(credit.key);
+  if (_dynamicCredits.has(credit.key)) return true;
+  _dynamicCredits.set(credit.key, credit.html);
+  if (_openLightbox) renderCreditList(_openLightbox.list, _openLightbox.map);
   return true;
 }
 
 /**
- * Register every per-layer data credit into the viewer's credit display.
- * Idempotent: safe to call once at init. Credits are static and always
- * present in the "Data attribution" popover.
- * @param {Cesium.Viewer} viewer — the initialized Cesium viewer
+ * Add the "Data attribution" control to the engine's map (bottom-right, next
+ * to MapLibre's AttributionControl). Idempotent per map.
+ * @param {object} engine — Motor MapLibre (src/maplibre/engine.js); usa `engine.map`.
+ * @returns {boolean} True when the control is on the map.
  */
-export function registerDataCredits(viewer) {
-  const creditDisplay = viewer?.creditDisplay;
-  if (!creditDisplay || typeof creditDisplay.addStaticCredit !== 'function') {
-    return;
-  }
-  for (const { html } of DATA_CREDITS) {
-    // showOnScreen=false → lives in the expandable "Data attribution" popover,
-    // not the on-globe credit line.
-    creditDisplay.addStaticCredit(new Cesium.Credit(html, false));
-  }
+export function registerDataCredits(engine) {
+  const map = engine?.map;
+  if (!map || typeof map.addControl !== 'function') return false;
+  if (_controlsByMap.has(map)) return true;
+  const control = new DataCreditsControl();
+  map.addControl(control, 'bottom-right');
+  _controlsByMap.set(map, control);
+  return true;
 }

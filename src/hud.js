@@ -2,7 +2,7 @@
  * @module hud
  * @description Intelligence HUD Overlay — NRO/NGA Satellite Aesthetic.
  *
- * Renders authentic reconnaissance metadata over the Cesium canvas:
+ * Renders authentic reconnaissance metadata over the map canvas:
  * classification banners, live MGRS/lat-lon coordinates, sensor metrics
  * (GSD, NIIRS, ONA), timestamps, and orbital data — all updating in
  * real-time at configurable cadences.
@@ -11,14 +11,33 @@
  * selected and supports three layout variants: tactical, operator, minimal.
  *
  * Color theming is driven by the active shader mode via CSS custom properties.
+ *
+ * MOTOR: MapLibre. `new IntelHUD(engine)` lê tudo do motor
+ * (src/maplibre/engine.js): posição/altitude/pitch da câmera por
+ * `engine.getCameraView()` (semântica Cesium: pitch −90 = nadir), janela de
+ * visão por `engine.map.getBounds()` (ou `engine.unproject` dos cantos) e o
+ * assentamento da câmera pelo evento 'moveend'.
+ *
+ * DATUM DA ALTITUDE: o MapLibre mede a altitude da câmera acima do NÍVEL DO
+ * MAR (o zero do relevo, cujas cotas são ortométricas). O ALT do HUD já é MSL
+ * e sai direto do motor — aplicar a ondulação do geoide (egm96, data/geoid.js)
+ * aqui somaria o erro que ela existia para tirar, porque no Cesium a altura
+ * vinha do ELIPSOIDE. Por isso o HUD não carrega mais o grid EGM96 (~2,7 MB).
+ *
+ * RESUMO: a linha determinística (modo, faixa, localidade, região, ALT,
+ * janela, sol, ONA, fuso) é o que aparece em produção; o resumo por IA
+ * (`/api/openai/hud-summary`) só existe no servidor de desenvolvimento.
  */
 
-import * as Cesium from 'cesium';
 import { forward as toMGRS } from 'mgrs';
 import { CITY_POIS } from './locations.js';
 import { composeLocalityTag } from './hudLocality.js';
-import { ellipsoidalToMslDisplayM, ensureGeoidReady, geoidHeight } from './data/geoid.js';
-import { getBasemapLabelContext } from './voice/gevActions.js';
+import { getBasemapLabelContext } from './basemapLabelContext.js';
+import { readCameraView } from './overlays/worldGeometry.js';
+
+const DEG = Math.PI / 180;
+const toRadians = (deg) => deg * DEG;
+const toDegrees = (rad) => rad / DEG;
 
 /** Color palettes keyed by shader mode; applied as CSS custom properties. */
 const HUD_COLORS = {
@@ -35,13 +54,11 @@ const MILITARY_STYLES = new Set(['retro', 'surveillance', 'thermal']);
 const HUD_VARIANTS = new Set(['tactical', 'operator', 'minimal']);
 const HUD_SUMMARY_INTERVAL_MS = 15000;
 const HUD_SUMMARY_URL = '/api/openai/hud-summary';
+/** Espera depois do último 'moveend' antes de tratar a câmera como assentada. */
+const HUD_SETTLE_DEBOUNCE_MS = 250;
+/** O proxy do resumo por IA só existe no dev-server (Vite); em produção, a linha determinística. */
+const HUD_AI_SUMMARY_AVAILABLE = import.meta.env?.DEV === true;
 
-/**
- * Cell size (degrees) for the ALT readout's geoid-undulation cache. N changes
- * by well under a metre across 0.01° (~1.1 km), so one lookup per cell keeps
- * the 4 Hz telemetry tick off the EGM96 grid without a visible step.
- */
-const HUD_GEOID_CELL_DEG = 0.01;
 
 /** Flattened list of all city POIs for nearest-point lookups. */
 const NEARBY_POINTS = Object.values(CITY_POIS)
@@ -53,7 +70,7 @@ const NEARBY_POINTS = Object.values(CITY_POIS)
   })));
 
 /**
- * Full-screen intelligence HUD overlay rendered on top of the Cesium canvas.
+ * Full-screen intelligence HUD overlay rendered on top of the map canvas.
  *
  * Displays classification banners, MGRS/lat-lon readouts, sensor metrics
  * (GSD, NIIRS, off-nadir angle), sun elevation, orbital metadata, and a
@@ -62,11 +79,13 @@ const NEARBY_POINTS = Object.values(CITY_POIS)
  */
 export class IntelHUD {
   /**
-   * @param {Cesium.Viewer} viewer - The Cesium Viewer instance used for
-   *   camera telemetry and coordinate derivation.
+   * @param {object} engine - Motor MapLibre (src/maplibre/engine.js), usado
+   *   para telemetria da câmera e derivação de coordenadas.
    */
-  constructor(viewer) {
-    this.viewer = viewer;
+  constructor(engine) {
+    this.engine = engine;
+    /** @deprecated nome antigo; é o mesmo motor. */
+    this.viewer = engine;
     this._visible = false;
     this._autoMode = true; // auto show/hide based on style
     this._currentStyle = 'normal';
@@ -91,20 +110,6 @@ export class IntelHUD {
     // A) kick a real AI summary once the intro fly-to settles.
     this._firstMetricsShown = false;
     this._firstSummaryKicked = false;
-    // ALT readout datum: the camera height Cesium reports is ELLIPSOIDAL, the
-    // number a viewer reads is MSL. N comes from the same lazy ~2.7 MB EGM96
-    // chunk the flight layers use — requested on the first telemetry tick of a
-    // VISIBLE HUD, never at construction, so a hidden HUD costs nothing — and
-    // cached per coarse cell. Until it resolves, or if it never does,
-    // `ellipsoidalToMslDisplayM` passes the raw height straight through.
-    this._geoidRequested = false;
-    this._geoidReady = false;
-    this._geoidCellKey = null;
-    this._geoidN = null;
-    // Whether the LAST painted tick actually had N. The grid resolves mid-
-    // session, so this flips once — and both altitude readouts have to move
-    // together when it does (see the repaint in _updateCameraData).
-    this._geoidCorrectionApplied = false;
     this._onCameraMoveEnd = () => {
       this._markSummaryDirty();
       // The 250 ms telemetry timer and 15 s semantic-summary timer must not
@@ -130,7 +135,19 @@ export class IntelHUD {
     this._passNum = 100 + Math.floor(Math.random() * 200);
 
     this._buildDOM();
-    this.viewer.camera.moveEnd.addEventListener(this._onCameraMoveEnd);
+    // MapLibre fires 'moveend' after every jumpTo — and the engine's follow
+    // camera jumps once per frame while a target is tracked — so settle work
+    // (deterministic line + AI kick) is debounced to one run per pause.
+    this._moveEndTimer = null;
+    this._onEngineMoveEnd = () => {
+      clearTimeout(this._moveEndTimer);
+      this._moveEndTimer = setTimeout(() => {
+        this._moveEndTimer = null;
+        this._onCameraMoveEnd();
+      }, HUD_SETTLE_DEBOUNCE_MS);
+    };
+    const off = this.engine?.on?.('moveend', this._onEngineMoveEnd);
+    this._removeMoveEnd = typeof off === 'function' ? off : null;
     this._startTimers();
   }
 
@@ -254,47 +271,30 @@ export class IntelHUD {
   }
 
   /**
-   * Geoid undulation N at the camera subpoint, memoized per coarse cell.
-   * @param {number} latDeg - Camera latitude in decimal degrees.
-   * @param {number} lonDeg - Camera longitude in decimal degrees.
-   * @returns {number|null} N in metres, or null while the grid is unavailable.
+   * Câmera do motor no quadro atual (semântica Cesium). Null quando o motor
+   * ainda não tem câmera utilizável.
+   * @returns {{lat:number, lon:number, alt:number, pitch:number}|null}
    */
-  _geoidUndulationM(latDeg, lonDeg) {
-    if (!this._geoidReady) {
-      if (!this._geoidRequested) {
-        this._geoidRequested = true;
-        ensureGeoidReady()
-          .then(() => { this._geoidReady = true; })
-          .catch(() => { /* readout falls back to the uncorrected height */ });
-      }
-      return null;
-    }
-    const key = `${Math.round(latDeg / HUD_GEOID_CELL_DEG)}:${Math.round(lonDeg / HUD_GEOID_CELL_DEG)}`;
-    if (key !== this._geoidCellKey) {
-      try {
-        this._geoidN = geoidHeight(latDeg, lonDeg);
-      } catch {
-        this._geoidN = null;
-      }
-      this._geoidCellKey = key;
-    }
-    return Number.isFinite(this._geoidN) ? this._geoidN : null;
+  _cameraView() {
+    const view = readCameraView(this.engine);
+    if (!view || !Number.isFinite(view.lat) || !Number.isFinite(view.lon)) return null;
+    return view;
   }
 
   /**
    * Derive all camera-based telemetry and push values to the DOM.
-   * Reads the viewer camera's cartographic position and computes MGRS,
+   * Reads the engine camera position (lat/lon/MSL altitude) and computes MGRS,
    * lat/lon DMS, GSD, NIIRS, sun elevation, off-nadir angle, and
    * collection timestamp. Stores results in {@link _latestMetrics}.
    */
   _updateCameraData() {
-    const camera = this.viewer.camera;
-    const cartographic = camera.positionCartographic;
-    if (!cartographic) return;
+    const camera = this._cameraView();
+    if (!camera) return;
 
-    const lonDeg = Cesium.Math.toDegrees(cartographic.longitude);
-    const latDeg = Cesium.Math.toDegrees(cartographic.latitude);
-    const altM = cartographic.height;
+    const lonDeg = camera.lon;
+    const latDeg = camera.lat;
+    // MapLibre: altitude da câmera acima do nível do mar (ver cabeçalho).
+    const altM = Number.isFinite(camera.alt) ? camera.alt : 0;
     const latDMS = this._toDMS(latDeg, 'lat');
     const lonDMS = this._toDMS(lonDeg, 'lon');
     let mgrsLabel = '---';
@@ -330,14 +330,12 @@ export class IntelHUD {
     const gsdEl = document.getElementById('hud-gsd');
     if (gsdEl) gsdEl.textContent = `GSD: ${gsd.toFixed(2)}m  NIIRS: ${niirs.toFixed(1)}`;
 
-    // Altitude — reported as height above MEAN SEA LEVEL. `altM` is the raw
-    // ellipsoidal camera height, which reads far below zero wherever the geoid
-    // sits under the ellipsoid: a cockpit parked on the SFO deck (N ≈ -32 m)
-    // showed "ALT: -15m", and JFK "ALT: -18m". Subtracting N restores the
-    // number a viewer expects without touching the camera or any render path.
+    // Altitude — height above MEAN SEA LEVEL. The MapLibre engine already
+    // measures the camera against sea level (the DEM's orthometric zero), so
+    // the readout prints it as is; the Cesium build had to take the geoid
+    // undulation back out of an ELLIPSOIDAL height here.
     const altEl = document.getElementById('hud-alt');
-    const geoidN = this._geoidUndulationM(latDeg, lonDeg);
-    const altMslM = ellipsoidalToMslDisplayM(altM, geoidN);
+    const altMslM = altM;
     const sunEl = this._estimateSunElevation(latDeg, lonDeg);
     if (altEl) altEl.textContent = `ALT: ${Math.round(altMslM)}m   SUN: ${sunEl.toFixed(1)}° EL`;
 
@@ -353,14 +351,14 @@ export class IntelHUD {
 
     // Off-nadir angle (ONA): camera pitch of -90 deg is nadir (straight down),
     // so ONA = 90 + pitch gives 0 at nadir and increases toward the horizon.
-    const pitchDeg = Cesium.Math.toDegrees(camera.pitch);
+    const pitchDeg = Number.isFinite(camera.pitch) ? camera.pitch : -90;
     const ona = Math.max(0, 90 + pitchDeg);
     const onaEl = document.getElementById('hud-ona');
     if (onaEl) onaEl.textContent = `ONA: ${ona.toFixed(1)}°`;
 
-    // `altM` stays the raw ellipsoidal camera height the sensor model reads
-    // (GSD/NIIRS, view band). `altMslM` is the ADDITIVE display datum — the
-    // only one any readout string should print.
+    // `altM` is the camera height the sensor model reads (GSD/NIIRS, view
+    // band); `altMslM` is the display datum every readout string prints. On
+    // the MapLibre engine both are the same MSL height.
     this._latestMetrics = {
       latDeg,
       lonDeg,
@@ -376,21 +374,6 @@ export class IntelHUD {
     // this within a second via the moveEnd kick / periodic refresh.
     if (!this._firstMetricsShown) {
       this._firstMetricsShown = true;
-      this._setSummaryText(this._composeSummary(), false);
-    }
-
-    // The EGM96 grid lands mid-session, and the corner readout picks it up on
-    // the very next telemetry tick. The summary line has no such cadence — it
-    // repaints on camera settle or its own 15 s retry — so without this the
-    // corner reads `ALT: 17m` beside a summary still reading `ALT -15M`, for
-    // up to fifteen seconds. Repaint the deterministic line in the SAME tick
-    // the correction turns on (or off, if a lookup starts failing), and mark
-    // the summary dirty so the AI line refreshes on its normal cadence —
-    // exactly what a camera settle already does.
-    const geoidCorrectionApplied = Number.isFinite(geoidN);
-    if (geoidCorrectionApplied !== this._geoidCorrectionApplied) {
-      this._geoidCorrectionApplied = geoidCorrectionApplied;
-      this._markSummaryDirty();
       this._setSummaryText(this._composeSummary(), false);
     }
   }
@@ -420,11 +403,12 @@ export class IntelHUD {
    * @returns {string} Formatted DMS string, e.g. `"38°53'23.10"N"`.
    */
   _toDMS(decimal, type) {
-    const abs = Math.abs(decimal);
-    const deg = Math.floor(abs);
-    const minFloat = (abs - deg) * 60;
-    const min = Math.floor(minFloat);
-    const sec = ((minFloat - min) * 60).toFixed(2);
+    // Round to the printed 1/100 s FIRST, then split, so 59.999 s carries into
+    // the minute instead of printing 23'60.00".
+    const totalCentiSec = Math.round(Math.abs(decimal) * 360000);
+    const deg = Math.floor(totalCentiSec / 360000);
+    const min = Math.floor((totalCentiSec % 360000) / 6000);
+    const sec = ((totalCentiSec % 6000) / 100).toFixed(2);
 
     let dir;
     if (type === 'lat') dir = decimal >= 0 ? 'N' : 'S';
@@ -452,14 +436,14 @@ export class IntelHUD {
     const solarNoon = 12;
     const hourAngle = (hours - solarNoon) * 15;
     // Solar declination approximation (~23.45 deg amplitude sinusoidal over the year)
-    const declination = 23.45 * Math.sin(Cesium.Math.toRadians((360 / 365) * (now.getUTCDate() + 30 * now.getUTCMonth() - 81)));
-    const latRad = Cesium.Math.toRadians(lat);
-    const decRad = Cesium.Math.toRadians(declination);
-    const haRad = Cesium.Math.toRadians(hourAngle);
+    const declination = 23.45 * Math.sin(toRadians((360 / 365) * (now.getUTCDate() + 30 * now.getUTCMonth() - 81)));
+    const latRad = toRadians(lat);
+    const decRad = toRadians(declination);
+    const haRad = toRadians(hourAngle);
     // Standard formula: sin(el) = sin(lat)*sin(dec) + cos(lat)*cos(dec)*cos(ha)
     const sinEl = Math.sin(latRad) * Math.sin(decRad) + Math.cos(latRad) * Math.cos(decRad) * Math.cos(haRad);
     // Clamp to [-1,1] to guard against floating-point drift before asin
-    return Cesium.Math.toDegrees(Math.asin(Math.max(-1, Math.min(1, sinEl))));
+    return toDegrees(Math.asin(Math.max(-1, Math.min(1, sinEl))));
   }
 
   /**
@@ -502,21 +486,49 @@ export class IntelHUD {
    *   dimensions, or null if the view rectangle cannot be computed.
    */
   _viewWindowKm(latDeg) {
-    const rect = this.viewer.camera.computeViewRectangle();
+    const rect = this._viewRectangleDeg();
     if (!rect) return null;
-    const north = Cesium.Math.toDegrees(rect.north);
-    const south = Cesium.Math.toDegrees(rect.south);
-    let east = Cesium.Math.toDegrees(rect.east);
-    let west = Cesium.Math.toDegrees(rect.west);
+    const { north, south, east, west } = rect;
     let lonSpan = Math.abs(east - west);
     // Handle antimeridian wrap: if span exceeds 180 deg, take the shorter arc
     if (lonSpan > 180) lonSpan = 360 - lonSpan;
     const latSpan = Math.abs(north - south);
     // 111 km/deg is the approximate surface distance per degree of latitude;
     // longitude distance is scaled by cos(lat) to account for meridian convergence.
-    const widthKm = Math.max(0, lonSpan * 111 * Math.cos(Cesium.Math.toRadians(latDeg)));
+    const widthKm = Math.max(0, lonSpan * 111 * Math.cos(toRadians(latDeg)));
     const heightKm = Math.max(0, latSpan * 111);
     return { widthKm, heightKm };
+  }
+
+  /**
+   * Retângulo visível em graus: `map.getBounds()` do MapLibre; na falta dele,
+   * os cantos da tela por `engine.unproject`.
+   * @returns {{north:number, south:number, east:number, west:number}|null}
+   */
+  _viewRectangleDeg() {
+    try {
+      const b = this.engine?.map?.getBounds?.();
+      if (b) {
+        const rect = { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() };
+        if (Object.values(rect).every(Number.isFinite)) return rect;
+      }
+    } catch {
+      // cai para os cantos
+    }
+    const canvas = this.engine?.canvas;
+    const w = canvas?.clientWidth || 0;
+    const h = canvas?.clientHeight || 0;
+    if (!w || !h || typeof this.engine?.unproject !== 'function') return null;
+    const corners = [[0, 0], [w, 0], [0, h], [w, h]]
+      .map(([x, y]) => this.engine.unproject(x, y))
+      .filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    if (corners.length < 2) return null;
+    return {
+      north: Math.max(...corners.map((p) => p.lat)),
+      south: Math.min(...corners.map((p) => p.lat)),
+      east: Math.max(...corners.map((p) => p.lon)),
+      west: Math.min(...corners.map((p) => p.lon)),
+    };
   }
 
   /**
@@ -529,7 +541,7 @@ export class IntelHUD {
    * @returns {number} Distance in kilometers.
    */
   _haversineKm(lat1, lon1, lat2, lon2) {
-    const toRad = (deg) => Cesium.Math.toRadians(deg);
+    const toRad = toRadians;
     const dLat = toRad(lat2 - lat1);
     const dLon = toRad(lon2 - lon1);
     const a = Math.sin(dLat / 2) ** 2
@@ -575,8 +587,7 @@ export class IntelHUD {
     const utcOffset = Math.round(m.lonDeg / 15);
     const localTag = `UTC${utcOffset >= 0 ? '+' : ''}${utcOffset}`;
     // Same MSL datum as the corner ALT readout — the two are on screen
-    // together, so they must never disagree. The view band above deliberately
-    // keeps the ellipsoidal height: its thresholds were tuned against it.
+    // together, so they must never disagree.
     const altDisplayM = Number.isFinite(m.altMslM) ? m.altMslM : m.altM;
     const altTag = altDisplayM >= 1000
       ? `${(altDisplayM / 1000).toFixed(1)}KM`
@@ -625,6 +636,12 @@ export class IntelHUD {
       return;
     }
     if (!force && !this._summaryDirty) return;
+    // Produção (ou dev sem chave): sem o resumo por IA, a linha determinística é o resumo.
+    if (!HUD_AI_SUMMARY_AVAILABLE || this._aiSummaryUnavailable) {
+      this._summaryDirty = false;
+      this._setSummaryText(fallbackText, animate);
+      return;
+    }
 
     const revision = this._summaryRevision;
     // Every caller invokes this as `void this._updateSummary(...)`, so nothing
@@ -673,6 +690,9 @@ export class IntelHUD {
     } catch (error) {
       if (error?.name !== 'AbortError') {
         console.warn('[HUD] AI summary unavailable:', error);
+        // A proxy with no key (or no proxy at all) will not start working
+        // mid-session: stop asking, keep the deterministic line.
+        if (/not set|HTTP 40[134]|HTTP 50[12]/.test(String(error?.message))) this._aiSummaryUnavailable = true;
         // Invalidate the committed signature so the next periodic tick
         // retries instead of sticking on the fallback line forever.
         this._lastSummarySignature = null;
@@ -695,7 +715,7 @@ export class IntelHUD {
   }
 
   async _summaryContext() {
-    const labels = await getBasemapLabelContext(this.viewer);
+    const labels = await getBasemapLabelContext(this.engine);
     const enabledLayers = this._dataManager?.getAll?.()
       ?.filter((layer) => layer.enabled)
       .map((layer) => layer.name) || [];
@@ -846,7 +866,10 @@ export class IntelHUD {
     clearInterval(this._timestampInterval);
     clearInterval(this._summaryInterval);
     clearInterval(this._summaryTypingInterval);
-    this.viewer.camera.moveEnd.removeEventListener(this._onCameraMoveEnd);
+    this._removeMoveEnd?.();
+    this._removeMoveEnd = null;
+    clearTimeout(this._moveEndTimer);
+    this._moveEndTimer = null;
     this._dataManagerUnsubscribe?.();
     this._summaryRequest?.abort();
   }

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bancada HUD / detecção / overlays (dev)</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #0a0a0f; overflow: hidden; }
+    #cesiumContainer { position: absolute; inset: 0; }
+    #qa-log { position: fixed; left: 8px; top: 8px; z-index: 400; max-width: 40%; max-height: 30%; overflow: auto;
+      background: rgba(0,0,0,.72); color: #cfe; font: 11px monospace; padding: 4px 6px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+  <div id="intel-hud"></div>
+  <pre id="qa-log"></pre>
+  <script type="module" src="./hud.js"></script>
+</body>
+</html>

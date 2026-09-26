@@ -1,9 +1,13 @@
-import * as Cesium from 'cesium';
 import {
   getKeyholeFadeTuning,
   getKeyholeGeometry,
   keyholeLabelAlphaFromGeometry,
 } from '../celestialRing.js';
+import {
+  createWorldProjector,
+  isWorldPositionLike,
+  resolveWorldPosition,
+} from './worldGeometry.js';
 import { BoundedCohort, stableIdentityHash } from '../data/detectionCohort.js';
 import { LabelArbiter, LABEL_ARBITER_TIMING } from '../data/labelArbiter.js';
 import {
@@ -22,6 +26,27 @@ import { WORLD_OVERLAY_STYLE } from './worldOverlayTokens.js';
  * @description Shared screen-space renderer/scheduler for world-anchored
  * labels and cards. Sources own data, business rules, and bounded candidate
  * generation; this host owns projection, final placement, paint, and hits.
+ *
+ * MOTOR: MapLibre (src/maplibre/engine.js). `initWorldOverlay(engine)` desenha
+ * a cada evento 'render' do motor e projeta cada entrada com a projeção do
+ * próprio mapa (worldGeometry.createWorldProjector). Posições são
+ * WorldPosition neutras — `{lon, lat, height}` (preferida) ou ECEF `{x,y,z}`
+ * legado — ou uma função que devolve uma delas (ver worldGeometry.js).
+ *
+ * Quadro das lanes próprias (`registerWorldOverlayPaintLane`): além de
+ * canvas/ctx/tamanho/keyhole/uiRects, recebe `projector` (com
+ * `project(resolved, out)` e `distanceTo`), `camera` (getCameraView do quadro
+ * + xyz), `cameraPosition` (xyz da câmera na esfera), `cameraAltitude` (m,
+ * nível do mar), `occluder` (horizonte do globo; tudo visível no mapa plano)
+ * e `projectPosition(position, out)` → boolean, que resolve uma WorldPosition
+ * e escreve out.x/out.y (px) e out.distance (m). As antigas
+ * `viewProjectionMatrix`/`viewProjection` (matrizes do Cesium) não existem mais.
+ *
+ * Rótulos já desenhados por symbol layers do MapLibre (terremotos, focos de
+ * calor, data centers, barragens, cabos — src/maplibre/layers/contextoGev.js)
+ * NÃO passam por este host: as camadas MapLibre não publicam entradas aqui,
+ * então não há card duplicado. O host continua para o que não é camada de
+ * estilo: a leitura do alvo rastreado, a detecção e fontes ainda não portadas.
  */
 
 const ROOT_ID = 'world-overlay-root';
@@ -94,6 +119,11 @@ export const WORLD_OVERLAY_OCCLUDER_SELECTORS = Object.freeze([
   '#command-dock',
   '#gev-voice-control',
   '#cesium-credits',
+  // MapLibre map controls: attribution + "Data attribution" (dataCredits.js),
+  // navigation and scale. They sit inside the map container, below the host.
+  '.maplibregl-ctrl-bottom-right',
+  '.maplibregl-ctrl-bottom-left',
+  '.maplibregl-ctrl-top-right',
   '.hud-top-left',
   '.hud-top-right',
   '.hud-bottom-left',
@@ -115,7 +145,7 @@ export const WORLD_OVERLAY_OCCLUDER_SELECTORS = Object.freeze([
  * @typedef {object} WorldOverlayEntry
  * @property {string} id Stable identity within the source.
  * @property {string} source Owning source id.
- * @property {Cesium.Cartesian3|function():Cesium.Cartesian3} position
+ * @property {object|function():object} position WorldPosition ({lon,lat,height} ou ECEF {x,y,z})
  * @property {'label'|'track'|'card'|'thumbnail'|'selected'|'tracked'} variant
  * @property {string} [accessibilityLabel] Accessible name for an actionable card.
  * @property {function():*} [activate] Keyboard/assistive activation callback.
@@ -131,8 +161,10 @@ export const WORLD_OVERLAY_OCCLUDER_SELECTORS = Object.freeze([
  * @property {number} [solveIntervalMs=125]
  */
 
-/** @type {Cesium.Viewer|null} */
-let _viewer = null;
+/** @type {object|null} Motor MapLibre (src/maplibre/engine.js). */
+let _engine = null;
+/** @type {ReturnType<typeof createWorldProjector>|null} */
+let _projector = null;
 /** @type {HTMLElement|null} */
 let _root = null;
 /** @type {HTMLCanvasElement|null} */
@@ -200,13 +232,10 @@ const _domains = new Map();
 const _domainList = [];
 /** @type {Map<string, object>} */
 const _records = new Map();
-const _scratchViewProjection = new Cesium.Matrix4();
-const _viewProjectionScalars = {};
 const _viewport = { width: 0, height: 0 };
 let _occluder = null;
-let _occluderCameraX = Number.NaN;
-let _occluderCameraY = Number.NaN;
-let _occluderCameraZ = Number.NaN;
+/** Scratch de `frame.projectPosition` (lanes próprias). */
+const _laneScratch = { lon: 0, lat: 0, height: 0, x: 0, y: 0, z: 0 };
 /** Cached keyhole geometry, versioned by both its box and shared tuning. */
 let _keyhole = null;
 let _keyholeWidth = -1;
@@ -226,10 +255,12 @@ const _customPaintFrame = {
   height: 0,
   dpr: 1,
   timestamp: 0,
-  viewProjectionMatrix: _scratchViewProjection,
-  viewProjection: _viewProjectionScalars,
+  projector: null,
+  camera: null,
+  cameraAltitude: Number.NaN,
   cameraPosition: null,
   occluder: null,
+  projectPosition: projectLanePosition,
   keyhole: null,
   uiRects: _uiOcclusionRects,
   uiRectCount: 0,
@@ -365,7 +396,7 @@ export function paintLaneForOverlayEntry(entry = {}) {
  */
 /**
  * Snapshot an entry's optional occlusion-test anchor into a host-owned
- * Cartesian3, mirroring the flights layer's `info.cullPosition || bb.position`
+ * resolved position, mirroring the flights layer's `info.cullPosition || bb.position`
  * idiom: a source whose render anchor can land at or below the ellipsoid
  * (ground floor + lift in a negative-geoid region) supplies a LIFTED point
  * here so the horizon test judges the real surface instead of false-hiding it
@@ -376,12 +407,13 @@ export function paintLaneForOverlayEntry(entry = {}) {
  *   invoked once rather than once per validated component;
  * - a throwing accessor is contained here — it degrades that one entry to
  *   "no cull anchor" instead of aborting normalization for the whole source;
- * - the components are copied into a fresh Cartesian3, so a caller mutating
+ * - the components are copied into a fresh object, so a caller mutating
  *   or recycling its own vector after publishing cannot feed NaN (or a moved
  *   point) to the per-frame occluder.
  *
  * @param {object} entry - Raw source entry.
- * @returns {?Cesium.Cartesian3} Host-owned lifted anchor, or null.
+ * @returns {?{lon:number,lat:number,height:number,x:number,y:number,z:number}}
+ *   Host-owned lifted anchor (resolved WorldPosition), or null.
  */
 function snapshotCullPosition(entry) {
   let candidate;
@@ -391,9 +423,12 @@ function snapshotCullPosition(entry) {
     return null; // a hostile/throwing accessor must not break the source
   }
   if (!candidate || typeof candidate !== 'object') return null;
-  const { x, y, z } = candidate;
-  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
-  return new Cesium.Cartesian3(x, y, z);
+  const resolved = { lon: 0, lat: 0, height: 0, x: 0, y: 0, z: 0 };
+  try {
+    return resolveWorldPosition(candidate, resolved) ? resolved : null;
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeOverlayEntry(sourceId, entry) {
@@ -402,10 +437,9 @@ export function normalizeOverlayEntry(sourceId, entry) {
   const id = typeof entry.id === 'string' ? entry.id.trim() : '';
   if (!id) throw new TypeError('WorldOverlay entry.id must be a non-empty string');
   const validPosition = typeof entry.position === 'function'
-    || (entry.position && Number.isFinite(entry.position.x)
-      && Number.isFinite(entry.position.y) && Number.isFinite(entry.position.z));
+    || isWorldPositionLike(entry.position);
   if (!validPosition) {
-    throw new TypeError(`WorldOverlay entry ${source}:${id} requires a Cartesian position or getter`);
+    throw new TypeError(`WorldOverlay entry ${source}:${id} requires a world position ({lon,lat,height} or {x,y,z}) or getter`);
   }
   const variant = String(entry.variant || 'label');
   if (!VALID_VARIANTS.has(variant)) {
@@ -718,7 +752,7 @@ function invalidateHost({ solve = true, layout = false } = {}) {
   _paintRectCount = 0;
   _hitRectCount = 0;
   _paintRectByKey.clear();
-  _viewer?.scene?.requestRender?.();
+  _engine?.requestRender?.();
 }
 
 function inertPaintLaneHandle() {
@@ -951,12 +985,16 @@ export function getWorldOverlayDiagnostics() {
  * false-hidden near the limb; everything else still uses the render position.
  */
 export function isOverlayPointVisible(entry, position, screen, viewport, occluder) {
-  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
-    return false;
-  }
-  if (entry?.horizonCull !== false && occluder?.isPointVisible
-    && !occluder.isPointVisible(entry?.cullPosition || position)) {
-    return false;
+  if (!isWorldPositionLike(position)) return false;
+  if (entry?.horizonCull !== false && occluder?.isPointVisible) {
+    const cull = entry?.cullPosition || position;
+    // Host records are already resolved ({lon,lat,height,x,y,z} on the map
+    // sphere); anything else goes through the occluder's own resolver.
+    const visible = typeof occluder.isResolvedVisible === 'function'
+      && Number.isFinite(cull.lon) && Number.isFinite(cull.x)
+      ? occluder.isResolvedVisible(cull)
+      : occluder.isPointVisible(cull);
+    if (!visible) return false;
   }
   const x = screen?.x;
   const y = screen?.y;
@@ -1021,8 +1059,8 @@ function ensureOverlayDom() {
     _root = document.createElement('div');
     _root.id = ROOT_ID;
     _root.setAttribute('aria-hidden', 'true');
-    const parent = _viewer.container?.parentElement || document.body;
-    if (_viewer.container?.nextSibling) parent.insertBefore(_root, _viewer.container.nextSibling);
+    const parent = _engine.container?.parentElement || document.body;
+    if (_engine.container?.nextSibling) parent.insertBefore(_root, _engine.container.nextSibling);
     else parent.appendChild(_root);
   }
   _canvas = _root.querySelector?.(`#${CANVAS_ID}`) || document.getElementById(CANVAS_ID);
@@ -1031,16 +1069,16 @@ function ensureOverlayDom() {
     _canvas.id = CANVAS_ID;
     _root.appendChild(_canvas);
   }
-  // The detection surface is parented to the Cesium container, NOT to
+  // The detection surface is parented to the map container, NOT to
   // `#world-overlay-root`. Detection paints with `mix-blend-mode: screen`,
   // which only reaches the WebGL scene while no ancestor between the surface
-  // and the Cesium canvas forms a stacking context (an isolated blending
-  // group). `#cesiumContainer` is `position:absolute; z-index:auto` and does
-  // not; `#world-overlay-root` is `z-index:6` and does — parenting here made
+  // and the map canvas forms a stacking context (an isolated blending
+  // group). `#cesiumContainer` (the MapLibre container keeps that id) is
+  // `position:absolute; z-index:auto` and does not; `#world-overlay-root` is `z-index:6` and does — parenting here made
   // the browser silently discard the blend while the CSS string stayed
   // `'screen'`. Paint order is expressed purely by z-index: this surface is
   // z5, the shared card canvas inside the root is z6.
-  const detectionParent = _viewer?.container || document.body;
+  const detectionParent = _engine?.container || document.body;
   _detectionSurface = detectionParent.querySelector?.(`#${DETECTION_SURFACE_ID}`)
     || document.getElementById(DETECTION_SURFACE_ID);
   if (!_detectionSurface) {
@@ -1103,9 +1141,9 @@ function sizeCanvasSurface(canvas, ctx, width, height, dpr) {
  * that actually has paint work.
  */
 function ensureCanvasSize() {
-  if (!_canvas || !_viewer?.canvas) return false;
-  const width = Math.max(0, Math.round(Number(_viewer.canvas.clientWidth) || 0));
-  const height = Math.max(0, Math.round(Number(_viewer.canvas.clientHeight) || 0));
+  if (!_canvas || !_engine?.canvas) return false;
+  const width = Math.max(0, Math.round(Number(_engine.canvas.clientWidth) || 0));
+  const height = Math.max(0, Math.round(Number(_engine.canvas.clientHeight) || 0));
   const dpr = Math.max(1, Number(globalThis.window?.devicePixelRatio) || 1);
   const changed = _canvas.width !== Math.round(width * dpr)
     || _canvas.height !== Math.round(height * dpr)
@@ -1220,7 +1258,7 @@ function refreshUiOccluders(timestamp, force = false) {
     if (_occluderRefreshTimer == null && typeof setTimeout === 'function') {
       _occluderRefreshTimer = setTimeout(() => {
         _occluderRefreshTimer = null;
-        _viewer?.scene?.requestRender?.();
+        _engine?.requestRender?.();
       }, Math.max(0, OCCLUDER_REFRESH_MS - elapsed));
     }
     return false;
@@ -1431,37 +1469,20 @@ function overlayHasPaintWork(timestamp = nowMs()) {
   return false;
 }
 
-function prepareProjectionMatrix() {
-  const camera = _viewer.camera;
-  const matrix = Cesium.Matrix4.multiply(
-    camera.frustum.projectionMatrix,
-    camera.viewMatrix,
-    _scratchViewProjection,
-  );
-  _viewProjectionScalars.m0 = matrix[0];
-  _viewProjectionScalars.m1 = matrix[1];
-  _viewProjectionScalars.m3 = matrix[3];
-  _viewProjectionScalars.m4 = matrix[4];
-  _viewProjectionScalars.m5 = matrix[5];
-  _viewProjectionScalars.m7 = matrix[7];
-  _viewProjectionScalars.m8 = matrix[8];
-  _viewProjectionScalars.m9 = matrix[9];
-  _viewProjectionScalars.m11 = matrix[11];
-  _viewProjectionScalars.m12 = matrix[12];
-  _viewProjectionScalars.m13 = matrix[13];
-  _viewProjectionScalars.m15 = matrix[15];
-  return _viewProjectionScalars;
+/**
+ * `frame.projectPosition(position, out)` das lanes próprias: resolve uma
+ * WorldPosition, aplica o horizonte do globo e escreve out.x/out.y (px CSS)
+ * e out.distance (m até a câmera). Sem alocação.
+ */
+function projectLanePosition(position, out) {
+  if (!_projector || !resolveWorldPosition(position, _laneScratch)) return false;
+  if (!_projector.project(_laneScratch, out, true)) return false;
+  out.distance = _projector.distanceTo(_laneScratch);
+  return true;
 }
 
 function prepareCustomPaintFrame(timestamp, keyhole) {
-  const viewProjection = prepareProjectionMatrix();
-  const camera = _viewer.camera.positionWC;
-  if (camera.x !== _occluderCameraX || camera.y !== _occluderCameraY || camera.z !== _occluderCameraZ) {
-    _occluder.cameraPosition = camera;
-    _occluderCameraX = camera.x;
-    _occluderCameraY = camera.y;
-    _occluderCameraZ = camera.z;
-  }
+  const camera = _projector.beginFrame();
   _customPaintFrame.canvas = _canvas;
   _customPaintFrame.surface = _canvas;
   _customPaintFrame.ctx = _ctx;
@@ -1469,12 +1490,15 @@ function prepareCustomPaintFrame(timestamp, keyhole) {
   _customPaintFrame.height = _canvasHeight;
   _customPaintFrame.dpr = _canvasDpr;
   _customPaintFrame.timestamp = timestamp;
+  _customPaintFrame.projector = _projector;
+  _customPaintFrame.camera = camera;
+  _customPaintFrame.cameraAltitude = camera.alt;
   _customPaintFrame.cameraPosition = camera;
   _customPaintFrame.occluder = _occluder;
   _customPaintFrame.keyhole = keyhole;
   _customPaintFrame.uiRectCount = _uiOcclusionRects.length;
   _customPaintFrame.layoutRevision = _layoutRevision;
-  return viewProjection;
+  return camera;
 }
 
 function getProjectionRecord(entry) {
@@ -1483,7 +1507,7 @@ function getProjectionRecord(entry) {
     record = {
       key: entry._overlayKey,
       entry,
-      position: new Cesium.Cartesian3(),
+      position: { lon: 0, lat: 0, height: 0, x: 0, y: 0, z: 0 },
       screen: { x: 0, y: 0 },
       layout: entry._overlayLayout,
       placements: [],
@@ -1552,7 +1576,7 @@ function resetFrameDomains() {
   }
 }
 
-function snapshotAndProject(entry, source, viewProjection, keyhole) {
+function snapshotAndProject(entry, source, camera, keyhole) {
   const record = getProjectionRecord(entry);
   let position;
   try {
@@ -1560,22 +1584,10 @@ function snapshotAndProject(entry, source, viewProjection, keyhole) {
   } catch {
     return null;
   }
-  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
-    return null;
-  }
-  record.position.x = position.x;
-  record.position.y = position.y;
-  record.position.z = position.z;
-
-  const { x: px, y: py, z: pz } = record.position;
-  const clipW = viewProjection.m3 * px + viewProjection.m7 * py
-    + viewProjection.m11 * pz + viewProjection.m15;
-  if (!(clipW > 0)) return null;
-  const invW = 1 / clipW;
-  record.screen.x = ((viewProjection.m0 * px + viewProjection.m4 * py
-    + viewProjection.m8 * pz + viewProjection.m12) * invW * 0.5 + 0.5) * _canvasWidth;
-  record.screen.y = (0.5 - (viewProjection.m1 * px + viewProjection.m5 * py
-    + viewProjection.m9 * pz + viewProjection.m13) * invW * 0.5) * _canvasHeight;
+  if (!position || !resolveWorldPosition(position, record.position)) return null;
+  // Horizon culling happens in isOverlayPointVisible (it honours
+  // `horizonCull` and the lifted `cullPosition`), so projection here is raw.
+  if (!_projector.project(record.position, record.screen, false)) return null;
   if (entry.safeTopRatio > 0 && !(entry.pinned && entry.pinnedBypassesSafeTop)) {
     const safeTop = Math.min(entry.safeTopMaxPx, _canvasHeight * entry.safeTopRatio);
     if (record.screen.y < safeTop) return null;
@@ -1592,7 +1604,7 @@ function snapshotAndProject(entry, source, viewProjection, keyhole) {
   // scalar steps stay local: the range is computed inline, and the common
   // "no far limit" fade policy resolves without calling out at all. Both are
   // exact restatements of `Cartesian3.distance` / `distanceFade`.
-  const cameraPosition = _viewer.camera.positionWC;
+  const cameraPosition = camera;
   const rangeX = cameraPosition.x - record.position.x;
   const rangeY = cameraPosition.y - record.position.y;
   const rangeZ = cameraPosition.z - record.position.z;
@@ -1600,8 +1612,22 @@ function snapshotAndProject(entry, source, viewProjection, keyhole) {
   record.distanceAlpha = entry.maxDistance === Number.POSITIVE_INFINITY
     ? (distance >= entry.minDistance ? 1 : 0)
     : distanceFade(distance, record.distanceOptions);
-  const cameraAltitude = _viewer.camera.positionCartographic?.height;
-  record.paintScale = entry.distanceScale ? distanceScale(distance, entry.distanceScale) : 1;
+  const cameraAltitude = camera.alt;
+  // `distanceScale`, inlined over the already-normalized curve: a double
+  // returned from a non-inlined call is boxed, once per candidate per frame.
+  const distanceCurve = entry.distanceScale;
+  let paintScale = 1;
+  if (distanceCurve && Number.isFinite(distance)) {
+    if (distance <= distanceCurve.near || distanceCurve.far === distanceCurve.near) {
+      paintScale = distanceCurve.nearValue;
+    } else if (distance >= distanceCurve.far) {
+      paintScale = distanceCurve.farValue;
+    } else {
+      paintScale = distanceCurve.nearValue + (distanceCurve.farValue - distanceCurve.nearValue)
+        * ((distance - distanceCurve.near) / (distanceCurve.far - distanceCurve.near));
+    }
+  }
+  record.paintScale = paintScale;
   // Keep the source-configurable piecewise curve local to the projection hot
   // path. Passing its five doubles through a non-inlined helper boxed them for
   // every thumbnail candidate and broke the shared 154 B/candidate gate.
@@ -1729,7 +1755,7 @@ function snapshotAndProject(entry, source, viewProjection, keyhole) {
  * objects, placement objects, and the domain buffers are all reused, and live
  * membership is carried by `candidate.frameStamp` instead of a rebuilt map.
  */
-function collectFrameCandidates(keyhole, viewProjection) {
+function collectFrameCandidates(keyhole, camera) {
   resetFrameDomains();
   let candidateCount = 0;
   let projectedCount = 0;
@@ -1759,7 +1785,7 @@ function collectFrameCandidates(keyhole, viewProjection) {
           const imageSlot = entry._overlayImageSlot;
           if (imageSlot ? (!(imageSlot.stamp > 0) || !imageSlot.frame) : !entry.image) continue;
         }
-        const record = snapshotAndProject(entry, source, viewProjection, keyhole);
+        const record = snapshotAndProject(entry, source, camera, keyhole);
         if (!record) continue;
         // Anchor separation runs HERE, not inside the arbiter. The shipped pass
         // filtered the candidate list and then drew it; rejecting inside the
@@ -2143,7 +2169,7 @@ function resetFrameDiagnostics() {
 }
 
 function drawWorldOverlay() {
-  if (_destroyed || !_viewer || !_canvas || !_ctx) return;
+  if (_destroyed || !_engine || !_canvas || !_ctx) return;
   const timestamp = nowMs();
   if (!overlayHasPaintWork(timestamp)) {
     resetFrameDiagnostics();
@@ -2172,13 +2198,13 @@ function drawWorldOverlay() {
     _keyholeOutsideOpacity = fadeTuning.outsideOpacity;
   }
   const keyhole = _keyhole;
-  const viewProjection = prepareCustomPaintFrame(timestamp, keyhole);
-  collectFrameCandidates(keyhole, viewProjection);
+  const camera = prepareCustomPaintFrame(timestamp, keyhole);
+  collectFrameCandidates(keyhole, camera);
   _diagnostics.projectionMs = nowMs() - projectionStarted;
   solveDomains(timestamp);
   paintFrame(keyhole);
   const fadesRemaining = activeFadeCount(timestamp);
-  if (fadesRemaining > 0) _viewer.scene.requestRender?.();
+  if (fadesRemaining > 0) _engine.requestRender?.();
 }
 
 function createDevFacade() {
@@ -2187,32 +2213,30 @@ function createDevFacade() {
 }
 
 /**
- * Initialize the singleton host. Repeated calls for the same viewer are no-op.
- * @param {Cesium.Viewer} viewer
+ * Initialize the singleton host. Repeated calls for the same engine are no-op.
+ * @param {object} engine Motor MapLibre (src/maplibre/engine.js): usa
+ *   `container`, `canvas`, `on('render'|'moveend')`, `requestRender`,
+ *   `getCameraView`, `isGlobe` e `map.project` (ou `projectInto` em mocks).
  */
-export function initWorldOverlay(viewer) {
-  if (!viewer?.scene?.postRender?.addEventListener) {
-    throw new TypeError('initWorldOverlay requires a Cesium viewer with scene.postRender');
+export function initWorldOverlay(engine) {
+  if (typeof engine?.on !== 'function') {
+    throw new TypeError('initWorldOverlay requires the map engine (engine.on)');
   }
-  if (_viewer === viewer && _canvas && _removePostRender) return;
-  if (_viewer) destroyWorldOverlay();
+  if (_engine === engine && _canvas && _removePostRender) return;
+  if (_engine) destroyWorldOverlay();
   _destroyed = false;
-  _viewer = viewer;
+  _engine = engine;
+  _projector = createWorldProjector(engine);
+  _occluder = _projector.occluder;
   ensureOverlayDom();
-  _occluder = new Cesium.EllipsoidalOccluder(
-    Cesium.Ellipsoid.WGS84,
-    viewer.camera?.positionWC || new Cesium.Cartesian3(),
-  );
   _cockpitActive = !!document.body?.classList?.contains('cockpit-mode');
   _cockpitModeHandler = (event) => {
     _cockpitActive = event?.detail?.active === true;
     invalidateHost();
   };
   window.addEventListener('gev:cockpit-mode-changed', _cockpitModeHandler);
-  _removePostRender = viewer.scene.postRender.addEventListener(drawWorldOverlay);
-  if (viewer.camera?.moveEnd?.addEventListener) {
-    _removeMoveEnd = viewer.camera.moveEnd.addEventListener(() => invalidateHost());
-  }
+  _removePostRender = engine.on('render', drawWorldOverlay);
+  _removeMoveEnd = engine.on('moveend', () => invalidateHost());
   installUiOccluderObservers();
   // The backing store and the occluder inventory are both deferred to the
   // first frame with real paint work: a dormant host must not hold a
@@ -2231,7 +2255,7 @@ export function destroyWorldOverlay() {
   // Tearing down a host that was never initialized must not arm the
   // post-destroy guard: sources are allowed to publish before the first
   // `initWorldOverlay`, and that buffering has to survive a stray destroy.
-  const hadHost = _viewer !== null;
+  const hadHost = _engine !== null;
   _removePostRender?.();
   _removePostRender = null;
   _removeMoveEnd?.();
@@ -2254,7 +2278,7 @@ export function destroyWorldOverlay() {
   _occluderRefreshTimer = null;
   _root?.remove?.();
   _accessibilityRoot?.remove?.();
-  // The detection surface is not a child of `_root` (it lives in the Cesium
+  // The detection surface is not a child of `_root` (it lives in the map
   // container so its `screen` blend reaches the scene), so it has to be torn
   // down explicitly rather than by the root's removal.
   _detectionSurface?.remove?.();
@@ -2294,7 +2318,8 @@ export function destroyWorldOverlay() {
   _uiOcclusionRects.length = 0;
   _uiOcclusionRectPool.length = 0;
   _destroyed = hadHost || _destroyed;
-  _viewer = null;
+  _engine = null;
+  _projector = null;
   _root = null;
   _canvas = null;
   _ctx = null;
@@ -2304,9 +2329,6 @@ export function destroyWorldOverlay() {
   _detectionSurface = null;
   _detectionCtx = null;
   _occluder = null;
-  _occluderCameraX = Number.NaN;
-  _occluderCameraY = Number.NaN;
-  _occluderCameraZ = Number.NaN;
   _keyhole = null;
   _keyholeWidth = -1;
   _keyholeHeight = -1;
@@ -2333,6 +2355,9 @@ export function destroyWorldOverlay() {
   _customPaintFrame.height = 0;
   _customPaintFrame.dpr = 1;
   _customPaintFrame.timestamp = 0;
+  _customPaintFrame.projector = null;
+  _customPaintFrame.camera = null;
+  _customPaintFrame.cameraAltitude = Number.NaN;
   _customPaintFrame.cameraPosition = null;
   _customPaintFrame.occluder = null;
   _customPaintFrame.keyhole = null;

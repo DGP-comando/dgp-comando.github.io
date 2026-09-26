@@ -97,3 +97,9 @@ test('ownership: unregister removes the predicate', () => {
   unregisterPickOwner('bikeshare');
   assert.equal(isOwnedByOtherLayer('flights', 'station:1'), false);
 });
+
+test('resolvePickId reads MapLibre rendered features from engine.pick', () => {
+  assert.equal(resolvePickId({ layer: { id: 'dg-flights' }, properties: { id: 'abc123' }, id: 7 }), 'abc123');
+  assert.equal(resolvePickId({ layer: { id: 'dg-firms-glow' }, properties: {}, id: 42 }), '42');
+  assert.equal(resolvePickId({ layer: { id: 'x' }, properties: {} }), null);
+});

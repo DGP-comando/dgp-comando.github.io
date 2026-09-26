@@ -1,5 +1,13 @@
 /**
- * Validation for positions that came back from a Cesium screen pick.
+ * Validation for positions that came back from a screen pick.
+ *
+ * MOTOR: MapLibre. `engine.unproject(x, y)` devolve `{lon, lat}` (ou null) —
+ * valide com `isPickedGeoPosition`. `isPickedWorldPosition` continua para
+ * posições ECEF {x,y,z} (o formato do antigo pick de profundidade do Cesium,
+ * ainda aceito como WorldPosition legado pelo overlay).
+ *
+ * The notes below describe the depth-pick failure modes that motivated the
+ * ECEF guard.
  *
  * `scene.pickPosition()` reads the depth buffer. Over empty sky — high-altitude
  * views where the pick ray misses everything renderable — that read can produce
@@ -45,4 +53,18 @@ export function isPickedWorldPosition(position) {
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return false;
   const magnitude = Math.hypot(x, y, z);
   return magnitude >= MIN_PICK_MAGNITUDE_M && magnitude <= MAX_PICK_MAGNITUDE_M;
+}
+
+/**
+ * Whether a MapLibre pick/unproject result (`{lon, lat}`, degrees) names a
+ * real place: finite, latitude within ±90°, longitude within ±540° (MapLibre
+ * can hand back unwrapped longitudes across world copies).
+ * @param {{lon: number, lat: number}|null|undefined} position
+ * @returns {boolean}
+ */
+export function isPickedGeoPosition(position) {
+  if (!position) return false;
+  const { lon, lat } = position;
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return false;
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 540;
 }

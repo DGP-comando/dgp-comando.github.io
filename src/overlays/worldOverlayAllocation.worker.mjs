@@ -1,4 +1,3 @@
-import * as Cesium from 'cesium';
 import {
   AMBIENT_CARD_COLLISION_CAPACITY,
   destroyWorldOverlay,
@@ -115,6 +114,14 @@ function makeRandom(seed) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
     return state / 4294967296;
   };
+}
+
+/**
+ * Neutral WorldPosition for the harness: lon/lat are normalized device
+ * coordinates under the mock engine's projection (see installMockEnvironment).
+ */
+function pos(x, y, height = 0) {
+  return { lon: x, lat: y, height };
 }
 
 /** Canvas2D stub that records nothing; recording would dominate the delta. */
@@ -262,17 +269,32 @@ function installMockEnvironment({ width, height, dpr }) {
   }
 
   const postRender = new MockEvent();
+  const moveEnd = new MockEvent();
+  // Mock of the MapLibre engine. `projectInto` is the allocation-free
+  // projection seam the host prefers: lon/lat are normalized device
+  // coordinates scaled by `projectionScale`, over a flat map (no horizon).
+  const cameraView = { lon: 0, lat: 0, alt: 1000, heading: 0, pitch: -90, zoom: 5 };
   const viewer = {
     container,
     canvas: { clientWidth: width, clientHeight: height },
-    camera: {
-      positionWC: new Cesium.Cartesian3(0, 0, 10_000_000),
-      positionCartographic: { height: 1000 },
-      viewMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY),
-      frustum: { projectionMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY) },
-      moveEnd: new MockEvent(),
+    camera: { positionCartographic: { height: 1000 } },
+    projectionScale: { x: 1, y: 1 },
+    on(type, fn) {
+      if (type === 'render') return postRender.addEventListener(fn);
+      if (type === 'moveend') return moveEnd.addEventListener(fn);
+      return () => {};
     },
-    scene: { postRender, requestRender() {} },
+    requestRender() {},
+    isGlobe() { return false; },
+    getCameraView() {
+      cameraView.alt = viewer.camera.positionCartographic.height;
+      return cameraView;
+    },
+    projectInto(p, out) {
+      out.x = (p.lon * viewer.projectionScale.x * 0.5 + 0.5) * width;
+      out.y = (0.5 - p.lat * viewer.projectionScale.y * 0.5) * height;
+      return true;
+    },
   };
 
   return {
@@ -298,7 +320,7 @@ function buildWorkload(count) {
     const row = Math.floor(index / columns);
     const baseX = -0.86 + column * spanX;
     const baseY = -0.82 + row * spanY;
-    positions.push(new Cesium.Cartesian3(baseX, baseY, 0));
+    positions.push(pos(baseX, baseY, 0));
     drifts.push({
       baseX,
       baseY,
@@ -577,7 +599,7 @@ function buildPhase4CctvWorkload(count) {
     const row = Math.floor(index / 7);
     const baseX = -0.78 + column * 0.26;
     const baseY = -0.68 + row * 0.23;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
+    const position = pos(baseX, baseY, 0);
     workload.positions.push(position);
     workload.drifts.push({
       baseX,
@@ -628,7 +650,7 @@ function buildPhase5EarthquakesWorkload(count) {
     const row = Math.floor(index / 12);
     const baseX = -0.82 + column * 0.15;
     const baseY = -0.74 + row * 0.2;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
+    const position = pos(baseX, baseY, 0);
     workload.positions.push(position);
     workload.drifts.push({
       baseX,
@@ -663,7 +685,7 @@ function buildPhase5BikeshareWorkload(count) {
   const expectedCount = earthquakeCount + 1;
   if (count !== expectedCount) throw new Error(`phase5-bikeshare requires ${expectedCount} entries`);
   const workload = buildPhase5EarthquakesWorkload(earthquakeCount);
-  const position = new Cesium.Cartesian3(0.12, -0.08, 0);
+  const position = pos(0.12, -0.08, 0);
   workload.positions.push(position);
   workload.drifts.push({ baseX: 0.12, baseY: -0.08, phase: 0.7, rate: 0.41 });
   const entry = createBikeshareSelectedOverlayEntry('allocation:station', {
@@ -693,7 +715,7 @@ function buildPhase5SatellitesWorkload(count) {
   const expectedCount = bikeshareCount + 1;
   if (count !== expectedCount) throw new Error(`phase5-satellites requires ${expectedCount} entries`);
   const workload = buildPhase5BikeshareWorkload(bikeshareCount);
-  const position = new Cesium.Cartesian3(-0.42, 0.54, 0);
+  const position = pos(-0.42, 0.54, 0);
   workload.positions.push(position);
   workload.drifts.push({ baseX: -0.42, baseY: 0.54, phase: 1.3, rate: 0.62 });
   const entry = createIssOverlayEntry(() => position);
@@ -715,7 +737,7 @@ function buildPhase5CctvProjectionWorkload(count) {
     throw new Error(`phase5-cctv-projection requires ${expectedCount} entries`);
   }
   const workload = buildPhase5SatellitesWorkload(satelliteCount);
-  const position = new Cesium.Cartesian3(0.48, 0.44, 0);
+  const position = pos(0.48, 0.44, 0);
   workload.positions.push(position);
   workload.drifts.push({ baseX: 0.48, baseY: 0.44, phase: 1.8, rate: 0.47 });
   const entry = createCctvProjectionOverlayEntry({
@@ -765,7 +787,7 @@ function appendRocketMissionAmbientWorkload(workload, count) {
     const row = Math.floor(index / 8);
     const baseX = -0.78 + column * 0.22;
     const baseY = -0.68 + row * 0.24;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
+    const position = pos(baseX, baseY, 0);
     workload.positions.push(position);
     workload.drifts.push({
       baseX,
@@ -836,9 +858,9 @@ function buildAllLiveRadioWorkload(count) {
   appendSubmarineCableWorkload(workload, CABLE_REFERENCE_LABEL_WINNER_CAP);
   const entries = [];
   for (let index = 0; index < RADIO_OVERLAY_COHORT_LIMIT; index += 1) {
-    const position = new Cesium.Cartesian3(-0.72 + (index % 8) * 0.18, -0.64 + Math.floor(index / 8) * 0.16, 0);
+    const position = pos(-0.72 + (index % 8) * 0.18, -0.64 + Math.floor(index / 8) * 0.16, 0);
     workload.positions.push(position);
-    workload.drifts.push({ baseX: position.x, baseY: position.y, phase: index * 0.21, rate: 0.35 });
+    workload.drifts.push({ baseX: position.lon, baseY: position.lat, phase: index * 0.21, rate: 0.35 });
     const entry = createRadioClusterOverlayEntry({
       id: `cluster-${index}`,
       position: () => position,
@@ -849,7 +871,7 @@ function buildAllLiveRadioWorkload(count) {
     entry.horizonCull = false;
     entries.push(entry);
   }
-  const selectedPosition = new Cesium.Cartesian3(0.08, 0.12, 0);
+  const selectedPosition = pos(0.08, 0.12, 0);
   workload.positions.push(selectedPosition);
   workload.drifts.push({ baseX: selectedPosition.x, baseY: selectedPosition.y, phase: 0.5, rate: 0.4 });
   const selectedEntry = createRadioSelectedOverlayEntry({
@@ -883,7 +905,7 @@ function appendSubmarineCableWorkload(workload, count) {
     const row = Math.floor(index / 16);
     const baseX = -0.84 + column * 0.112;
     const baseY = -0.78 + row * 0.164;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
+    const position = pos(baseX, baseY, 0);
     workload.positions.push(position);
     workload.drifts.push({
       baseX,
@@ -936,17 +958,14 @@ function buildPhase6DetectionWorkload(count) {
   const rows = Math.max(1, Math.ceil(count / columns));
   const spanX = columns > 1 ? 1_400_000 / (columns - 1) : 0;
   const spanY = rows > 1 ? 1_050_000 / (rows - 1) : 0;
-  const polarRadiusM = Cesium.Ellipsoid.WGS84.radii.z;
-  const equatorialRadiusM = Cesium.Ellipsoid.WGS84.radii.x;
   for (let index = 0; index < count; index++) {
     const column = index % columns;
     const row = Math.floor(index / columns);
     const baseX = -700_000 + column * spanX;
     const baseY = -525_000 + row * spanY;
-    const normalizedHorizontal = (baseX * baseX + baseY * baseY)
-      / (equatorialRadiusM * equatorialRadiusM);
-    const z = polarRadiusM * Math.sqrt(Math.max(0, 1 - normalizedHorizontal));
-    const position = new Cesium.Cartesian3(baseX, baseY, z);
+    // Metres in the old polar-ECEF layout; the mock projection scales them
+    // onto the viewport (see `projectionScale` in main()).
+    const position = pos(baseX, baseY, 0);
     positions.push(position);
     drifts.push({
       baseX,
@@ -980,8 +999,8 @@ function advanceWorkload(positions, drifts, frame) {
     const drift = drifts[index];
     const t = frame * 0.016 * drift.rate + drift.phase;
     const amplitude = drift.amplitude ?? 0.03;
-    positions[index].x = drift.baseX + Math.sin(t) * amplitude;
-    positions[index].y = drift.baseY + Math.cos(t * 0.7) * amplitude;
+    positions[index].lon = drift.baseX + Math.sin(t) * amplitude;
+    positions[index].lat = drift.baseY + Math.cos(t * 0.7) * amplitude;
   }
 }
 
@@ -1033,10 +1052,10 @@ function main() {
   const solveIntervalMs = Number(process.env.GEV_ALLOC_SOLVE_MS) || 125;
   const detectionActive = !!workload.detectionLayer;
   if (detectionActive) {
-    // Spread polar ECEF x/y over the viewport while retaining a real WGS84
-    // horizon test and detection's manual matrix projection path.
-    env.viewer.camera.viewMatrix[0] = 1 / 800_000;
-    env.viewer.camera.viewMatrix[5] = 1 / 600_000;
+    // Spread the ±700 km grid over the viewport through detection's real
+    // resolve → project path (the mock projection scales it).
+    env.viewer.projectionScale.x = 1 / 800_000;
+    env.viewer.projectionScale.y = 1 / 600_000;
     env.viewer.camera.positionCartographic.height = 2_500_000;
     initDetection(env.viewer, [workload.detectionLayer], () => {});
     setDetectionTuning({ densityPct: 100, allocationStrategy: 'ELASTIC' });
