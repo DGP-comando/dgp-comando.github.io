@@ -109,7 +109,7 @@ def to_geometry(geom, tolerance: float) -> dict | None:
     gj = mapping(simple)
     rounded = shape({'type': gj['type'], 'coordinates': _round_coords(gj['coordinates'])})
     # Quantizar em 5 casas pode criar autointerseção em vértices muito
-    # próximos: valida de novo e corrige (o Cesium falha ao triangular inválido).
+    # próximos: valida de novo e corrige (polígono inválido quebra a triangulação no mapa).
     fixed = _repair(rounded)
     if fixed is None:
         return None

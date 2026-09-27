@@ -506,7 +506,7 @@ export function smoothReplayWindowPosition(
 
 function replayOverlayHost() {
   return _engine?.container
-    || (typeof document !== 'undefined' ? document.getElementById?.('cesiumContainer') || document.body : null);
+    || (typeof document !== 'undefined' ? document.getElementById?.('map') || document.body : null);
 }
 
 function createReplayVehicleOverlay() {

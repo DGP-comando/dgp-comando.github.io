@@ -297,7 +297,7 @@ function installMockEnvironment({
   globalThis.window = window;
 
   const viewerContainer = new MockElement('div');
-  viewerContainer.id = 'cesiumContainer';
+  viewerContainer.id = 'map';
   body.appendChild(viewerContainer);
   const root = new MockElement('div');
   root.id = 'world-overlay-root';

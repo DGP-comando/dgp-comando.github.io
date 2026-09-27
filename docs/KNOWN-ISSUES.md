@@ -1,6 +1,7 @@
 # KNOWN ISSUES
 
-Updated: July 8, 2026
+Updated: September 26, 2026 (map engine moved from CesiumJS to MapLibre GL JS —
+see `docs/MIGRACAO_MAPLIBRE.md`)
 
 This file tracks active runtime issues only.
 
@@ -10,6 +11,35 @@ of the public release.
 ---
 
 ## Open
+
+### Switching the base map leaves the MAPA BASE status on "..."
+Status: Open (found by `npm run qa:map-source-tray`, 2026-09-26)
+
+Context:
+- `engine.setBasemap()` (`src/maplibre/engine.js`) calls `map.setStyle(style, {transformStyle})`
+  and only then subscribes `map.once('style.load')`. With an object style MapLibre fires
+  `style.load` synchronously inside `setStyle`, so the promise never resolves: the map does
+  switch, but `MapStackController.setStack()` never commits — the status chip stays `...`,
+  the active tile does not move and the share link keeps the old `map=`.
+- Fix direction: subscribe before calling `setStyle` (or resolve when `map.isStyleLoaded()`
+  right after it).
+
+### MAPA BASE tray overflows the viewport at narrow widths
+Status: Open (found by `npm run qa:map-source-tray`, 2026-09-26)
+
+Context:
+- With the three sources plus the three toggles (Rótulos, Globo/2D, Relevo 3D) the tray grid
+  wraps to two columns at ≤620 px and the popover's left edge lands off-screen
+  (measured `left: -165px` at 620 px, `-95px` at 480 px).
+
+### HUD place names from Google reverse geocoding never run
+Status: Open (2026-09-26)
+
+Context:
+- `src/basemapLabelContext.js` (and `reverseGeocode` in `src/voice/gevActions.js`) read the key
+  only from `window.__GOOGLE_MAPS_API_KEY__`, which nothing sets any more; the forward geocoders
+  also fall back to `import.meta.env.GOOGLE_MAPS_API_KEY`. Even with the key configured, that
+  lookup is skipped.
 
 ### Street traffic can be slow/uneven when panning across dense city blocks
 Status: Open (partially mitigated)
@@ -50,21 +80,17 @@ Related keys (current versions):
 
 ---
 
-### Height-datum residuals
-Status: Open (accepted 2026-07-08, documented)
+## Closed / Intentional (for clarity)
 
-- **Cold-start floor latency:** at a freshly-visited airport, grounded/low aircraft
-  float low for ~1–2 poll cycles (30–60 s) and rise as terrain floors resolve;
-  a few stragglers take one more poll.
-- **Born-grounded first poll:** a contact first seen on the ground with no altitude
-  data renders at the geoid for ≤1 poll until its floor cell warms.
-- Full context, improvement ideas, and the verification oracle
-  (`scripts/qa-floor-verify.mjs`):
-  the height-datum section in `docs/CURRENT-STATE.md`.
+### Height-datum residuals
+Status: Not applicable since the MapLibre engine (2026-09-26)
+
+- The Cesium build drew grounded aircraft on the rendered 3D mesh and had cold-start
+  floor latency and a born-grounded first poll at the geoid. The MapLibre map draws
+  every contact on the map plane (no 3D mesh, no vertical datum), so neither residual
+  exists. The oracle `scripts/qa-floor-verify.mjs` was retired (`scripts/APOSENTADOS.md`).
 
 ---
-
-## Closed / Intentional (for clarity)
 
 ### Proxy SSRF and error-surface hardening gaps
 Status: Closed as fixed on `main`
@@ -103,6 +129,8 @@ Context:
   bundled-snapshot layer (`local-firms`, 2026-05-25 data, ~58 MB in-repo), and were
   converted to **live NASA FIRMS data** on 2026-07-16: the `/api/firms` proxy merges
   three VIIRS NRT sources (trailing 24 h, 30 min cache, serve-stale-on-failure) and the
-  bundled snapshot was deleted. Requires a free server-side `FIRMS_MAP_KEY`; without it
-  the layer shows a KEY REQUIRED state.
+  bundled snapshot was deleted. Since the MapLibre engine (2026-09) the `local-firms`
+  layer reads the DataGeo PR Supabase table `fire_spots` (NASA FIRMS detections ingested
+  by the DataGeo ETL), so the app itself needs no FIRMS key; the `/api/firms` proxy is no
+  longer on the layer's path.
 - Weather radar is still held out of OSS v1 after QA found the previous overlay did not provide reliable visible value.

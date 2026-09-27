@@ -80,7 +80,7 @@ async function init() {
     loaderStatus.textContent = 'Configurando o mapa...';
 
     const engine = createEngine({
-      container: 'cesiumContainer',
+      container: 'map',
       basemap: 'esri',
       // Só a captura de tela da voz (dev) lê o buffer do canvas.
       preserveDrawingBuffer: import.meta.env.DEV,

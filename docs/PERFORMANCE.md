@@ -1,5 +1,13 @@
 # Performance baseline
 
+> [!IMPORTANT]
+> **These are measurements of the CesiumJS build (August 2026).** The app now
+> runs on MapLibre GL JS (September 2026, `docs/MIGRACAO_MAPLIBRE.md`): no
+> Google 3D tiles, no glTF models, native symbol labels and a different render
+> loop. None of the numbers below have been re-measured on the MapLibre engine;
+> keep them only as the historical baseline of the previous app. The
+> render-governor contract is still gated by `scripts/qa-perf.mjs` (ported).
+
 This page records one hardware-rendered Apple M5 comparison captured on 22
 August 2026 in Chrome 150 at 1440 x 900. It is not a minimum hardware
 specification and should not be used to predict performance on untested systems.
@@ -58,15 +66,15 @@ used the most heap, followed by datacenters. Completed single-layer samples
 generally reached 60 FPS, so activation time and heap separate these cases more
 clearly than steady-state frame rate.
 
-## Aircraft, detection, and Cockpit
+## Aircraft, detection, and Cockpit (Cesium build)
 
 | Scene | Motion / rest |
 | --- | ---: |
 | Idle globe | 60 / 60 FPS |
 | Flights, 2D | 60 / 60 FPS |
-| Flights, 3D proximity | 60 / 60 FPS |
-| Flights, all 3D models | 60 / 60 FPS |
-| Military Flights, all 3D models | 60 / 60 FPS |
+| Flights, 3D proximity (Cesium glTF models; not in the MapLibre build) | 60 / 60 FPS |
+| Flights, all 3D models (Cesium only) | 60 / 60 FPS |
+| Military Flights, all 3D models (Cesium only) | 60 / 60 FPS |
 | Detection at 25% | 39.3 / 41.1 FPS |
 | Detection at 50% | 37.4 / 39.8 FPS |
 | Detection at 100% | 34.4 / 35.5 FPS |

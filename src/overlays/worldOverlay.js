@@ -118,7 +118,6 @@ export const WORLD_OVERLAY_OCCLUDER_SELECTORS = Object.freeze([
   '#pp-toggles',
   '#command-dock',
   '#gev-voice-control',
-  '#cesium-credits',
   // MapLibre map controls: attribution + "Data attribution" (dataCredits.js),
   // navigation and scale. They sit inside the map container, below the host.
   '.maplibregl-ctrl-bottom-right',
@@ -1073,7 +1072,7 @@ function ensureOverlayDom() {
   // `#world-overlay-root`. Detection paints with `mix-blend-mode: screen`,
   // which only reaches the WebGL scene while no ancestor between the surface
   // and the map canvas forms a stacking context (an isolated blending
-  // group). `#cesiumContainer` (the MapLibre container keeps that id) is
+  // group). `#map` (the MapLibre container) is
   // `position:absolute; z-index:auto` and does not; `#world-overlay-root` is `z-index:6` and does — parenting here made
   // the browser silently discard the blend while the CSS string stayed
   // `'screen'`. Paint order is expressed purely by z-index: this surface is

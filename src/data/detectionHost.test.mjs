@@ -221,7 +221,7 @@ function installEnvironment({ width = 800, height = 600, dpr = 2, search = '' } 
   globalThis.window = window;
 
   const container = new MockElement('div');
-  container.id = 'cesiumContainer';
+  container.id = 'map';
   body.appendChild(container);
   const root = new MockElement('div');
   root.id = 'world-overlay-root';

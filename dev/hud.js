@@ -24,7 +24,7 @@ const log = (...a) => {
   logEl.textContent += `${line}\n`;
 };
 
-const engine = createEngine({ container: 'cesiumContainer', basemap: params.get('base') || 'esri', globe: params.get('globe') === '1' });
+const engine = createEngine({ container: 'map', basemap: params.get('base') || 'esri', globe: params.get('globe') === '1' });
 window.__engine = engine;
 window.__dgMap = engine.map;
 await engine.ready;

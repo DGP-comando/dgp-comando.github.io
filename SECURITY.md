@@ -13,7 +13,7 @@ Include repro steps and impact. We'll acknowledge, investigate, and credit you (
 
 ## How secrets are handled
 
-The golden rule: **secret-bearing API keys stay on the server side.** The dev/preview server (Vite middleware in `vite.config.js`) brokers requests that need private credentials, so the browser never receives those long-lived secrets. Google Maps and Cesium ion are the two deliberate client-side exceptions described below.
+The golden rule: **secret-bearing API keys stay on the server side.** The dev/preview server (Vite middleware in `vite.config.js`) brokers requests that need private credentials, so the browser never receives those long-lived secrets. The optional Google Maps key is the one deliberate client-side exception described below. The map itself (MapLibre + keyless Esri/OSM/OpenFreeMap base maps and terrain tiles) needs no key.
 
 | Key | Where it lives | How the browser uses it |
 |-----|----------------|--------------------------|
@@ -21,14 +21,15 @@ The golden rule: **secret-bearing API keys stay on the server side.** The dev/pr
 | `AISSTREAM_API_KEY` | Server only | Server holds the AISStream websocket; browser polls the same-origin `/api/ais-live` cache |
 | OpenSky OAuth (`OPENSKY_CLIENT_ID/SECRET`) | Server only | Server mints + refreshes the token behind `/api/opensky` |
 
-### Two deliberately client-side keys — restrict them
+### One deliberately client-side key — restrict it
 
-These are designed to be used directly in the browser (like a Mapbox public token). They are injected into the client bundle via Vite's `define`, so they **will** be visible in browser devtools. Scope and restrict them rather than trying to hide them:
+The optional Google Maps key is designed to be used directly in the browser (like a Mapbox public token). It is injected into the client bundle via Vite's `define`, so it **will** be visible in browser devtools. Scope and restrict it rather than trying to hide it:
 
-1. **Google Maps API key** — loads the Photorealistic 3D Tiles in the browser. **Restrict it** (HTTP referrer + API restriction to the Map Tiles API) in the Google Cloud Console. An unrestricted key in a public deployment can be abused and billed to you.
-2. **Cesium ion token** (`CESIUM_ION_TOKEN`, optional — only for the Bing world-imagery map stacks) — used as `Cesium.Ion.defaultAccessToken` client-side. Use a public **`assets:read`** token with **URL restrictions** for any hosted deployment.
+- **Google Maps API key** (optional) — free-text geocoding from the browser (location search, voice fly-to/annotations/radio by place name); the dev server also uses it for the Places proxies and the CCTV Street View fallback frame. It no longer draws the map. **Restrict it** (HTTP referrer + API restriction to the Geocoding/Places/Street View Static APIs you actually use) in the Google Cloud Console. An unrestricted key in a public deployment can be abused and billed to you.
 
-> The Vite `define` block in `vite.config.js` controls exactly what reaches the client: only these two keys plus two non-secret CCTV feature flags. Everything else stays server-side.
+The Cesium ion token (`CESIUM_ION_TOKEN`) is gone with the Cesium engine: the Bing/ion map stacks no longer exist.
+
+> The Vite `define` block in `vite.config.js` controls exactly what reaches the client: the Google Maps key plus two non-secret CCTV feature flags (the leftover `CESIUM_ION_TOKEN` define leaves with the Cesium packages). Everything else stays server-side.
 
 Never commit real keys. `.env` is gitignored; only `.env.example` (placeholder names) is tracked. On macOS the launcher reads keys from the Keychain; on other platforms use env vars or a local `.env`.
 

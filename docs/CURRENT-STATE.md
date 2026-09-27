@@ -1,6 +1,50 @@
 # God's Eye View Current State
 
-Updated: August 24, 2026
+Updated: September 26, 2026 (engine swap); the sections after the first two
+notes were last reviewed August 24, 2026.
+
+> **2026-09-26 — troca de motor: CesiumJS → MapLibre GL JS 6.7**
+> (`src/maplibre/`, guia completo em `docs/MIGRACAO_MAPLIBRE.md`).
+>
+> **O que é o app agora.** `src/maplibre/engine.js` substitui o
+> `Cesium.Viewer`: quem recebia `viewer` recebe `engine` (e
+> `window.__godsEyeView.viewer === window.__godsEyeView.engine`). A câmera
+> fala em semântica Cesium (posição lat/lon/alt, heading, pitch −90 = nadir)
+> via `getCameraView()`/`setCameraView()`/`flyToCamera()`, então links, cenas e
+> voz não mudaram de formato. Mapas base sem chave em `src/maplibre/basemaps.js`:
+> **Satélite** (Esri World Imagery + rótulos), **OSM** raster e **OSM vetorial**
+> (OpenFreeMap), com **globo ou 2D** (`gl=0` no link) e **relevo** opcional
+> (tiles Terrarium Mapzen/AWS, `rel=1`). As camadas DataGeo e de contexto são
+> definições do contrato `src/maplibre/kit.js` servidas por
+> `layerHost.js`/`managerAdapter.js`; as camadas vivas maiores seguem em
+> `src/data/*.js` com fontes GeoJSON próprias. O contêiner do mapa é `#map`.
+> `GOOGLE_MAPS_API_KEY` virou opcional (só geocodificação de texto livre,
+> proxies de Places e o quadro de reserva do Street View no CCTV) e
+> `CESIUM_ION_TOKEN` saiu.
+>
+> **O que degradou (3D → 2D).** Sem Google Photorealistic 3D Tiles nem
+> Bing/ion (`photoreal`/`bing-*` no link caem no Satélite). Aeronaves e navios
+> são sempre ícones rotacionados pelo rumo: sem modelos glTF, sem encaixe no
+> solo nem piso da malha. **Cockpit** = câmera de perseguição atrás do alvo
+> (`cockpitChaseMapView`). **Satélites** no ponto subsatélite, órbita projetada
+> no chão. **CCTV** com viewshed no chão (polígono onde o cone toca o solo),
+> monitor no fim do eixo e gizmo de dois marcadores. **Altitude do HUD** acima
+> do nível do mar sem correção de geoide. Anotações no chão, sem drapeado.
+> Créditos: controle de atribuição do MapLibre + "Data attribution"
+> (`#cesium-credits` saiu).
+>
+> **Gates.** `node scripts/check-maplibre-no-cesium.mjs src/main.js` (nada no
+> grafo chega ao `cesium`), `npm test`, `npm run test:track` e
+> `npm run qa:map-source-tray` (portados; `QA_BASE_URL` aponta o servidor).
+> Harnesses de navegador usam `scripts/lib/qaBrowser.mjs`; os que só valiam no
+> Cesium estão em `scripts/APOSENTADOS.md`.
+>
+> **Leitura deste arquivo.** As notas e seções abaixo desta foram escritas
+> para o **app Cesium** anterior. Onde falam de `viewer.scene`, entidades,
+> tiles 3D, piso/datum vertical, `#cesiumContainer`, `#cesium-credits`,
+> modelos glTF ou do cockpit preso ao terreno, descrevem o app anterior e
+> ficam como histórico; o comportamento atual é o da nota acima e dos
+> cabeçalhos dos módulos em `src/`.
 
 > **2026-09-14 — tutorial de entrada substitui o card de missões**
 > (`src/firstRunExperience.js`, `#first-run-launcher`, estilos no fim de

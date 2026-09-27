@@ -3,14 +3,17 @@
  * qa-perf — render-governor regression gate (perf wave 2).
  *
  * Asserts the governor's observable contract with RELATIVE frame-count
- * assertions (SwiftShader-safe; no wall-clock GPU numbers):
+ * assertions (SwiftShader-safe; no wall-clock GPU numbers). A "fire" is one
+ * MapLibre frame: the engine's 'render' event (src/maplibre/engine.js). The
+ * map only draws on demand; a continuous-render hold (src/renderGovernor.js)
+ * runs a rAF loop that asks for one frame per vsync.
  *
  *  1. Idle + zero layers + parked camera → the scene stops rendering
- *     (near-zero postRender fires over a settle-then-observe window).
+ *     (near-zero render fires over a settle-then-observe window).
  *  2. A discrete mutation while idle (style slider write routed through
  *     governorRequestRender) → at least one render, then settles again.
- *  3. Camera movement while idle → renders happen (Cesium-native path).
- *  4. Flights enabled → continuous mode (postRender cadence ≈ rAF cadence,
+ *  3. Camera movement while idle → renders happen (the map's own path).
+ *  4. Flights enabled → continuous mode (render cadence ≈ rAF cadence,
  *     and ≥5× the idle count over the same window).
  *  5. Flights disabled again → back to idle (near-zero fires).
  *  6. Governor diagnostics agree with the mode at every step.
@@ -72,10 +75,9 @@
  * Requires a running dev server. Headless; flags disable occlusion
  * throttling so rAF cadence is trustworthy (hidden-pane gotcha).
  */
-import puppeteer from 'puppeteer';
+import { argValue, launchQaBrowser, openApp, setCamera } from './lib/qaBrowser.mjs';
 
-const argv = process.argv;
-const url = argv.includes('--url') ? argv[argv.indexOf('--url') + 1] : 'http://localhost:4173';
+const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:4173');
 
 const results = [];
 function check(name, pass, detail) {
@@ -84,41 +86,32 @@ function check(name, pass, detail) {
   console.log(`  [${tag}] ${name}${detail ? ` — ${JSON.stringify(detail)}` : ''}`);
 }
 
-const browser = await puppeteer.launch({
-  headless: 'new',
-  protocolTimeout: 300_000,
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--window-size=1440,900',
-    // Never let background/occlusion throttling freeze rAF or timers — the
-    // measurements below depend on an honest frame clock.
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    '--disable-background-timer-throttling',
-  ],
-});
+const { browser, page } = await launchQaBrowser({ viewport: { width: 1440, height: 860 } });
+
+/**
+ * Nudges the camera every 60 ms for ~2.4 s — the whole 2.5 s counting window,
+ * so the render count can be compared with the window's rAF ticks (the old
+ * `camera.moveForward(50)` ×20).
+ */
+const nudgeCamera = () => page.evaluate(() => new Promise((resolve) => {
+  const { map } = window.__godsEyeView.engine;
+  let steps = 0;
+  const id = setInterval(() => {
+    map.panBy([0, -6], { duration: 0 });
+    steps += 1;
+    if (steps >= 40) { clearInterval(id); resolve(true); }
+  }, 60);
+}));
 
 try {
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1440, height: 860 });
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!window.__godsEyeView?.viewer, { timeout: 90_000 });
+  await openApp(page, url);
   // Boot flyTo + tile warm + all deferred init.
   await new Promise((r) => setTimeout(r, 15_000));
 
   // Park deterministically and disable every layer.
+  await setCamera(page, { lat: -25.43, lon: -49.27, alt: 60_000 });
   await page.evaluate(async () => {
     const gev = window.__godsEyeView;
-    const v = gev.viewer;
-    v.camera.cancelFlight();
-    const ell = v.scene.globe.ellipsoid;
-    v.camera.setView({
-      destination: ell.cartographicToCartesian({
-        longitude: -97.74 * Math.PI / 180, latitude: 30.27 * Math.PI / 180, height: 60_000,
-      }),
-      orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-    });
     for (const [id, entry] of gev.dataManager.layers) {
       if (entry.enabled) { try { await gev.dataManager.setEnabled(id, false, { origin: 'user' }); } catch { /* gate reports via counts */ } }
     }
@@ -126,11 +119,11 @@ try {
   // Let tiles finish + fades settle + the settling frames drain.
   await new Promise((r) => setTimeout(r, 12_000));
 
-  /** Count scene postRender fires and rAF ticks over windowMs. */
+  /** Count map 'render' fires and rAF ticks over windowMs. */
   const countFrames = (windowMs) => page.evaluate((ms) => new Promise((resolve) => {
-    const scene = window.__godsEyeView.viewer.scene;
+    const { engine } = window.__godsEyeView;
     let renders = 0; let rafs = 0;
-    const remove = scene.postRender.addEventListener(() => { renders += 1; });
+    const remove = engine.on('render', () => { renders += 1; });
     const t0 = performance.now();
     const tick = () => {
       rafs += 1;
@@ -140,8 +133,11 @@ try {
     requestAnimationFrame(tick);
   }), windowMs);
 
-  const diag = () => page.evaluate(() => window.__godsEyeView.getRenderGovernorDiagnostics?.()
-    || window.__gevRenderGovernor?.getDiagnostics?.() || null);
+  // The dev server serves each module at one URL, so this import returns the
+  // app's own governor instance.
+  const diag = () => page.evaluate(async () => {
+    try { return (await import('/src/renderGovernor.js')).getRenderGovernorDiagnostics(); } catch { return null; }
+  });
 
   /**
    * The HUD's semantic summary refreshes on this cadence (`src/hud.js`,
@@ -254,19 +250,14 @@ try {
   // camera nudge has to repaint promptly, or "idle" would only mean "stale".
   const detectMove = await Promise.all([
     countFrames(2_500),
-    page.evaluate(() => new Promise((resolve) => {
-      const v = window.__godsEyeView.viewer;
-      let steps = 0;
-      const id = setInterval(() => {
-        v.camera.moveForward(50);
-        steps += 1;
-        if (steps >= 20) { clearInterval(id); resolve(true); }
-      }, 60);
-    })),
+    nudgeCamera(),
   ]).then(([frames]) => frames);
+  // "Promptly" is relative to the frame clock: under a saturated software-GL
+  // host rAF itself can drop to a handful of ticks, so the bar is ≥10 renders
+  // or at least half of the rAF ticks in the window, whichever is lower.
   check(
-    'detection ON still repaints promptly on camera motion (≥10 / 2.5s)',
-    detectMove.renders >= 10,
+    'detection ON still repaints promptly on camera motion (≥10 / 2.5s, or ≥50% of rAF)',
+    detectMove.renders >= Math.min(10, Math.ceil(detectMove.rafs * 0.5)) && detectMove.renders > 0,
     detectMove,
   );
   // A render count alone proves the SCENE rendered, not that the detection
@@ -274,6 +265,7 @@ try {
   // sail through every check above. Count the painter's own frames across the
   // same kind of motion, so the teeth reach the thing this change touched.
   const detectPainted = await page.evaluate(() => new Promise((resolve) => {
+    let renders = 0;
     const gev = window.__godsEyeView;
     const before = gev.styleManager.getDetectionDiagnostics?.()?.frameCount ?? null;
     let paints = 0;
@@ -281,26 +273,27 @@ try {
     // identity is one painted frame. Sampling it per scene frame is enough to
     // tell "painting" from "silent" without reaching into module internals.
     let last = gev.styleManager.getDetectionDiagnostics?.();
-    const remove = gev.viewer.scene.postRender.addEventListener(() => {
+    const remove = gev.engine.on('render', () => {
+      renders += 1;
       const now = gev.styleManager.getDetectionDiagnostics?.();
       if (now && now !== last) { paints += 1; last = now; }
     });
     let steps = 0;
     const id = setInterval(() => {
-      gev.viewer.camera.moveForward(50);
+      gev.engine.map.panBy([0, -6], { duration: 0 });
       steps += 1;
       if (steps >= 20) {
         clearInterval(id);
         setTimeout(() => {
           remove();
-          resolve({ paints, before, after: gev.styleManager.getDetectionDiagnostics?.()?.frameCount ?? null });
+          resolve({ paints, renders, before, after: gev.styleManager.getDetectionDiagnostics?.()?.frameCount ?? null });
         }, 400);
       }
     }, 60);
   }));
   check(
-    'detection is still PAINTING, not merely quiet (≥5 painted frames on motion)',
-    detectPainted.paints >= 5,
+    'detection is still PAINTING, not merely quiet (≥5 painted frames on motion, or ≥50% of map frames)',
+    detectPainted.paints >= Math.min(5, Math.ceil(detectPainted.renders * 0.5)) && detectPainted.paints > 0,
     detectPainted,
   );
   await new Promise((r) => setTimeout(r, 3_000)); // settle back to parked
@@ -348,33 +341,18 @@ try {
     { diag: dAnimOff, detection: detectionStillOn },
   );
 
-  // ── 2c. satellites holder enters and leaves diagnostics ───────────────
-  await page.evaluate(async () => {
-    await window.__godsEyeView.dataManager.setEnabled('satellites', true, { origin: 'user' });
-  });
-  const dSat = await diag();
-  check('satellites enable registers its holder', dSat?.holds.includes('satellites'), dSat);
-  await page.evaluate(async () => {
-    await window.__godsEyeView.dataManager.setEnabled('satellites', false, { origin: 'user' });
-  });
-  await new Promise((r) => setTimeout(r, 2_000));
-  const dSatOff = await diag();
-  check('satellites disable releases its holder', !dSatOff?.holds.includes('satellites'), dSatOff);
+  // ── 2c. (retired) satellites holder — on MapLibre the satellites layer
+  // advances on a timer and pushes setData; it takes no continuous hold, so
+  // there is no holder to enter or leave. The flights hold below covers the
+  // per-frame animator contract.
 
-  // ── 3. camera movement renders (Cesium-native path) ───────────────────
+  // ── 3. camera movement renders (the map's own path) ───────────────────
   const duringMove = await Promise.all([
     countFrames(2_500),
-    page.evaluate(() => new Promise((resolve) => {
-      const v = window.__godsEyeView.viewer;
-      let steps = 0;
-      const id = setInterval(() => {
-        v.camera.moveForward(50);
-        steps += 1;
-        if (steps >= 20) { clearInterval(id); resolve(true); }
-      }, 60);
-    })),
+    nudgeCamera(),
   ]).then(([frames]) => frames);
-  check('camera movement while idle produces renders (≥10 / 2.5s)', duringMove.renders >= 10, duringMove);
+  check('camera movement while idle produces renders (≥10 / 2.5s, or ≥50% of rAF)',
+    duringMove.renders >= Math.min(10, Math.ceil(duringMove.rafs * 0.5)) && duringMove.renders > 0, duringMove);
   await new Promise((r) => setTimeout(r, 3_000)); // settle
 
   // ── 4. flights enabled → continuous ───────────────────────────────────

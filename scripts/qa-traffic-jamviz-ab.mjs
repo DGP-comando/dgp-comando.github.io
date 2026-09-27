@@ -18,7 +18,7 @@
  * Exits non-zero on harness failure (missing live mode, zero dots, etc.).
  */
 
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,58 +53,26 @@ const VIEWS = [
 ];
 const MODES = ['none', 'density', 'heatline', 'both'];
 
-const CHROME_EXECUTABLE_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  // Prefer puppeteer's version-pinned Chrome-for-Testing over the system
-  // Chrome: /Applications auto-updates underneath the harnesses, and its
-  // software-GL behavior shifts across majors (system Chrome 150 blew the
-  // tile-gated drain budget under SwiftShader on 2026-07-30 — six
-  // false-negative qa-cctv-v2 runs against a healthy build). A deterministic
-  // pinned browser beats the newest one for regression harnesses.
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-const findChromeExecutable = () =>
-  CHROME_EXECUTABLE_CANDIDATES.find((c) => { try { return fs.existsSync(c); } catch { return false; } }) || null;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** Same pattern as qa-cctv-v2: wait for the 3D tileset to settle for crisp shots. */
+/** Wait for the map to go idle (tiles and sources loaded) for crisp shots. */
 function waitForTilesLoaded(page, timeoutMs) {
-  return page.waitForFunction(
-    () => {
-      const prims = window.__godsEyeView.viewer.scene.primitives;
-      for (let i = 0; i < prims.length; i++) {
-        const p = prims.get(i);
-        if (p && p.constructor && p.constructor.name === 'Cesium3DTileset') {
-          return p.tilesLoaded === true;
-        }
-      }
-      return true;
-    },
-    { timeout: timeoutMs }
-  ).then(() => true).catch(() => false);
+  return page.evaluate((ms) => new Promise((resolve) => {
+    const { map } = window.__godsEyeView.engine;
+    const timer = setTimeout(() => resolve(false), ms);
+    if (map.loaded() && !map.isMoving()) { clearTimeout(timer); resolve(true); return; }
+    map.once('idle', () => { clearTimeout(timer); resolve(true); });
+    map.triggerRepaint();
+  }), timeoutMs);
 }
 
 /** Teleport to a view (cancelling any camera flight first). */
 function setView(page, v) {
   return page.evaluate((view) => {
     const gev = window.__godsEyeView;
-    try { gev.viewer.camera.cancelFlight(); } catch { /* no flight */ }
-    const ell = gev.viewer.scene.globe.ellipsoid;
-    const d2r = Math.PI / 180;
-    gev.viewer.camera.setView({
-      destination: ell.cartographicToCartesian({
-        longitude: view.lon * d2r, latitude: view.lat * d2r, height: view.height,
-      }),
-      orientation: {
-        heading: (view.heading || 0) * d2r,
-        pitch: (view.pitch ?? -90) * d2r,
-        roll: 0,
-      },
-    });
+    gev.engine.cancelFlight();
+    gev.engine.setCameraView({ lon: view.lon, lat: view.lat, alt: view.height, heading: view.heading || 0, pitch: view.pitch ?? -90, roll: 0 });
   }, v);
 }
 
@@ -151,27 +119,17 @@ async function main() {
   }
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    ...(findChromeExecutable() ? { executablePath: findChromeExecutable() } : {}),
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
-      '--disable-dev-shm-usage', '--disable-web-security',
-      '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-      '--window-size=1600,900',
-    ],
-  });
+  const { browser, page: firstPage } = await launchQaBrowser({ viewport: { width: 1600, height: 900 } });
 
   const manifest = [];
   let exitCode = 0;
   try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1600, height: 900 });
+    const page = firstPage;
     console.log('Loading app...');
-    await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(appUrl(APP_URL), { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForFunction(
-      () => window.__godsEyeView?.viewer && window.__godsEyeView?.dataManager,
-      { timeout: 60000 },
+      () => window.__godsEyeView?.engine && window.__godsEyeView?.dataManager,
+      { timeout: 120000 },
     );
     await page.evaluate(() => window.__godsEyeView.dataManager.setEnabled('traffic', true));
     await sleep(1500);

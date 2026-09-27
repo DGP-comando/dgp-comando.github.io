@@ -1463,7 +1463,7 @@ test('vesselDatumHeightM ADDS the undulation N (sign convention: h = N + lift)',
 test('EGM96 N pins the field finding: Rotterdam sea sits ~45 m ABOVE the ellipsoid, Houston ~27 m below', async () => {
   // Confirmed live 2026-07-28: chevrons at ellipsoid height 0 are occluded by
   // the Rotterdam sea mesh (N positive) but visible at Houston (N negative).
-  // These bands also feed scripts/qa-vessel-datum.mjs.
+  // These bands also fed scripts/qa-vessel-datum.mjs (retired with Cesium).
   await ensureGeoidReady();
   const rotterdam = geoidHeight(51.93, 4.05);
   const houston = geoidHeight(29.72, -95.08);

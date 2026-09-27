@@ -235,7 +235,7 @@ function installMockEnvironment({ width, height, dpr }) {
   globalThis.window = window;
 
   const container = new MockElement('div');
-  container.id = 'cesiumContainer';
+  container.id = 'map';
   body.appendChild(container);
 
   // Array-backed so raising a frame allocates nothing: the harness floor has

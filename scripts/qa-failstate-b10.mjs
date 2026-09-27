@@ -31,7 +31,7 @@
  * Exits non-zero if any assertion fails. DOES NOT COMMIT anything.
  */
 
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,29 +61,6 @@ function withDetectDebug(url) {
 }
 const HEADFUL = getFlag('--headful');
 const ARTIFACT_DIR = getOpt('--artifact-dir', null);
-
-const CHROME_EXECUTABLE_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  // Prefer puppeteer's version-pinned Chrome-for-Testing over the system
-  // Chrome: /Applications auto-updates underneath the harnesses, and its
-  // software-GL behavior shifts across majors (system Chrome 150 blew the
-  // tile-gated drain budget under SwiftShader on 2026-07-30 — six
-  // false-negative qa-cctv-v2 runs against a healthy build). A deterministic
-  // pinned browser beats the newest one for regression harnesses.
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-
-function findChromeExecutable() {
-  for (const candidate of CHROME_EXECUTABLE_CANDIDATES) {
-    try {
-      if (fs.existsSync(candidate)) return candidate;
-    } catch { /* ignore */ }
-  }
-  return null;
-}
 
 const results = [];
 function record(name, ok, detail) {
@@ -160,22 +137,7 @@ async function main() {
     process.exit(2);
   }
 
-  const chromeExecutable = findChromeExecutable();
-  const browser = await puppeteer.launch({
-    headless: HEADFUL ? false : 'new',
-    ...(chromeExecutable ? { executablePath: chromeExecutable } : {}),
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--disable-dev-shm-usage',
-      '--disable-web-security',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--window-size=1280,800',
-    ],
-  });
+  const { browser, page: firstPage } = await launchQaBrowser({ headful: HEADFUL, viewport: { width: 1280, height: 800 } });
 
   let exitCode = 0;
 
@@ -186,8 +148,7 @@ async function main() {
   const mode = { celestrak: 'good' };
 
   try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
+    const page = firstPage;
 
     await page.setRequestInterception(true);
     page.on('request', (req) => {
@@ -215,15 +176,22 @@ async function main() {
     });
 
     console.log('Loading app...');
-    await page.goto(withDetectDebug(APP_URL), { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(appUrl(withDetectDebug(APP_URL)), { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForFunction(
       () => window.__godsEyeView
-        && window.__godsEyeView.viewer
+        && window.__godsEyeView.engine
         && window.__godsEyeView.dataManager
         && window.__godsEyeView.styleManager,
       { timeout: 60000 },
     );
     await sleep(1500);
+
+    // The global status line is shared with first loads (e.g. the default
+    // Municípios layer); start the refresh checks from a quiet line.
+    await page.waitForFunction(
+      () => document.getElementById('global-loading-status')?.hidden === true,
+      { timeout: 60_000 },
+    ).catch(() => {});
 
     // ── (0) Manager-owned periodic refresh → shared work/failure/recovery ──
     console.log('\n(0) Universal periodic refresh feedback...');
@@ -358,10 +326,11 @@ async function main() {
       );
       if (!hasError) exitCode = 1;
     }
-    const aisControl = await readLayerControl(page, 'ais-live-vessels', 'UNAVAILABLE');
+    // Panel labels are pt-BR (FEED_STATE_LABELS in src/data/manager.js).
+    const aisControl = await readLayerControl(page, 'ais-live-vessels', 'INDISPONÍVEL');
     const aisChipHonest = aisControl.feedState === 'unavailable'
-      && aisControl.ariaLabel === 'Live AIS Vessels: UNAVAILABLE';
-    const aisMetaHonest = /^UNAVAILABLE · AISStream · /i.test(aisControl.meta)
+      && aisControl.ariaLabel === 'Live AIS Vessels: INDISPONÍVEL';
+    const aisMetaHonest = /^INDISPONÍVEL · AISStream · /i.test(aisControl.meta)
       && aisStats.error
       && aisControl.meta.includes(aisStats.error);
     record(
@@ -405,12 +374,12 @@ async function main() {
         await new Promise((r) => setTimeout(r, 800));
         return dm.layers.get('satellites').module.getStats();
       });
-      const partialControl = await readLayerControl(page, 'satellites', 'DEGRADED');
+      const partialControl = await readLayerControl(page, 'satellites', 'DEGRADADA');
       const partialChipHonest = partialStats.count > 0
         && /1 CelesTrak group unavailable/i.test(partialStats.error || '')
         && partialControl.feedState === 'degraded'
-        && partialControl.ariaLabel === 'Satellites: DEGRADED';
-      const partialMetaHonest = /^DEGRADED · CelesTrak · /i.test(partialControl.meta)
+        && partialControl.ariaLabel === 'Satellites: DEGRADADA';
+      const partialMetaHonest = /^DEGRADADA · CelesTrak · /i.test(partialControl.meta)
         && /1 CelesTrak group unavailable/i.test(partialControl.meta);
       record(
         'Satellites: partial outage renders a DEGRADED chip',
@@ -441,10 +410,10 @@ async function main() {
       const s = outageStats.stats;
       const notWiped = s.count > 0; // catalog preserved, not blanked to 0
       const errorSet = typeof s.error === 'string' && s.error.length > 0;
-      const outageControl = await readLayerControl(page, 'satellites', 'UNAVAILABLE');
+      const outageControl = await readLayerControl(page, 'satellites', 'INDISPONÍVEL');
       const outageChipHonest = outageControl.feedState === 'unavailable'
-        && outageControl.ariaLabel === 'Satellites: UNAVAILABLE';
-      const outageMetaHonest = /^UNAVAILABLE · CelesTrak · /i.test(outageControl.meta)
+        && outageControl.ariaLabel === 'Satellites: INDISPONÍVEL';
+      const outageMetaHonest = /^INDISPONÍVEL · CelesTrak · /i.test(outageControl.meta)
         && outageControl.meta.includes(s.error || '');
       record(
         'Satellites: catalog NOT wiped to 0 on total outage',
@@ -483,19 +452,15 @@ async function main() {
       gev.styleManager.setDetection({ enabled: true, mode: 'panoptic' });
       const canvas = document.getElementById('world-overlay-canvas');
       if (!canvas) return { present: false };
-      const viewer = gev.viewer;
-      const tileset = gev.tileset;
-      const priorDefaultLoop = viewer.useDefaultRenderLoop;
-      const priorTilesetShow = tileset?.show;
+      const { engine } = gev;
       let nonEmpty = 0;
       let solid = 0;
       let sampled = 0;
-      viewer.useDefaultRenderLoop = false;
-      if (tileset) tileset.show = false;
       try {
         const deadline = performance.now() + 5000;
         while (performance.now() < deadline && solid <= 20) {
-          viewer.render();
+          // One map frame; the overlay host paints on every engine 'render'.
+          engine.requestRender();
           await new Promise((resolve) => setTimeout(resolve, 50));
           const w = canvas.width, h = canvas.height;
           const off = document.createElement('canvas');
@@ -524,9 +489,7 @@ async function main() {
           }
         }
       } finally {
-        if (tileset) tileset.show = priorTilesetShow;
-        viewer.useDefaultRenderLoop = priorDefaultLoop;
-        viewer.scene.requestRender();
+        engine.requestRender();
       }
       const detState = gev.styleManager.getDetectionState?.() || null;
       return { present: true, nonEmpty, solid, sampled, mode: detState?.detectionMode ?? null };

@@ -10,59 +10,30 @@ This guide covers the hardened annotation and tracking behavior. Record a voice
 note + screenshots as you go; each scenario
 lists what **✅ pass** looks like and (where it applies) the **❌ old bug** it replaces.
 
-## Focus/horizon moving evidence
+## Engine and automated harnesses
 
-With the Vite development server already running on port 4173, capture all four
-focus/recession scenarios with a deterministic virtual frame clock:
-
-```sh
-node scripts/qa-focus-evidence.mjs --url http://localhost:4173 \
-  --screenshots-dir qa-shots/focus-evidence \
-  --json qa-shots/focus-evidence/report.json
-```
-
-For a quick operator loop, `--smoke` captures only S1 in six frames. For visual
-sign-off, add `--headful`; this removes the SwiftShader launch flags and uses
-the machine's real GPU. The harness brings its page to the foreground at the
-start of every scenario so a headful Chromium run keeps streaming tiles.
-
-Google 3D remains the default basemap. If its tile stream is the bottleneck
-rather than the behavior under test, select an existing map stack explicitly:
+The app runs on **MapLibre GL JS** (see `docs/MIGRACAO_MAPLIBRE.md`). The
+headless harnesses drive the dev server through `scripts/lib/qaBrowser.mjs`:
+the map engine is `window.__godsEyeView.engine` (camera in degrees/metres via
+`getCameraView()` / `setCameraView()`, the MapLibre map at `engine.map`), and
+every URL gets `?semlogin&welcome=0` (skip the DataGeo login on the dev server
+and the first-run tutorial). Point them at any dev server:
 
 ```sh
---basemap bing-aerial
---basemap osm
+QA_BASE_URL=http://localhost:4400 npm run qa:map-source-tray
+QA_BASE_URL=http://localhost:4400 npm run test:track
+node scripts/qa-estradas.mjs --url http://localhost:4400
 ```
 
-Accepted values are `photoreal`, `bing-aerial`, `bing-labels`, and `osm`; Bing
-stacks still require the app's usual Cesium ion token.
-
-Tune both systems without editing source by adding, for example:
-
-```sh
---params '{"focus":{"dimFloor":0.35,"nearerBehavior":"partial"},"horizon":{"scaleFloor":0.5,"alphaFloor":0.4}}'
-```
-
-The script never starts the server. During scenarios it pauses Cesium's default
-render loop, advances focus time explicitly, and renders each frame before the
-screenshot, so computed alpha/scale sequences repeat for identical parameters.
-Headless Chromium still forces SwiftShader, so its pixels are relative CI/A-B
-evidence only; headful real-GPU output is the sign-off surface. Screenshots use
-scenario/frame names and the JSON report records effective tuning plus
-per-contact alpha, scale, and screen data. Before each scenario's first capture,
-the harness gives the active Google photoreal tileset up to 45 seconds to reach
-Cesium's `tilesLoaded`/`allTilesLoaded` condition. Every frame records
-`tilesSettled: true|false` and whether that gate applied; a timeout is recorded
-as false, never promoted to a pass. Non-photoreal stacks record the gate as
-settled and not applicable because no Google 3D tileset is active.
-
-> [!IMPORTANT]
-> Do not use a screenshot for visual judgment unless its report frame records
-> `tilesSettled: true`.
+Headless runs use SwiftShader, so pixels are relative evidence only; add
+`--headful` where a harness supports it for a real-GPU check. The harnesses
+that only made sense on Cesium (3D floor hold, vertical datum, focus evidence
+driven by Cesium's frame clock, L9 matrix…) were retired — see
+`scripts/APOSENTADOS.md`.
 
 ## Setup
 
-- **URL:** http://localhost:4173 — auto-flies to Austin on load. Give photoreal tiles ~10s.
+- **URL:** http://localhost:4173 (add `?semlogin` on the dev server to skip the DataGeo login) — opens on the Paraná overview. Give the base-map tiles a few seconds.
 - **Voice (the real feature):** click **GEV MIC** (bottom of screen) → wait for **LISTENING** →
   just talk. It marks the map *as it talks*, without announcing that it's drawing. Click
   **STOP** when done. (Needs `OPENAI_API_KEY`; `dev-fresh.sh` injects it from Keychain.)
@@ -179,8 +150,8 @@ cancellation, hardened Overpass + route proxies. Not much to see by hand (see §
 
 **3c · Draping & persistence**
 1. After `demo()`, orbit the camera around the Presidio outline.
-- ✅ The footprint **drapes onto** the 3D ground/buildings and conforms; callouts/rings/arrows
-  are the hand-drawn SVG style and stay anchored to their real spot.
+- ✅ The footprint lies on the map (2D; the Cesium build draped it onto 3D buildings) and
+  callouts/rings/arrows are the hand-drawn SVG style and stay anchored to their real spot.
 
 **3d · Large boundary, no freeze (→ R11)**
 1. Console:
@@ -205,14 +176,14 @@ While recording, call out anything in these areas — this is the feedback I mos
 - **Tracking feel:** does follow motion feel smooth/natural, or floaty/laggy/overshooting?
 - **Framing:** is the initial tracked view a good "hero" shot, or too close/far?
 - **Annotations:** do outlines land on the *right* thing? Are labels readable / well-placed /
-  not overlapping? Does the hand-drawn style read well over photoreal tiles?
+  not overlapping? Does the hand-drawn style read well over the satellite and OSM base maps?
 - **Voice:** does it mark things *as it talks* (not after), and confirm only what actually
   happened? Any command it misunderstood?
 - **Anything that looks wrong, janky, or surprising** — screenshot it; that's the gold.
 
 ## If something looks off
 
-- **Grey globe / slow tiles:** wait a few seconds after a camera flight; photoreal streams in.
+- **Grey globe / slow tiles:** wait a few seconds after a camera flight; the base-map tiles stream in.
 - **A voice mark didn't land:** the place may not geocode — try a more specific name
   (e.g. "Palace of Fine Arts, San Francisco").
 - **No planes:** OpenSky data may be momentarily sparse; scroll out or wait a poll cycle.

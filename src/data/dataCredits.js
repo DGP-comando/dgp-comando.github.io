@@ -10,13 +10,13 @@
  *
  * MOTOR: MapLibre. `registerDataCredits(engine)` adds ONE map control next to
  * MapLibre's AttributionControl (bottom-right, inside the map container, so it
- * stays visible in the clean view like the Cesium credit line did): a "Data
- * attribution" link that opens a lightbox with these credits plus the base
- * map/terrain attributions of the current style. The lightbox reuses the
- * `.cesium-credit-lightbox` sizing rules of style.css and carries its own base
- * look (`.dg-credit-lightbox*`, injected once). Credits never go on the map's
- * own attribution line, so it stays short. Always-present is intentional and reversible: the lightbox is
- * the app's canonical attribution surface and DATA_SOURCES.md is the
+ * stays visible in the clean view): a "Data attribution" link that opens a
+ * lightbox with these credits plus the base map/terrain attributions of the
+ * current style. The lightbox takes its sizing/scrolling rules from style.css
+ * (`.dg-credit-lightbox*`) and its base look from the CSS injected once here.
+ * Credits never go on the map's own attribution line, so it stays short.
+ * Always-present is intentional and reversible: the lightbox is the app's
+ * canonical attribution surface and DATA_SOURCES.md is the
  * machine-readable index. Strings are copied verbatim from DATA_SOURCES.md — if
  * you add a data source, add it there AND here.
  */
@@ -385,9 +385,9 @@ export function openDataCreditsLightbox(map, opener = null) {
   closeLightbox();
   ensureCreditsStyle(doc);
   const overlay = doc.createElement('div');
-  overlay.className = 'cesium-credit-lightbox-overlay dg-credit-lightbox-overlay';
+  overlay.className = 'dg-credit-lightbox-overlay';
   const box = doc.createElement('div');
-  box.className = 'cesium-credit-lightbox dg-credit-lightbox';
+  box.className = 'dg-credit-lightbox';
   box.setAttribute('role', 'dialog');
   box.setAttribute('aria-modal', 'true');
   box.setAttribute('aria-labelledby', 'dg-credit-lightbox-title');

@@ -3,6 +3,68 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-09-26 — troca de motor: CesiumJS → MapLibre GL JS
+
+### Changed
+
+- O mapa agora roda no **MapLibre GL JS 6.7** em vez do CesiumJS. O motor
+  novo (`src/maplibre/engine.js`) fala a mesma língua de câmera do app antigo
+  (posição, heading, pitch −90 = nadir), então **links compartilhados antigos
+  continuam abrindo** e cenas, voz e HUD seguem com as mesmas APIs. Guia da
+  troca, regras e o contrato de camadas em `docs/MIGRACAO_MAPLIBRE.md`.
+
+- **Mapas base sem chave**: Satélite (Esri World Imagery, com rótulos que
+  ligam e desligam), OSM e OSM vetorial (OpenFreeMap), em **globo ou mapa 2D**,
+  com **relevo 3D opcional**. Os três ficam na seção MAPA BASE da bandeja
+  ESTILOS VISUAIS, junto com os chips Rótulos, Globo/2D e Relevo 3D. Links com `map=photoreal`, `bing-aerial`
+  ou `bing-labels` abrem no Satélite.
+
+- O app **não precisa mais de `GOOGLE_MAPS_API_KEY` para o mapa**: a chave
+  do Google, opcional, só serve à geocodificação de texto livre (busca e voz),
+  aos proxies de Places e ao quadro de reserva do Street View no CCTV. O
+  `CESIUM_ION_TOKEN` saiu do `.env.example` e do `dev-fresh.sh`, que agora sobe
+  sem a chave do Google.
+
+- A atribuição do mapa virou o controle de atribuição do MapLibre (canto
+  inferior direito do mapa), com o link **Data attribution** ao lado; os dois
+  continuam visíveis na visão limpa e na gravação. O contêiner do mapa passou a
+  se chamar `#map`.
+
+### O que continua igual
+
+- Painel de camadas, ficha municipal, busca, tutorial, HUD, estilos de tela
+  (CRT, NVG, FLIR, Noir, Snow, bloom, sharpen), detecção, contatos, cenas,
+  voz, anotações e links: mesma interface e mesmos atalhos.
+- Todas as camadas DataGeo e de contexto, com as mesmas fontes, cores,
+  legendas, chips, tooltips e tetos de escala (agora `minzoom`), e o mesmo
+  token no link.
+
+### O que mudou (degradações do 3D para o 2D)
+
+- Sem Google Photorealistic 3D Tiles e sem as camadas Bing/ion.
+- **Cockpit** virou uma **câmera de perseguição** atrás do alvo, no rumo dele
+  (sem cabine presa ao terreno 3D).
+- Aeronaves e navios são sempre **ícones** rotacionados pelo rumo: os modelos
+  3D glTF e o encaixe no solo saíram (as opções seguem aceitas no link, sem
+  efeito).
+- **Satélites no ponto subsatélite**, com a órbita projetada no chão; a
+  altitude real fica no tooltip e no cartão.
+- **CCTV com viewshed no chão**: a cobertura é o polígono onde o cone toca o
+  solo, o quadro ao vivo fica num cartão no fim do eixo e a calibração usa dois
+  marcadores arrastáveis (base e mira).
+- A **altitude do HUD** é a altura acima do nível do mar dada pelo MapLibre,
+  sem a correção de geoide que o Cesium fazia.
+- Anotações de voz ficam no chão (sem drapeado sobre prédios 3D).
+
+### Removed
+
+- Harnesses de QA que só verificavam o Cesium (piso 3D / floor-hold, datum
+  vertical, prewarm de alvo, matriz L9, placas do cockpit 3D, modelos 3D…),
+  com a lista e os motivos em `scripts/APOSENTADOS.md`; os demais foram
+  portados para o motor (`scripts/lib/qaBrowser.mjs`), inclusive
+  `npm run test:track` e `npm run qa:map-source-tray`.
+- `tools/cesium-render.*` (render CesiumJS + Google 3D headless).
+
 ## [Unreleased] — 2026-09-11
 
 ### Changed

@@ -44,9 +44,12 @@ read_dotenv_value() {
   node scripts/read-dotenv-value.mjs "${variable_name}"
 }
 
-# Vite loads .env for browser build-time configuration, but this launcher needs
-# the Maps key before Vite starts. Preserve a shell-provided value; otherwise
-# read the project-local .env without executing it as shell code.
+# Vite loads .env for browser build-time configuration, but this launcher
+# reports the Maps key before Vite starts. Preserve a shell-provided value;
+# otherwise read the project-local .env without executing it as shell code.
+# The map itself needs NO key (MapLibre + Esri/OSM base maps); the Google key
+# only powers free-text geocoding (location search, voice fly-to/annotations),
+# the Places proxy endpoints and the CCTV Street View fallback frame.
 GOOGLE_MAPS_API_KEY_ENV="${GOOGLE_MAPS_API_KEY:-}"
 GOOGLE_MAPS_API_KEY_ENV_SOURCE="env"
 if [[ -z "${GOOGLE_MAPS_API_KEY_ENV}" && -f ".env" ]]; then
@@ -74,9 +77,11 @@ else
   GOOGLE_MAPS_API_KEY=""
 fi
 if [[ -z "${GOOGLE_MAPS_API_KEY}" ]]; then
-  echo "error: Google Maps API key missing."
-  echo "set GOOGLE_MAPS_API_KEY in env, or add Keychain item: service=google-maps-api account=api-key"
-  exit 1
+  GOOGLE_MAPS_API_KEY_SOURCE="not set"
+  echo "note: GOOGLE_MAPS_API_KEY not set — the map works without it; free-text"
+  echo "      geocoding (search box, voice fly-to), Places and the CCTV Street View"
+  echo "      fallback stay off. Set it in env/.env or add Keychain item:"
+  echo "      service=google-maps-api account=api-key"
 fi
 
 read_keychain_secret() {
@@ -198,13 +203,11 @@ resolve_opensky_credentials
 #   security add-generic-password -U -s "openai-api" -a "api-key" -w
 OPENAI_API_KEY="${OPENAI_API_KEY:-$(read_dotenv_value "OPENAI_API_KEY")}"
 AISSTREAM_API_KEY="${AISSTREAM_API_KEY:-$(read_dotenv_value "AISSTREAM_API_KEY")}"
-CESIUM_ION_TOKEN="${CESIUM_ION_TOKEN:-$(read_dotenv_value "CESIUM_ION_TOKEN")}"
 LL2_API_TOKEN="${LL2_API_TOKEN:-$(read_dotenv_value "LL2_API_TOKEN")}"
 TOMTOM_API_KEY="${TOMTOM_API_KEY:-$(read_dotenv_value "TOMTOM_API_KEY")}"
 FIRMS_MAP_KEY="${FIRMS_MAP_KEY:-$(read_dotenv_value "FIRMS_MAP_KEY")}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-$(read_keychain_secret "openai-api" "api-key")}"
 AISSTREAM_API_KEY="${AISSTREAM_API_KEY:-$(read_keychain_secret "aisstream-api" "api-key")}"
-CESIUM_ION_TOKEN="${CESIUM_ION_TOKEN:-$(read_keychain_secret "cesium-ion" "token")}"
 TOMTOM_API_KEY="${TOMTOM_API_KEY:-$(read_keychain_secret "tomtom-api" "api-key")}"
 FIRMS_MAP_KEY="${FIRMS_MAP_KEY:-$(read_keychain_secret "firms-map" "map-key")}"
 
@@ -312,7 +315,6 @@ case "${OPENSKY_AUTH_MODE}" in
 esac
 [[ -n "${OPENAI_API_KEY}" ]] && echo "OpenAI key (voice + HUD summary): configured" || echo "OpenAI key (voice + HUD summary): not set — GEV MIC disabled"
 [[ -n "${AISSTREAM_API_KEY}" ]] && echo "AISStream key (live vessels): configured" || echo "AISStream key (live vessels): not set — ships layer empty"
-[[ -n "${CESIUM_ION_TOKEN}" ]] && echo "Cesium ion token (Bing map stacks): configured" || echo "Cesium ion token (Bing map stacks): not set — Google 3D/OSM only"
 [[ -n "${TOMTOM_API_KEY}" ]] && echo "TomTom key (live traffic flow): configured" || echo "TomTom key (live traffic flow): not set — simulated traffic"
 [[ -n "${FIRMS_MAP_KEY}" ]] && echo "NASA FIRMS key (live fires): configured" || echo "NASA FIRMS key (live fires): not set — fires layer requires a key"
 [[ -n "${LL2_API_TOKEN}" ]] && echo "Launch Library 2 token: configured" || echo "Launch Library 2 token: not set — using public access"
@@ -337,7 +339,7 @@ put_env_if_set() {
   fi
 }
 
-put_env GOOGLE_MAPS_API_KEY "${GOOGLE_MAPS_API_KEY}"
+put_env_if_set GOOGLE_MAPS_API_KEY "${GOOGLE_MAPS_API_KEY}"
 put_env CCTV_AUSTIN_MAX_SOURCES "${CCTV_AUSTIN_MAX_SOURCES}"
 # Empty is the documented Caltrans kill switch, so this one is passed as-is.
 put_env CCTV_CALTRANS_DISTRICTS "${CCTV_CALTRANS_DISTRICTS}"
@@ -354,7 +356,6 @@ put_env_if_set OPENSKY_USERNAME "${OPENSKY_USERNAME}"
 put_env_if_set OPENSKY_PASSWORD "${OPENSKY_PASSWORD}"
 put_env_if_set OPENAI_API_KEY "${OPENAI_API_KEY}"
 put_env_if_set AISSTREAM_API_KEY "${AISSTREAM_API_KEY}"
-put_env_if_set CESIUM_ION_TOKEN "${CESIUM_ION_TOKEN}"
 put_env_if_set TOMTOM_API_KEY "${TOMTOM_API_KEY}"
 put_env_if_set FIRMS_MAP_KEY "${FIRMS_MAP_KEY}"
 put_env_if_set LL2_API_TOKEN "${LL2_API_TOKEN}"
