@@ -167,8 +167,8 @@ test('every one of the 399 municípios is reachable by its own full name', () =>
 });
 
 test('ui.js resolves the município BEFORE the geocoder, and opens the ficha after the flight', () => {
-  // ui.js cannot be imported under node (Cesium's `mgrs` dependency), so the
-  // wiring is pinned against its source. What must hold: the local table is
+  // ui.js cannot be imported under node (it pulls the whole browser app), so
+  // the wiring is pinned against its source. What must hold: the local table is
   // consulted first, the camera and the ficha move together, and the ficha is
   // opened with the IBGE code — the identity a geocode result never has.
   const handler = ui.slice(
@@ -183,9 +183,9 @@ test('ui.js resolves the município BEFORE the geocoder, and opens the ficha aft
   assert.ok(start > 0, '_flyToMunicipioResult is missing');
   const body = ui.slice(start, ui.indexOf('\n  _resetLocationSearchInput()', start));
   assert.match(body, /flyToMunicipio\(this\.viewer, \{/, 'the camera is framed on the município');
-  assert.match(body, /getMunicipioFocus\?\.\(match\.code\)/,
+  assert.match(body, /this\._municipioBboxes\?\.get\(String\(match\.code\)\)[\s\S]*?bbox: focus\?\.bbox/,
     'and framed on the real divisa when the GeoJSON has loaded');
-  assert.match(body, /openMunicipioFicha\?\.\(\{ ibge: match\.code/,
+  assert.match(body, /openMunicipioFicha\(match\.code, match\.name\)/,
     'the ficha opens on the IBGE code — that is the whole reason not to geocode');
   assert.match(body, /this\._searchedLocationLabel = `\$\{match\.name\} \(PR\)`;[\s\S]{0,160}?this\._setActiveLocation\(null\);/,
     'the LOCATION readout is written after the flight, like every other destination');

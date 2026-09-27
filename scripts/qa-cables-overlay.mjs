@@ -1,238 +1,158 @@
 #!/usr/bin/env node
 /**
- * qa-cables-overlay — submarine-cable label path measurement + contract gate.
+ * qa-cables-overlay — submarine-cable layer measurement + contract gate on the
+ * MapLibre engine (`telegeography-submarine-cables`,
+ * src/maplibre/layers/contextoGev.js).
  *
- * Two jobs:
- *  1. MEASURE (both builds, `--legacy` on the pre-migration build): with the
- *     cables layer ON at a fixed mid-Atlantic camera, capture
- *       a. per-frame `scene.render` cost over a ~10 s driven-orbit window
- *          (mean / p50 / p95 / max — relative numbers, SwiftShader surface),
- *       b. toggle-ON → first-labels-visible latency,
- *       c. entity / native-label / host-entry counts,
- *       d. parked-idle postRender fires over 5 s (render-governor honesty).
- *  2. GATE (unified build only): assert the migration contract —
- *       zero native `LabelGraphics` on cable reference entities, host entries
- *       present for the source, idle stays near-zero, and a clean OFF→ON cycle
- *       (no orphan host entries after disable).
+ * The Cesium build drew the cable reference labels in the shared world-overlay
+ * canvas; on MapLibre they are native `symbol` layers with collision
+ * (`dg-cable-refs-label`) over the `dg-cables-line` lines. With the layer ON at
+ * a fixed mid-Atlantic camera this:
+ *  1. MEASURES
+ *     a. toggle-ON → first-labels-rendered latency,
+ *     b. rendered line / reference-point / label feature counts,
+ *     c. map frame cadence over a ~10 s driven orbit (frames and mean gap
+ *        between 'render' events — relative numbers, SwiftShader surface),
+ *     d. parked-idle 'render' fires over 5 s (render-governor honesty).
+ *  2. GATES
+ *     - labels render after enable, lines and labels are present,
+ *     - a parked camera stays near-idle with cables ON (≤6 fires / 5 s),
+ *     - a clean OFF→ON cycle: nothing of the layer renders while OFF, labels
+ *       come back after ON.
  *
- * Usage: node scripts/qa-cables-overlay.mjs [--url http://localhost:4214] [--legacy]
- * Requires a running dev server. Headless; rAF throttling disabled so the
- * frame clock is honest (hidden-pane gotcha).
+ * `--control` never enables the layer and only measures the empty-scene orbit.
+ *
+ * Usage: node scripts/qa-cables-overlay.mjs [--url http://localhost:4400] [--control]
+ * Requires a running dev server.
  */
-import puppeteer from 'puppeteer';
+import {
+  DEFAULT_APP_URL, argValue, hasFlag, launchQaBrowser, openApp, setCamera, sleep, waitMapIdle,
+} from './lib/qaBrowser.mjs';
 
-const argv = process.argv;
-const url = argv.includes('--url') ? argv[argv.indexOf('--url') + 1] : 'http://localhost:4214';
-const legacy = argv.includes('--legacy');
-// --control: never enable the layer; measure the empty-scene orbit cost so the
-// cables layer's share of frame time is attributable.
-const control = argv.includes('--control');
+const url = argValue('--url', DEFAULT_APP_URL);
+const control = hasFlag('--control');
 const LAYER_ID = 'telegeography-submarine-cables';
+const LAYERS = ['dg-cables-line', 'dg-cable-refs-pt', 'dg-cable-refs-label'];
 
 const results = [];
 function check(name, pass, detail) {
   results.push({ name, pass });
-  const tag = pass ? 'PASS' : 'FAIL';
-  console.log(`  [${tag}] ${name}${detail !== undefined ? ` — ${JSON.stringify(detail)}` : ''}`);
+  console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${name}${detail !== undefined ? ` — ${JSON.stringify(detail)}` : ''}`);
 }
 function report(name, detail) {
   console.log(`  [MEAS] ${name} — ${JSON.stringify(detail)}`);
 }
 
-const browser = await puppeteer.launch({
-  headless: 'new',
-  protocolTimeout: 300_000,
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--window-size=1440,900',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    '--disable-background-timer-throttling',
-  ],
-});
+const renderedCounts = (page) => page.evaluate((ids) => {
+  const { map } = window.__godsEyeView.engine;
+  const out = {};
+  for (const id of ids) out[id] = map.getLayer(id) ? map.queryRenderedFeatures({ layers: [id] }).length : -1;
+  return out;
+}, LAYERS);
+
+const { browser, page } = await launchQaBrowser({ viewport: { width: 1440, height: 860 } });
 
 try {
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1440, height: 860 });
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!window.__godsEyeView?.viewer, { timeout: 90_000 });
-  await new Promise((r) => setTimeout(r, 12_000)); // boot flyTo + deferred init
+  await openApp(page, url);
+  await sleep(4_000); // boot flight + deferred init
 
   // Park mid-Atlantic (many cables + both coasts' landings in range) and
   // disable every layer so the cables layer is measured in isolation.
+  await setCamera(page, { lon: -40, lat: 35, alt: 4_500_000 });
   await page.evaluate(async () => {
     const gev = window.__godsEyeView;
-    const v = gev.viewer;
-    v.camera.cancelFlight();
-    const ell = v.scene.globe.ellipsoid;
-    v.camera.setView({
-      destination: ell.cartographicToCartesian({
-        longitude: -40 * Math.PI / 180, latitude: 35 * Math.PI / 180, height: 4_500_000,
-      }),
-      orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-    });
     for (const [id, entry] of gev.dataManager.layers) {
       if (entry.enabled) { try { await gev.dataManager.setEnabled(id, false, { origin: 'user' }); } catch { /* measured via counts */ } }
     }
   });
-  await new Promise((r) => setTimeout(r, 6_000)); // tiles + fades settle
+  await waitMapIdle(page);
+  await sleep(2_000);
 
-  // ── b. toggle-ON → labels visible ─────────────────────────────────────
+  // ── a. toggle-ON → labels rendered ────────────────────────────────────
   if (!control) {
-    const labelLatency = await page.evaluate(async (layerId, isLegacy) => {
+    const labelLatency = await page.evaluate(async (layerId) => {
       const gev = window.__godsEyeView;
+      const { map } = gev.engine;
       const t0 = performance.now();
       await gev.dataManager.setEnabled(layerId, true, { origin: 'user' });
-      const deadline = t0 + 60_000;
-      const labelsUp = () => {
-        if (isLegacy) {
-          const stats = gev.dataManager.layers.get(layerId)?.module?.getStats?.() || {};
-          return (stats.referenceLabelCount || 0) > 0;
+      while (performance.now() - t0 < 60_000) {
+        if (map.getLayer('dg-cable-refs-label') && map.queryRenderedFeatures({ layers: ['dg-cable-refs-label'] }).length > 0) {
+          return { ms: Math.round(performance.now() - t0), timedOut: false };
         }
-        const diag = window.__gevWorldOverlay?.getDiagnostics?.() || {};
-        return (diag.paintedBySource?.[layerId] || 0) > 0;
-      };
-      while (performance.now() < deadline) {
-        if (labelsUp()) return { ms: Math.round(performance.now() - t0), timedOut: false };
-        gev.viewer.scene.requestRender?.();
+        gev.engine.requestRender();
         await new Promise((r) => setTimeout(r, 100));
       }
       return { ms: 60_000, timedOut: true };
-    }, LAYER_ID, legacy);
-    report('toggle-ON -> labels visible (ms)', labelLatency);
+    }, LAYER_ID);
+    report('toggle-ON -> labels rendered (ms)', labelLatency);
     check('labels became visible after enable', labelLatency.timedOut === false, labelLatency);
-    await new Promise((r) => setTimeout(r, 3_000)); // let load/labels settle
+    await waitMapIdle(page);
+    await sleep(1_000);
   }
 
-  // ── c. entity / label / host counts ───────────────────────────────────
-  const counts = await page.evaluate((layerId) => {
-    const gev = window.__godsEyeView;
-    const v = gev.viewer;
-    const out = {
-      dataSources: {}, nativeLabels: 0, dynamicPositionEntities: 0,
-      referenceEntities: 0, hostEntries: 0, hostPainted: 0,
-    };
-    for (let i = 0; i < v.dataSources.length; i++) {
-      const ds = v.dataSources.get(i);
-      if (!/TeleGeography/.test(ds.name || '')) continue;
-      const list = ds.entities.values;
-      out.dataSources[ds.name] = list.length;
-      for (const e of list) {
-        if (e.label !== undefined) out.nativeLabels++;
-        if (e.position && e.position.isConstant === false) out.dynamicPositionEntities++;
-        if (e.polyline?.positions && e.polyline.positions.isConstant === false) {
-          out.dynamicPositionEntities++;
-        }
-      }
-      if (/References/.test(ds.name)) out.referenceEntities = list.length;
-    }
-    const diag = window.__gevWorldOverlay?.getDiagnostics?.() || {};
-    out.hostEntries = diag.entriesBySource?.[layerId] || 0;
-    out.hostPainted = diag.paintedBySource?.[layerId] || 0;
-    const stats = gev.dataManager.layers.get(layerId)?.module?.getStats?.() || {};
-    out.referenceLabelCount = stats.referenceLabelCount ?? null;
-    return out;
-  }, LAYER_ID);
-  report(control ? 'counts (control, cables OFF)' : 'counts with cables ON', counts);
+  // ── b. rendered counts ────────────────────────────────────────────────
+  const counts = await renderedCounts(page);
+  report(control ? 'rendered counts (control, cables OFF)' : 'rendered counts with cables ON', counts);
 
-  // ── a. per-frame scene.render cost over a ~10 s driven orbit ─────────
-  const frameCost = await page.evaluate(() => new Promise((resolve) => {
-    const v = window.__godsEyeView.viewer;
-    const scene = v.scene;
-    const durations = [];
-    const originalRender = scene.render;
-    scene.render = function patchedRender(...args) {
-      const started = performance.now();
-      const result = originalRender.apply(this, args);
-      durations.push(performance.now() - started);
-      return result;
-    };
+  // ── c. frame cadence over a ~10 s driven orbit ────────────────────────
+  const orbit = await page.evaluate(() => new Promise((resolve) => {
+    const { engine } = window.__godsEyeView;
+    const stamps = [];
+    const remove = engine.on('render', () => stamps.push(performance.now()));
     const t0 = performance.now();
     const tick = () => {
-      // Slow orbit: every frame is a camera change, so Cesium renders every
-      // rAF — the honest "user is interacting" cost of the layer.
-      v.camera.rotateRight(0.0004);
+      const c = engine.map.getCenter();
+      engine.map.jumpTo({ center: [c.lng + 0.02, c.lat] });
       if (performance.now() - t0 < 10_000) requestAnimationFrame(tick);
       else {
-        scene.render = originalRender;
-        durations.sort((a, b) => a - b);
-        const n = durations.length;
-        const sum = durations.reduce((s, d) => s + d, 0);
+        remove();
+        const gaps = stamps.slice(1).map((t, i) => t - stamps[i]).sort((a, b) => a - b);
+        const n = gaps.length;
         resolve({
-          frames: n,
-          meanMs: +(sum / Math.max(1, n)).toFixed(2),
-          p50Ms: +(durations[Math.floor(n * 0.5)] || 0).toFixed(2),
-          p95Ms: +(durations[Math.floor(n * 0.95)] || 0).toFixed(2),
-          maxMs: +(durations[n - 1] || 0).toFixed(2),
-          effectiveFps: +(n / 10).toFixed(1),
+          frames: stamps.length,
+          meanGapMs: +(gaps.reduce((s, d) => s + d, 0) / Math.max(1, n)).toFixed(2),
+          p95GapMs: +(gaps[Math.floor(n * 0.95)] || 0).toFixed(2),
+          effectiveFps: +(stamps.length / 10).toFixed(1),
         });
       }
     };
     requestAnimationFrame(tick);
   }));
-  report(control
-    ? 'scene.render cost, control (cables OFF), 10s orbit'
-    : 'scene.render cost, cables ON, 10s orbit', frameCost);
+  report(control ? 'orbit cadence, control (cables OFF), 10s' : 'orbit cadence, cables ON, 10s', orbit);
 
-  // ── d. parked idle honesty (labels must not force continuous render) ──
-  await new Promise((r) => setTimeout(r, 4_000)); // orbit stop + fades settle
+  // ── d. parked idle honesty ────────────────────────────────────────────
+  await sleep(4_000);
   const idle = await page.evaluate(() => new Promise((resolve) => {
-    const scene = window.__godsEyeView.viewer.scene;
     let renders = 0;
-    const remove = scene.postRender.addEventListener(() => { renders += 1; });
+    const remove = window.__godsEyeView.engine.on('render', () => { renders += 1; });
     setTimeout(() => { remove(); resolve({ renders }); }, 5_000);
   }));
-  report(control
-    ? 'parked idle, control (postRender fires / 5s)'
-    : 'parked idle with cables ON (postRender fires / 5s)', idle);
+  report(control ? 'parked idle, control (render fires / 5s)' : 'parked idle with cables ON (render fires / 5s)', idle);
 
-  if (!legacy && !control) {
-    // ── unified-build contract gates ────────────────────────────────────
-    check('zero native LabelGraphics on cable entities', counts.nativeLabels === 0, counts.nativeLabels);
-    check('zero per-frame CallbackProperty cable entities', counts.dynamicPositionEntities === 0, counts.dynamicPositionEntities);
-    check('host has cable entries', counts.hostEntries > 0, counts.hostEntries);
-    check('host painted cable labels', counts.hostPainted > 0, counts.hostPainted);
-    // The cables source never republishes an unchanged cohort (unit pin), and
-    // since the 2026-08-18 host fix the occluder observer is scoped (body
-    // childList filtered to inventory chrome; attribute observation
-    // element-only) and the right-rail allocator writes-if-changed — so a
-    // parked camera measures 0 postRender fires / 5 s with cables ON, equal
-    // to the empty-scene control (pre-fix: ~56-61). The headroom below covers
-    // an occasional genuine chrome transition (loading-chip flip + its 100 ms
-    // occluder-refresh echo) landing inside the window; ticking churn (~10)
-    // or the old observer leak (~56+) must fail.
+  if (!control) {
+    check('cable lines are drawn', counts['dg-cables-line'] > 0, counts);
+    check('reference labels are drawn', counts['dg-cable-refs-label'] > 0, counts);
     check('parked idle stays near zero (≤6 / 5s)', idle.renders <= 6, idle);
 
-    // OFF must clear the host source (no orphan labels), ON must restore.
-    const cycle = await page.evaluate(async (layerId) => {
-      const gev = window.__godsEyeView;
-      await gev.dataManager.setEnabled(layerId, false, { origin: 'user' });
-      gev.viewer.scene.requestRender?.();
-      await new Promise((r) => setTimeout(r, 1_200));
-      const offDiag = window.__gevWorldOverlay?.getDiagnostics?.() || {};
-      const offEntries = offDiag.entriesBySource?.[layerId] || 0;
-      const offPainted = offDiag.paintedBySource?.[layerId] || 0;
-      await gev.dataManager.setEnabled(layerId, true, { origin: 'user' });
-      const t0 = performance.now();
-      let onPainted = 0;
-      while (performance.now() - t0 < 20_000) {
-        const diag = window.__gevWorldOverlay?.getDiagnostics?.() || {};
-        onPainted = diag.paintedBySource?.[layerId] || 0;
-        if (onPainted > 0) break;
-        gev.viewer.scene.requestRender?.();
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      return { offEntries, offPainted, onPainted };
-    }, LAYER_ID);
-    check('disable clears host entries (no orphans)', cycle.offEntries === 0 && cycle.offPainted === 0, cycle);
-    check('re-enable restores painted labels', cycle.onPainted > 0, cycle);
+    // OFF must leave nothing of the layer on screen, ON must restore labels.
+    await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, false, { origin: 'user' }), LAYER_ID);
+    await sleep(1_200);
+    const off = await renderedCounts(page);
+    await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, true, { origin: 'user' }), LAYER_ID);
+    let on = null;
+    for (let i = 0; i < 100; i++) {
+      on = await renderedCounts(page);
+      if (on['dg-cable-refs-label'] > 0) break;
+      await sleep(200);
+    }
+    check('disable leaves no cable feature rendered (no orphans)', Object.values(off).every((n) => n <= 0), off);
+    check('re-enable restores the labels', on['dg-cable-refs-label'] > 0, on);
   }
 } finally {
   await browser.close();
 }
 
 const passed = results.filter((r) => r.pass).length;
-console.log(`\nqa-cables-overlay: ${passed}/${results.length} passed${legacy ? ' (legacy measurement mode)' : ''}${control ? ' (control mode)' : ''}`);
+console.log(`\nqa-cables-overlay: ${passed}/${results.length} passed${control ? ' (control mode)' : ''}`);
 console.log(`RESULT: ${passed} passed, ${results.length - passed} failed, 0 skipped`);
 process.exit(passed === results.length ? 0 : 1);

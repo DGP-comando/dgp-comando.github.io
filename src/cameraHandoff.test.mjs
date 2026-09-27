@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui.js'), 'utf8');
-const firms = fs.readFileSync(path.join(ROOT, 'src', 'data', 'firmsHeatmap.js'), 'utf8');
 const vessels = fs.readFileSync(path.join(ROOT, 'src', 'data', 'aisLiveVessels.js'), 'utf8');
 const voice = fs.readFileSync(path.join(ROOT, 'src', 'voice', 'gevActions.js'), 'utf8');
 const cameraVerbs = fs.readFileSync(path.join(ROOT, 'src', 'cameraVerbs.js'), 'utf8');
@@ -34,11 +33,13 @@ test('Cockpit takeover invalidates deferred work before camera cancellation', ()
     /enter\(\) \{([\s\S]*?)\n  \}\n\n  exit\(/,
     'Cockpit enter',
   );
+  // MapLibre: o alvo segue em engine.track (a perseguição centra no mesmo
+  // ponto); a garantia é invalidar o trabalho diferido ANTES de cancelar o voo.
   ordered(enter, [
-    'if (!info || !entity?.position) return false;',
+    'if (!info || !entity) return false;',
     'this.onCameraTakeover?.();',
-    'this.viewer.camera.cancelFlight();',
-    'this.viewer.trackedEntity = undefined;',
+    'this.engine?.cancelFlight?.();',
+    'this.trackedEntity = entity;',
   ], 'Cockpit takeover');
   assert.match(
     ui,
@@ -89,8 +90,8 @@ test('voice Cockpit entry reaches the camera only through stamping seams', () =>
   //
   // The transaction has exactly two camera-owner mutations, and each one
   // stamps:
-  //   1. selectedLayer.trackById(id) -> viewer.trackedEntity
-  //        -> viewer.trackedEntityChanged -> _stampNavigation()
+  //   1. selectedLayer.trackById(id) -> engine.track(target)
+  //        -> engine 'trackedchange' -> _stampNavigation()
   //   2. cockpitView.enter() -> onCameraTakeover() -> _stampNavigation()
   const transaction = body(
     cockpitTracking,
@@ -110,7 +111,7 @@ test('voice Cockpit entry reaches the camera only through stamping seams', () =>
   // Seam 1: any tracker handoff stamps, so the adoption step is covered.
   assert.match(
     ui,
-    /viewer\.trackedEntityChanged\.addEventListener\(\(entity\) => \{\s*if \(entity && !this\._disposed\) this\._stampNavigation\(\{ cancelPendingSelection: false \}\);/,
+    /viewer\.on\('trackedchange', \(target\) => \{\s*if \(target && !this\._disposed\) this\._stampNavigation\(\{ cancelPendingSelection: false \}\);/,
     'tracker handoff must stamp',
   );
   // Seam 2 is pinned by "Cockpit takeover invalidates deferred work" above.
@@ -186,10 +187,11 @@ test('accepted navigation releases through PR15-aware ownership before flight', 
     'origin: trackingOrigin',
     'satellitesLayer.stopTracking?.({ origin: trackingOrigin })',
     'rocketLaunchesLayer.releaseCameraOwnership?.()',
-    'this.viewer.trackedEntity = undefined;',
+    // MapLibre: engine.track(null) solta o alvo acompanhado (era
+    // viewer.trackedEntity = undefined + lookAtTransform(IDENTITY)).
+    'this.viewer.track(null);',
     "interruptCameraMotion('explicit-navigation')",
-    'this.viewer.camera.cancelFlight();',
-    'this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);',
+    'this.viewer.cancelFlight();',
   ], 'follow release');
   assert.match(release, /flightsLayer\.stopTracking\?\.\(\{ origin: trackingOrigin \}\)/);
   assert.match(release, /militaryFlightsLayer\.stopTracking\?\.\(\{ origin: trackingOrigin \}\)/);
@@ -236,10 +238,10 @@ test('validated voice camera destinations share the UI navigation authority faca
     'const start = () => {',
     "return typeof runNavigation === 'function' ? runNavigation(start) : start();",
   ], 'route validation before handoff');
-  // The corridor warm is injected the same way the floor READ is — the dolly
-  // never reaches into the data layer itself, and the voice dispatch is the one
-  // place that binds both.
-  assert.match(voice, /\(lat, lon\) => cachedGroundFloor\(lat, lon\),[\s\S]{0,200}?\(cells\) => warmGroundFloor\(cells\),/);
+  // The floor READ is injected by the voice dispatch — the dolly never reaches
+  // into a data layer itself. No MapLibre, o piso é o relevo do motor (ou 0 m
+  // sem relevo), que se carrega sozinho: não há corredor para pré-aquecer.
+  assert.match(voice, /\(lat, lon\) => engineGroundFloorM\(viewer, lat, lon\),[\s\S]{0,200}?\(navigate\) => runManagedVoiceNavigation\(styleManager, 'route', 'fly_route', navigate\),\s*null,/);
 });
 
 test('deferred search releases only after its final authority check', () => {
@@ -380,20 +382,25 @@ test('world-focus listener lifecycle is symmetric and idempotent', () => {
   assert.match(ui, /this\._removeWorldRequestFocusListener = null;/);
 });
 
-test('vessel and fire layers announce valid clicks and never fly cameras', () => {
-  for (const [label, source] of [['vessels', vessels], ['fires', firms]]) {
+// Os focos de calor saíram desta checagem: a camada FIRMS Cesium
+// (firmsHeatmap.js) foi removida e a versão MapLibre (contextoGev.js) recebe o
+// clique pelo layerHost e só centraliza o mapa (easeTo), sem requestWorldFocus.
+test('vessel layer announces valid clicks and never flies cameras', () => {
+  for (const [label, source] of [['vessels', vessels]]) {
     assert.match(source, /requestWorldFocus\(\{/);
     assert.doesNotMatch(source, /camera\.flyTo/);
   }
+  // MapLibre: o clique chega por engine.on('click'); um chevron/cartão válido
+  // seleciona e foca; um clique que é de outra camada preserva a seleção.
   const vesselClick = body(
     vessels,
-    /handler\.setInputAction\(\(click\) => \{([\s\S]*?)\n  \}, Cesium\.ScreenSpaceEventType\.LEFT_CLICK\);/,
+    /function handleVesselClick\(engine, click\) \{([\s\S]*?)\n\}/,
     'vessel click',
   );
   ordered(vesselClick, [
-    "isOwnedByOtherLayer('ais-live-vessels', pickedId)",
-    '_vesselOverlayHost.hitTest?.(',
+    'engine.pick?.(x, y, { layers: VESSEL_PICK_LAYERS',
     'selectAndFocusVessel(record)',
+    'isOwnedByOtherLayer(LAYER_ID, id)',
   ], 'vessel sibling ownership');
   const vesselFocus = body(
     vessels,
@@ -401,14 +408,4 @@ test('vessel and fire layers announce valid clicks and never fly cameras', () =>
     'vessel focus helper',
   );
   assert.match(vesselFocus, /requestWorldFocus\(\{/);
-  const fireClick = body(
-    firms,
-    /_clickHandler\.setInputAction\(\(click\) => \{([\s\S]*?)\n    \}, Cesium\.ScreenSpaceEventType\.LEFT_CLICK\);/,
-    'fire click',
-  );
-  ordered(fireClick, [
-    'isOwnedByOtherLayer(id, pickedId)',
-    'overlayHost.hitTest?.(',
-    'selectAndFocusFire(carded)',
-  ], 'fire sibling ownership');
 });

@@ -1,6 +1,7 @@
 /**
- * Shared pick-ownership registry for layers that install their own
- * ScreenSpaceEventHandler click handlers.
+ * Shared pick-ownership registry for layers that install their own click
+ * handlers (MapLibre: `engine.on('click')` + `engine.pick`; formerly Cesium's
+ * ScreenSpaceEventHandler).
  *
  * Problem solved: each entity layer (commercial flights, military flights)
  * receives every LEFT_CLICK. When the user clicks a military aircraft while
@@ -23,7 +24,8 @@ const _owners = new Map();
  * the Cesium Entity (identity = its string `id`). Everything is coerced to a
  * String so predicates match against one canonical form.
  *
- * @param {object|null|undefined} picked - Result of `scene.pick()`.
+ * @param {object|null|undefined} picked - A MapLibre rendered feature from
+ *   `engine.pick()` (`{layer, properties, id}`), or a legacy pick object.
  * @returns {string|null} Canonical pick id, or null when the pick carries none.
  */
 export function resolvePickId(picked) {
@@ -38,7 +40,11 @@ export function resolvePickId(picked) {
     }
     return id;
   };
-  let id = unwrap(picked.id);
+  // MapLibre rendered feature (engine.pick): the layer's own id lives in
+  // `properties.id` when present, else the feature id.
+  let id = picked.layer && picked.properties
+    ? unwrap(picked.properties.id ?? picked.id)
+    : unwrap(picked.id);
   if (id === undefined) id = unwrap(picked.primitive?.id);
   return (typeof id === 'string' || typeof id === 'number') ? String(id) : null;
 }

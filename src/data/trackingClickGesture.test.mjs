@@ -114,14 +114,11 @@ test('civilian and military click handlers apply duration only at the deselect b
     readFileSync(new URL('./militaryFlights.js', import.meta.url), 'utf8'),
   ];
   for (const source of sources) {
-    assert.match(source, /isTrackingSelectionGesture\(gesture\)[\s\S]+scene\.pick/);
+    // Cesium: scene.pick; MapLibre: engine.pick via _pickContact/_pick*.
+    assert.match(source, /isTrackingSelectionGesture\(gesture\)[\s\S]+(?:scene\.pick|_pick\w*\(|\.pick\()/);
     assert.match(source, /isTrackingClickGesture\(gesture\)[\s\S]+_clearTracking\([^)]*\{ origin: 'user' \}\)/);
   }
-  assert.doesNotMatch(
-    sources[0],
-    /_trackedEntity = _viewer\.entities\.add\(\{\s*id:/,
-    'civilian tracked entities must retain Cesium-generated GUIDs',
-  );
+  assert.doesNotMatch(sources[0], /from 'cesium'/, 'flights.js is MapLibre-only');
 });
 
 test('civilian and military tracked model caps both expose the selected 200 px feel', () => {

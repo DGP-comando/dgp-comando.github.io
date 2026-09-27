@@ -1,90 +1,114 @@
-import * as Cesium from 'cesium';
 import { holdContinuousRender, releaseContinuousRender } from './renderGovernor.js';
 
 /**
- * OrbitController — smooth orbit around a target point.
- * Uses scene.preRender for frame-rate-independent 60fps updates.
- * Toggle with O key; auto-stops on POI/city change.
+ * OrbitController — órbita suave em volta de um ponto (tecla O).
+ *
+ * Sobre o MapLibre: a câmera olha para o alvo (`{lat, lon, height?}`) a uma
+ * distância `radius` (m) e inclinação `pitch` (graus, semântica Cesium:
+ * -90 = nadir), girando o heading continuamente a `speed` graus/s. Cada
+ * quadro é um `engine.setCameraView` a partir de `engine.cameraLookingAt`,
+ * independente da taxa de quadros. Arrastar/rolar o mapa encerra a órbita
+ * (o usuário retoma o controle). Para ao trocar de cidade/POI.
  */
 export class OrbitController {
-  constructor(viewer) {
-    this.viewer = viewer;
+  constructor(engine) {
+    this.viewer = engine;
+    this.engine = engine;
     this.active = false;
     this.target = null;
     this.radius = 500;
     this.pitch = -30;
-    this.speed = Cesium.Math.toRadians(6); // ~6°/sec → full rotation in ~60s
+    this.speed = 6; // graus/s → volta completa em ~60 s
     this.angle = 0;
-    this._removeListener = null;
+    this._raf = null;
+    this._removeInterrupt = null;
   }
 
   /**
-   * Start orbiting around a target position.
-   * @param {Cesium.Cartesian3} targetCartesian - The point to orbit around
-   * @param {object} options
-   * @param {number} options.radius - Distance from target in meters
-   * @param {number} options.pitch - Tilt angle in degrees (negative = looking down)
-   * @param {number} options.speed - Degrees per second (default 6)
+   * Começa a orbitar o alvo.
+   * @param {{lat:number, lon:number, height?:number}} target
+   * @param {{radius?:number, pitch?:number, speed?:number}} options
    */
-  start(targetCartesian, options = {}) {
-    if (!targetCartesian) return;
-
-    this.target = targetCartesian;
+  start(target, options = {}) {
+    if (!target || !Number.isFinite(target.lat) || !Number.isFinite(target.lon)) return;
+    this.stop();
+    this.target = target;
     this.radius = options.radius || this.radius;
     this.pitch = options.pitch || this.pitch;
-    this.speed = Cesium.Math.toRadians(options.speed || 6);
+    this.speed = options.speed || 6;
     this.active = true;
-    // Orbit mutates the camera from preRender — without a hold the loop
-    // starves after its first idle frame. (perf wave 2)
     holdContinuousRender('camera-orbit');
 
-    // Start from the camera's current heading for seamless transition
-    this.angle = this.viewer.camera.heading;
+    // Parte do heading atual da câmera: transição sem salto de rumo.
+    const view = this.engine.getCameraView?.();
+    this.angle = Number.isFinite(view?.heading) ? view.heading : 0;
+    this.engine.cancelFlight?.();
 
-    let lastTime = Date.now();
-    this._removeListener = this.viewer.scene.preRender.addEventListener(() => {
+    let lastTime = performance.now();
+    const step = (now) => {
       if (!this.active) return;
-
-      const now = Date.now();
-      const dt = (now - lastTime) / 1000;
+      const dt = Math.min(0.5, Math.max(0, (now - lastTime) / 1000));
       lastTime = now;
-
-      this.angle += this.speed * dt;
-
-      const hpr = new Cesium.HeadingPitchRange(
-        this.angle,
-        Cesium.Math.toRadians(this.pitch),
-        this.radius
+      this.angle = (this.angle + this.speed * dt) % 360;
+      const cam = this.engine.cameraLookingAt(
+        { lat: this.target.lat, lon: this.target.lon, height: this.target.height || 0 },
+        { rangeM: this.radius, heading: this.angle, pitch: this.pitch },
       );
-      this.viewer.camera.lookAt(this.target, hpr);
-    });
-  }
+      try {
+        this.engine.map?.jumpTo(
+          this.engine.map.calculateCameraOptionsFromCameraLngLatAltRotation(
+            [cam.lon, cam.lat], Math.max(1, cam.alt), cam.heading, 90 + cam.pitch, 0,
+          ),
+        );
+      } catch {
+        this.engine.setCameraView?.(cam);
+      }
+      this._raf = requestAnimationFrame(step);
+    };
+    this._raf = requestAnimationFrame(step);
 
-  /**
-   * Stop orbiting. Camera freezes at current position and user regains control.
-   */
-  stop() {
-    this.active = false;
-    releaseContinuousRender('camera-orbit');
-    if (this._removeListener) {
-      this._removeListener();
-      this._removeListener = null;
+    // Gesto do usuário (arrastar, rolar) devolve o controle.
+    const map = this.engine.map;
+    if (map?.on) {
+      const interrupt = (e) => {
+        if (e?.originalEvent) this.stop();
+      };
+      map.on('dragstart', interrupt);
+      map.on('wheel', interrupt);
+      map.on('rotatestart', interrupt);
+      map.on('pitchstart', interrupt);
+      this._removeInterrupt = () => {
+        map.off('dragstart', interrupt);
+        map.off('wheel', interrupt);
+        map.off('rotatestart', interrupt);
+        map.off('pitchstart', interrupt);
+      };
     }
-    // Unlock camera for free interaction
-    this.viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+  }
+
+  /** Para a órbita; a câmera fica onde está e o usuário retoma o controle. */
+  stop() {
+    const wasActive = this.active;
+    this.active = false;
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = null;
+    this._removeInterrupt?.();
+    this._removeInterrupt = null;
+    if (wasActive) releaseContinuousRender('camera-orbit');
+    if (wasActive) this.onStop?.();
   }
 
   /**
-   * Toggle orbit on/off.
-   * @param {Cesium.Cartesian3} targetCartesian - Required when starting
-   * @param {object} options - Passed to start()
-   * @returns {boolean} Whether orbit is now active
+   * Liga/desliga a órbita.
+   * @param {{lat:number, lon:number, height?:number}} target obrigatório ao ligar
+   * @param {object} options repassado a start()
+   * @returns {boolean} se a órbita ficou ativa
    */
-  toggle(targetCartesian, options) {
+  toggle(target, options) {
     if (this.active) {
       this.stop();
     } else {
-      this.start(targetCartesian, options);
+      this.start(target, options);
     }
     return this.active;
   }

@@ -1,18 +1,12 @@
-import * as Cesium from 'cesium';
 import { twoline2satrec, propagate, gstime, eciToGeodetic, degreesLong, degreesLat } from 'satellite.js';
-import { registerPickOwner, unregisterPickOwner, isOwnedByOtherLayer, resolvePickId } from './pickRegistry.js';
+import { registerPickOwner, unregisterPickOwner } from './pickRegistry.js';
 import { findNextIssPass } from './issPass.js';
 import {
   advanceSpriteFocus,
-  clearFocusTarget,
   focusAlphaNeedsWrite,
-  focusNowMs,
   focusPassIsNeeded,
-  getFocusTarget,
   nearFarScalarValueAtDistance,
-  publishFocusTargetFromCachedPosition,
 } from './focusDeemphasis.js';
-import { refreshTrackedReadout } from './trackedReadout.js';
 import {
   satelliteClassColor,
   satelliteClassLabel,
@@ -20,32 +14,63 @@ import {
   tallySatelliteClasses,
 } from './satelliteClass.js';
 import {
-  clearOverlaySource,
-  setOverlayEntries,
-  setOverlaySourceVisible,
-} from '../overlays/worldOverlay.js';
-import {
   clearTrackedSubjectContext,
   getContextStore,
   refreshTrackedSubjectContext,
   selectTrackedSubjectContext,
 } from './contextStore.js';
-import { holdContinuousRender, releaseContinuousRender } from '../renderGovernor.js';
 import { isExplicitLayerStateOrigin } from './layerState.js';
+import { cartesianFromDegrees, pathToLonLat, toDegrees } from './spaceGeo.js';
+import { defineLayer, EMPTY_FC, esc, fc, row, TEXT_FONT_BOLD } from '../maplibre/kit.js';
+import { getActiveLayerHost } from '../maplibre/layerHost.js';
 
 /**
- * Satellite Orbits — Real-time positions via CelesTrak TLE + SGP4 propagation.
+ * Satellites — posições em tempo real via TLE do CelesTrak + propagação SGP4,
+ * desenhadas no MapLibre.
  *
- * Loads six CelesTrak groups (~840 sats): stations, visual, GPS, GLONASS,
- * Galileo, and the geosynchronous belt. Optional dense mode (setParams
- * catalog:'dense') adds the Starlink shell as points-only extras.
- * Renders positions via PointPrimitiveCollection, orbital paths as polylines.
- * Click any satellite to track it with camera follow + orbital path.
+ * Carrega seis grupos do CelesTrak (~840 satélites): stations, visual, GPS,
+ * GLONASS, Galileo e o cinturão geoestacionário. O modo denso
+ * (setParams({catalog: 'dense'})) acrescenta a casca Starlink como pontos
+ * extras. Clique num satélite para rastreá-lo (câmera segue + órbita).
  *
- * ISS gets special treatment: larger point, persistent host label, path shown by default.
+ * DESENHO NO MAPLIBRE (decisão da migração)
+ * -----------------------------------------
+ * Cada satélite é desenhado no PONTO SUBSATÉLITE (a projeção da posição no
+ * chão), como um círculo numa fonte GeoJSON, e a órbita como uma LINHA no chão
+ * (o traço do anel orbital projetado). A altitude real aparece no tooltip, no
+ * cartão do rastreado e nas APIs. Motivo da escolha, frente a uma custom layer
+ * com os pontos em altitude (como o Osiris): assim os satélites usam o mesmo
+ * anfitrião de hover/tooltip/clique das outras camadas (layerHost), o
+ * `engine.pick`/`engine.project` e o acompanhamento `engine.track`, sem um
+ * segundo caminho de picking por GPU; e o Osiris já precisa comprimir a
+ * altitude (a GEO sairia do frustum), então a "altitude real" seria uma escala
+ * de exibição de qualquer forma. O anel orbital, assado num GMST fixo, é
+ * realinhado ao GMST atual a cada segundo por uma rotação rígida em Z, que em
+ * coordenadas geodésicas é só um deslocamento de longitude.
+ *
+ * A ISS mantém o destaque vermelho, o rótulo "ISS" permanente e a órbita
+ * mostrada por padrão.
+ *
+ * API PÚBLICA (a mesma do app Cesium; tipos Cesium trocados por neutros):
+ *   default export — módulo do DataLayerManager (init/enable/disable/update/
+ *     destroy/getStats/getRowControls/setRowControlsListener/getParams/setParams)
+ *     mais getDetectableObjects, findByQuery, getAllPositions, trackById,
+ *     resolveTrackingRestoreTarget, stopTracking, cancelPendingTrackingRestore,
+ *     getTrackedInfo, getTrackedLabelModel.
+ *   Onde havia Cesium.Cartesian3, `position` agora é um objeto simples {x, y, z}
+ *   em ECEF WGS84 (mesmo formato; contas que só leem x/y/z seguem valendo), e os
+ *   registros trazem também latitude/longitude/altitudeM.
+ *   getSatelliteOrbitTrack / findSatelliteOrbitTrackInTle: `orbitPath` é uma
+ *   lista de {x, y, z} ECEF (anel assado em `gmstAtBake`).
+ *   orbitFrameModelMatrix devolve uma matriz 4x4 (Float64Array, coluna-major,
+ *   layout do Cesium.Matrix4) e orbitFrameLongitudeShiftDeg o deslocamento de
+ *   longitude equivalente, que é o que o MapLibre usa.
+ *   O rastreio sai do `viewer.trackedEntity` para `engine.track(alvo)`; o alvo
+ *   expõe `gevTrackedId` ('satellites:<NORAD>'), `layerId` e `getPosition()`.
  */
 
 const ISS_NORAD = 25544;
+const LAYER_ID = 'satellites';
 export const ISS_OVERLAY_SOURCE_ID = 'satellites-iss';
 export const ISS_OVERLAY_SOURCE_OPTIONS = Object.freeze({
   cohortLimit: 1,
@@ -53,14 +78,9 @@ export const ISS_OVERLAY_SOURCE_OPTIONS = Object.freeze({
   moving: true,
   solveIntervalMs: 125,
 });
-const DEFAULT_OVERLAY_HOST = Object.freeze({
-  setEntries: setOverlayEntries,
-  setVisible: setOverlaySourceVisible,
-  clearSource: clearOverlaySource,
-});
-let _overlayHost = DEFAULT_OVERLAY_HOST;
 const ORBIT_PATH_STEPS = 180;  // points per orbital path
-const POSITION_UPDATE_MS = 1000; // re-propagate every 1s (SGP4 is smooth at this rate)
+const TICK_MS = 250;           // loop cadence (tracked dot + label)
+const POSITION_UPDATE_MS = 1000; // fleet re-propagation (SGP4 is smooth at this rate)
 const RING_ROTATION_MS = 1000;   // re-align baked orbit rings to current GMST every 1s
 
 /**
@@ -82,99 +102,49 @@ const CATALOG_GROUPS = [
 
 // Dense-catalog mode (setParams({ catalog: 'dense' })): Starlink shell as
 // points-only extras — no labels, no detection-overlay participation, and a
-// relaxed propagation budget (round-robin, ~1/5 of core cadence per sat).
+// relaxed propagation budget (round-robin, one full pass every ~5 s).
 const DENSE_GROUP_PATH = 'starlink';
-const DENSE_REFRESH_FRAMES = 300;  // full dense pass spread over ~300 frames (~5s @ 60fps)
+const DENSE_REFRESH_TICKS = Math.round(5000 / TICK_MS);
 const DENSE_CREATE_CHUNK = 1500;   // satrec builds per macro-task while loading
 
 /**
- * Tracked-entity camera offset, east-north-up meters (Entity.viewFrom).
- * Magnitude ≈ 726 km — the user-validated "slightly zoomed out" framing for
- * LEO: far enough that per-frame satellite motion doesn't stutter the camera
- * or smear the label, with +Z biasing the view down onto the satellite.
- * High orbits (MEO nav / GEO belt) scale this up so the ring stays in frame.
+ * Altitude de câmera ao começar a seguir um satélite (a câmera olha o ponto
+ * subsatélite de cima). LEO: ~3 000 km, o bastante para ver um bom trecho da
+ * órbita; MEO/GEO: ~12 000 km para o anel caber na tela.
  */
-const TRACK_VIEW_FROM_LEO = new Cesium.Cartesian3(-450000, -450000, 350000);
+const TRACK_CAMERA_ALT_LEO_M = 3_000_000;
+const TRACK_CAMERA_ALT_HIGH_M = 12_000_000;
 const HIGH_ORBIT_ALTITUDE_M = 2000000;
-const TRACK_VIEW_FROM_HIGH_SCALE = 4; // ≈ 2900 km back for MEO/GEO
 
 /**
- * Shared per-group point styling — single source of truth used by BOTH the
- * creation site (update) and tracking restore (_clearTracking) so deselecting
- * a satellite never loses the original palette (WS-D3).
- *
- * Colors come from `satelliteClass.js` so the dot, the class label on the
- * card, and the legend swatch on the layer row can never disagree. Only
- * pixelSize/outline live here — those encode per-group prominence, not class.
- * Converted once at module load; per-point color is a plain primitive
- * attribute, so classification costs nothing per frame.
+ * Shared per-group point styling. Colors come from `satelliteClass.js` so the
+ * dot, the class label on the card, and the legend swatch on the layer row can
+ * never disagree. Only radius/outline live here — those encode per-group
+ * prominence, not class. `radius` is the MapLibre circle radius (≈ Cesium
+ * pixelSize / 2).
  */
-const POINT_OUTLINE = Cesium.Color.WHITE.withAlpha(0.3);
-const _classColor = (group) => Cesium.Color.fromCssColorString(satelliteClassColor(group));
-
 const POINT_STYLES = {
   // The ISS keeps its own long-standing red hero styling rather than the
   // STATION class color: it is the object most users open this layer for, it
   // carries a permanent name label, and its size/outline already set it apart.
-  // Its card still reads "STATION · ISS", so the class stays legible.
-  iss: {
-    pixelSize: 12,
-    color: Cesium.Color.fromCssColorString('#ff4444'),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 2,
-  },
-  stations: {
-    pixelSize: 8,
-    color: _classColor('stations'),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 0,
-  },
-  visual: {
-    pixelSize: 6,
-    color: _classColor('visual'),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 0,
-  },
-  // Nav constellations (GPS / GLONASS / Galileo) resolve to one shared NAV
-  // color; 6px so the MEO shells read as clearly as the old visual group did.
-  'gps-ops': {
-    pixelSize: 6,
-    color: _classColor('gps-ops'),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 0,
-  },
-  glonass: {
-    pixelSize: 6,
-    color: _classColor('glonass'),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 0,
-  },
-  galileo: {
-    pixelSize: 6,
-    color: _classColor('galileo'),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 0,
-  },
-  geo: {
-    pixelSize: 5,
-    color: _classColor('geo'),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 0,
-  },
+  iss: { radius: 6, color: '#ff4444', alpha: 1, strokeWidth: 2 },
+  stations: { radius: 4, color: satelliteClassColor('stations'), alpha: 1, strokeWidth: 0 },
+  visual: { radius: 3, color: satelliteClassColor('visual'), alpha: 1, strokeWidth: 0 },
+  // Nav constellations (GPS / GLONASS / Galileo) resolve to one shared NAV color.
+  'gps-ops': { radius: 3, color: satelliteClassColor('gps-ops'), alpha: 1, strokeWidth: 0 },
+  glonass: { radius: 3, color: satelliteClassColor('glonass'), alpha: 1, strokeWidth: 0 },
+  galileo: { radius: 3, color: satelliteClassColor('galileo'), alpha: 1, strokeWidth: 0 },
+  geo: { radius: 2.5, color: satelliteClassColor('geo'), alpha: 1, strokeWidth: 0 },
   // Dense-mode extras (Starlink): dim, small, points-only.
-  dense: {
-    pixelSize: 3,
-    color: _classColor('dense').withAlpha(0.9),
-    outlineColor: POINT_OUTLINE,
-    outlineWidth: 0,
-  },
+  dense: { radius: 1.5, color: satelliteClassColor('dense'), alpha: 0.9, strokeWidth: 0 },
 };
+
+const TRACKED_COLOR = '#ffd84d';
 
 /**
  * Resolve the canonical point style for a satellite.
  * @param {number} noradId NORAD catalog number.
  * @param {string|undefined} group Catalog group tag (see CATALOG_GROUPS / 'dense').
- * @returns {{ pixelSize: number, color: Cesium.Color, outlineColor: Cesium.Color, outlineWidth: number }}
  */
 function _pointStyleFor(noradId, group) {
   if (noradId === ISS_NORAD) return POINT_STYLES.iss;
@@ -183,14 +153,14 @@ function _pointStyleFor(noradId, group) {
 
 // Satellite catalog: { noradId → { name, satrec, group } }
 let _catalog = new Map();
-let _pointCollection = null;
-let _points = new Map();          // noradId → point primitive
+/**
+ * noradId → última amostra propagada {longitude, latitude, altitude (m),
+ * speedMps, position ({x,y,z} ECEF)}.
+ */
+let _points = new Map();
 /** Stable lightweight records reused by the detection overlay between updates. */
 let _detectionObjects = new Map();
-// noradId → { primitive, gmstAtBake }
-// primitive is a one-instance Cesium.Primitive holding the ring baked in ECEF
-// at gmstAtBake; the preRender tick re-aligns it to current GMST by updating
-// its modelMatrix (rigid Z-rotation — no geometry rebuild, WS-D1).
+/** noradId → { path: [{x,y,z}] (assado em gmstAtBake), gmstAtBake, color, width } */
 let _orbitPaths = new Map();
 let _count = 0;
 let _lastUpdate = null;
@@ -205,14 +175,14 @@ function _abortActiveUpdates() {
   _denseLoadController?.abort();
   _denseLoadController = null;
 }
-let _viewer = null;
-let _preRenderListener = null;
+
+/** @type {object|null} engine do MapLibre (src/maplibre/engine.js) */
+let _engine = null;
+let _tickTimer = null;
+let _tickCount = 0;
 let _lastPropagation = 0;
 let _lastRingRotation = 0;
-let _lastFocusUpdate = 0;
-/** Points whose animated emphasis remains outside the 1.0 deadband. */
-let _activeFocusCount = 0;
-const _scratchFocusScreen = new Cesium.Cartesian2();
+let _engineListeners = [];
 let _enabled = false;
 
 // Click-to-track state
@@ -225,10 +195,10 @@ let _lastTrackingRefreshOutcome = {
   status: 'unavailable',
   failedGroups: [],
 };
-let _trackedEntity = null;
-let _clickHandler = null;
-/** @type {Cesium.Event.RemoveCallback|null} trackedEntityChanged listener disposer (cross-layer untrack) */
-let _trackedEntityChangedRemove = null;
+/** Alvo entregue a engine.track() enquanto um satélite é seguido. */
+let _trackTarget = null;
+/** Modelo do cartão do rastreado {title, details[], accent}. */
+let _trackedLabelModel = null;
 
 // Runtime params (DataLayerManager.setLayerParams path)
 let _params = { catalog: 'core', showPoints: true, showOrbits: true }; // 'core' | 'dense'
@@ -265,7 +235,7 @@ function _notifyRowControls() {
 /**
  * Per-class tally for the row legend, cached against the catalog revision.
  * Without the cache this scans ~10.7k entries in dense mode on every panel
- * refresh, and any layer polling on the 1s stats timer refreshes the panel.
+ * refresh.
  * @returns {Record<string, number>} Class key → count.
  */
 function _classTally() {
@@ -287,10 +257,10 @@ function _classTally() {
 /**
  * Satellite preferences may be restored while the layer is disabled (for
  * example, when Space Missions releases its dependency). Preferences must not
- * revive render primitives until the layer is explicitly enabled again.
+ * revive render state until the layer is explicitly enabled again.
  * @param {boolean} layerEnabled Whether the Satellite layer is enabled.
  * @param {boolean} requestedVisible Whether the current presentation requests visibility.
- * @returns {boolean} Whether a primitive should be visible now.
+ * @returns {boolean} Whether a visual should be visible now.
  */
 export function satelliteVisualsVisible(layerEnabled, requestedVisible) {
   return Boolean(layerEnabled) && Boolean(requestedVisible);
@@ -308,7 +278,11 @@ export function satelliteCatalogModeChanged(currentCatalog, requestedCatalog) {
     && requestedCatalog !== currentCatalog;
 }
 
-/** Build the persistent ISS ambient label from the cached point position. */
+/**
+ * Entrada do rótulo ambiente da ISS no formato do anfitrião de rótulos
+ * (worldOverlay). Mantida para o alocador de rótulos (worldOverlayAllocation);
+ * no MapLibre o rótulo "ISS" é um symbol layer desta camada.
+ */
 export function createIssOverlayEntry(position) {
   return {
     id: String(ISS_NORAD),
@@ -335,21 +309,16 @@ export function createIssOverlayEntry(position) {
   };
 }
 
-/** Cached ISS point only; never performs a fresh SGP4 propagation. */
-function _issDisplayCached() {
-  return _points.get(ISS_NORAD)?.position || null;
-}
-
 /**
  * Physically DOCKED vehicles are separate real tracks sharing one position: the
  * station and everything berthed to it sit within metres of each other. Their
- * ambient labels therefore stack underneath the tracked card, which is what the
- * owner saw. This radius is deliberately tight — it must catch a docked stack
- * and nothing else, so an unrelated satellite in a similar orbit is never
- * suppressed. Formation-flying pairs are km apart; a docked stack is ~100 m.
+ * ambient labels would stack underneath the tracked card. This radius is
+ * deliberately tight — it must catch a docked stack and nothing else, so an
+ * unrelated satellite in a similar orbit is never suppressed. Formation-flying
+ * pairs are km apart; a docked stack is ~100 m.
  */
 const DOCKED_COMPANION_RADIUS_M = 2000;
-/** The scan is O(points); the tracked label is rebuilt every frame, so throttle. */
+/** The scan is O(points), so throttle. */
 const DOCKED_SCAN_INTERVAL_MS = 1000;
 /** @type {Set<number>} NORAD ids co-located with the tracked satellite. */
 let _dockedCompanions = new Set();
@@ -360,7 +329,7 @@ let _lastDockedScanMs = Number.NEGATIVE_INFINITY;
  * @returns {boolean} true when membership changed (callers resync presentation).
  */
 function _refreshDockedCompanions(nowMs) {
-  const trackedPosition = _trackedNorad === null ? null : _trackedDisplayCached();
+  const trackedPosition = _trackedNorad === null ? null : _trackedFrameGeo?.position ?? null;
   if (!trackedPosition) {
     if (_dockedCompanions.size === 0) return false;
     _dockedCompanions = new Set();
@@ -396,67 +365,61 @@ function _dockedCompanionNames() {
   return names.sort();
 }
 
-/** Keep persistent ISS text mutually exclusive with the tracked host card. */
-function _syncIssOverlay() {
-  // Hidden when ISS is the tracked subject, and equally when ISS is DOCKED to
-  // whatever is tracked: its ambient label would otherwise sit underneath the
-  // tracked card at the same position.
-  const visible = _enabled && _params.showOrbits && _trackedNorad !== ISS_NORAD
+/** O rótulo ambiente "ISS" aparece? (exclusivo com o cartão do rastreado) */
+function _issLabelVisible() {
+  return Boolean(
+    _enabled && _params.showOrbits && _params.showPoints
+    && _trackedNorad !== ISS_NORAD
     && !_dockedCompanions.has(ISS_NORAD)
-    && _catalog.has(ISS_NORAD) && _issDisplayCached();
-  if (!visible) {
-    _overlayHost.clearSource(ISS_OVERLAY_SOURCE_ID);
-    _overlayHost.setVisible(ISS_OVERLAY_SOURCE_ID, false);
-    return;
-  }
-  _overlayHost.setEntries(
-    ISS_OVERLAY_SOURCE_ID,
-    [createIssOverlayEntry(_issDisplayCached)],
-    ISS_OVERLAY_SOURCE_OPTIONS,
+    && _catalog.has(ISS_NORAD) && _points.get(ISS_NORAD),
   );
-  _overlayHost.setVisible(ISS_OVERLAY_SOURCE_ID, true);
 }
 
-// Per-frame cache for the tracked satellite (WS-D2): dot, host readout, camera, and
-// getTrackedInfo all read one SGP4 sample per rendered frame, keyed on
-// scene.frameState.frameNumber, so they never diverge in epoch.
-let _trackedFrameNumber = -1;
-let _trackedFrameGeo = null; // { longitude, latitude, altitude } or null
-const _trackedFrameCartesian = new Cesium.Cartesian3();
-/** Optional deterministic clock used only by the production-frame test seam. */
-let _trackedFrameNowForTest = null;
-
-// Scratch variables
-const _scratchCartesian = new Cesium.Cartesian3();
-const _scratchRingRotation = new Cesium.Matrix3();
+// Amostra do rastreado compartilhada por ponto, cartão, câmera e
+// getTrackedInfo: uma propagação SGP4 por "quadro" (janela de 16 ms).
+let _trackedFrameMs = Number.NEGATIVE_INFINITY;
+let _trackedFrameGeo = null; // { longitude, latitude, altitude, speedMps, position } or null
+/** Optional deterministic clock used only by the test seams. */
+let _nowForTest = null;
+const _now = () => (_nowForTest ? _nowForTest() : Date.now());
 
 /**
  * Build the rigid ECEF transform that keeps an orbit path baked at one GMST
  * aligned with live SGP4 positions propagated at another epoch.
  * @param {number} gmstAtBake GMST used when the path positions were baked.
  * @param {Date} nowDate Epoch whose rotating-Earth frame should be displayed.
- * @param {Cesium.Matrix4} [result] Optional matrix to update in place.
- * @returns {Cesium.Matrix4} Z-rotation from bake-time ECEF to current ECEF.
+ * @param {Float64Array|number[]} [result] Optional 16-element array to update in place.
+ * @returns {Float64Array|number[]} Column-major 4x4 Z-rotation (Cesium.Matrix4 layout).
  */
-export function orbitFrameModelMatrix(
-  gmstAtBake,
-  nowDate,
-  result = new Cesium.Matrix4(),
-) {
-  const deltaGmst = gstime(nowDate) - gmstAtBake;
-  const rotation = Cesium.Matrix3.fromRotationZ(-deltaGmst, _scratchRingRotation);
-  return Cesium.Matrix4.fromRotationTranslation(
-    rotation,
-    Cesium.Cartesian3.ZERO,
-    result,
-  );
+export function orbitFrameModelMatrix(gmstAtBake, nowDate, result = new Float64Array(16)) {
+  const angle = -(gstime(nowDate) - gmstAtBake);
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  result[0] = c; result[1] = s; result[2] = 0; result[3] = 0;
+  result[4] = -s; result[5] = c; result[6] = 0; result[7] = 0;
+  result[8] = 0; result[9] = 0; result[10] = 1; result[11] = 0;
+  result[12] = 0; result[13] = 0; result[14] = 0; result[15] = 1;
+  return result;
+}
+
+/**
+ * The same GMST re-alignment as `orbitFrameModelMatrix`, expressed as the
+ * longitude shift (degrees) a rigid Z-rotation applies to every point. A point
+ * fixed in inertial space keeps its right ascension, so its ECEF longitude
+ * DECREASES by ΔGMST as time advances (it drifts west).
+ * @param {number} gmstAtBake GMST used when the path was baked.
+ * @param {Date} nowDate Current epoch.
+ * @returns {number} Longitude shift in degrees.
+ */
+export function orbitFrameLongitudeShiftDeg(gmstAtBake, nowDate) {
+  return -toDegrees(gstime(nowDate) - gmstAtBake);
 }
 
 /**
  * Parse TLE text into array of { name, line1, line2 } objects.
  */
 function parseTLE(text) {
-  const lines = text.trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  const lines = String(text || '').trim().split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const result = [];
   for (let i = 0; i < lines.length - 2; i += 3) {
     const name = lines[i];
@@ -499,13 +462,21 @@ function propagatePosition(satrec, date) {
   }
 }
 
+/** Amostra propagada com a posição ECEF anexada. */
+function _sampleAt(satrec, date) {
+  const pos = propagatePosition(satrec, date);
+  if (!pos) return null;
+  pos.position = cartesianFromDegrees(pos.longitude, pos.latitude, pos.altitude);
+  return pos;
+}
+
 function orbitalPeriodSeconds(satrec) {
   const meanMotion = satrec.no * (1440 / (2 * Math.PI));
   return 86400 / Math.max(meanMotion, 0.1);
 }
 
 /**
- * Compute full orbital path as array of Cartesian3 positions.
+ * Compute full orbital path as array of ECEF {x,y,z} positions.
  * Steps around one full orbit based on the satellite's mean motion.
  */
 function computeOrbitPath(satrec, referenceDate) {
@@ -525,10 +496,10 @@ function computeOrbitPath(satrec, referenceDate) {
       const posVel = propagate(satrec, t);
       if (!posVel.position || typeof posVel.position === 'boolean') continue;
       const geo = eciToGeodetic(posVel.position, fixedGmst);
-      positions.push(Cesium.Cartesian3.fromDegrees(
+      positions.push(cartesianFromDegrees(
         degreesLong(geo.longitude),
         degreesLat(geo.latitude),
-        geo.height * 1000
+        geo.height * 1000,
       ));
     } catch { continue; }
   }
@@ -536,109 +507,28 @@ function computeOrbitPath(satrec, referenceDate) {
   return positions;
 }
 
-/**
- * Show orbital path for a satellite.
- *
- * RING FLICKER FIX: this is a one-instance Cesium.Primitive built
- * synchronously ONCE (asynchronous: false), then re-aligned to current GMST
- * each tick via its modelMatrix. The previous Entity-polyline approach
- * rebuilt geometry ASYNCHRONOUSLY on every positions assignment, which made
- * both the selected ring and the ISS ring blink once per second while the
- * rebuild was in flight. A rigid Z-rotation needs no rebuild at all.
- *
- * Why not a CallbackProperty entity (dynamic mode)? Verified in Cesium
- * 1.138 source: the dynamic polyline updater renders through a shared
- * PolylineCollection and applies only the fill material —
- * `depthFailMaterial` is silently dropped, losing the dimmed behind-Earth
- * segment. The Primitive keeps it via depthFailAppearance + the per-instance
- * depthFailColor attribute (same mechanism the entity STATIC batch uses):
- * bright where above the horizon, dimmed where behind the globe.
- */
+/** Show the orbital path (ground track of the baked ring) for a satellite. */
 function _showOrbitPath(noradId, color) {
   if (_orbitPaths.has(noradId)) return; // already showing
-
   const sat = _catalog.get(noradId);
-  if (!sat || !_viewer) return;
-
-  const bakeDate = new Date();
-  const basePositions = computeOrbitPath(sat.satrec, bakeDate);
-  if (basePositions.length < 2) return;
-
-  const pathColor = color || Cesium.Color.CYAN;
-
-  const primitive = new Cesium.Primitive({
-    geometryInstances: new Cesium.GeometryInstance({
-      geometry: new Cesium.PolylineGeometry({
-        positions: basePositions,
-        width: noradId === ISS_NORAD ? 2.5 : 2.0,
-        vertexFormat: Cesium.PolylineColorAppearance.VERTEX_FORMAT,
-      }),
-      attributes: {
-        color: Cesium.ColorGeometryInstanceAttribute.fromColor(pathColor.withAlpha(0.6)),
-        depthFailColor: Cesium.ColorGeometryInstanceAttribute.fromColor(pathColor.withAlpha(0.35)),
-      },
-    }),
-    appearance: new Cesium.PolylineColorAppearance({ translucent: true }),
-    depthFailAppearance: new Cesium.PolylineColorAppearance({ translucent: true }),
-    asynchronous: false, // build this frame — no async-rebuild blink window
-    allowPicking: false, // ring clicks fall through to satellites/deselect
-  });
-  _viewer.scene.primitives.add(primitive);
-
+  if (!sat) return;
+  const bakeDate = new Date(_now());
+  const path = computeOrbitPath(sat.satrec, bakeDate);
+  if (path.length < 2) return;
   _orbitPaths.set(noradId, {
-    primitive,
+    path,
     // Same Date object as computeOrbitPath's internal fixedGmst → identical
-    // GMST value (gstime is pure), so delta starts at exactly 0 and the
-    // initial identity modelMatrix is correct until the first ring tick.
+    // GMST value (gstime is pure), so the shift starts at exactly 0.
     gmstAtBake: gstime(bakeDate),
+    color: color || '#00ffff',
+    width: noradId === ISS_NORAD ? 2.5 : 2,
   });
+  _renderOrbits();
 }
 
-/**
- * Rotate every baked orbit ring from its bake-time ECEF snapshot to current
- * GMST (WS-D1). The baked ring is an inertial-frame snapshot frozen at
- * gmstAtBake; the live dot lives in true rotating-frame ECEF, so without this
- * the dot slides west off the ring at Earth-rotation rate (~0.25°/min).
- *
- * Sign derivation: a point fixed in inertial space keeps its right ascension
- * α, so its ECEF longitude λ = α − gmst DECREASES by ΔGMST as time advances
- * (it drifts WEST). Cesium.Matrix3.fromRotationZ(θ) rotates +X toward +Y,
- * i.e. INCREASES longitude by θ — so we rotate the baked points by −ΔGMST.
- * Mental check: ISS baked over Austin at t0; 10 min later Austin has rotated
- * east under the (inertial) ring, so the ring must sit further WEST in ECEF.
- *
- * Wraparound: gstime returns radians in [0, 2π), so the raw difference can be
- * off from the continuous ΔGMST — but only by exact multiples of 2π, which a
- * rotation cannot distinguish. Tiny negative deltas right after bake are
- * likewise harmless. No unwrapping needed.
- *
- * No SGP4 here — the rotation is applied as the ring primitive's modelMatrix
- * (exact compensation; WGS84 is rotationally symmetric about Z, so rotating
- * the baked curve rigidly equals rebaking from rotated points). modelMatrix
- * updates are synchronous uniforms — no geometry rebuild, no flicker. Post-
- * creation modelMatrix changes are supported for one-instance primitives in
- * 3D mode, which these rings are. In-place mutation is safe: Primitive.update
- * diffs modelMatrix against an internal clone.
- * @param {Date} nowDate Epoch used for current GMST.
- */
-function _updateOrbitPathRotations(nowDate) {
-  if (_orbitPaths.size === 0) return;
-
-  for (const path of _orbitPaths.values()) {
-    if (!path.primitive) continue;
-    orbitFrameModelMatrix(path.gmstAtBake, nowDate, path.primitive.modelMatrix);
-  }
-}
-
-/**
- * Remove orbital path for a satellite.
- */
+/** Remove orbital path for a satellite. */
 function _hideOrbitPath(noradId) {
-  const path = _orbitPaths.get(noradId);
-  if (path) {
-    if (_viewer) _viewer.scene.primitives.remove(path.primitive); // remove() destroys
-    _orbitPaths.delete(noradId);
-  }
+  if (_orbitPaths.delete(noradId)) _renderOrbits();
 }
 
 function _normalizeTrackedNorad(candidate) {
@@ -656,7 +546,7 @@ function _emitAwarenessEvent(type, detail) {
 function _applyPendingTrackingRestore() {
   const pending = _pendingTrackingRestore;
   if (!pending || pending.generation !== _trackingIntentGeneration || !_enabled) return false;
-  if (!_viewer || !_catalog.has(pending.id) || !_points.has(pending.id)) return false;
+  if (!_catalog.has(pending.id) || !_points.has(pending.id)) return false;
   _pendingTrackingRestore = null;
   _trackSatellite(pending.id, { origin: pending.origin });
   return _trackedNorad === pending.id;
@@ -669,138 +559,82 @@ function _cancelPendingTrackingRestore() {
 
 /**
  * Stop tracking the currently followed satellite.
- * @param {boolean} [skipViewerUntrack=false] - When ANOTHER layer just grabbed
- *   the follow-camera (viewer.trackedEntityChanged), tear down our own state
- *   but do NOT clear viewer.trackedEntity — the new owner controls it now,
- *   and clearing it would yank the camera off their target (mirror of flights).
+ * @param {boolean} [skipEngineUntrack=false] - When ANOTHER layer just grabbed
+ *   the follow-camera (engine 'trackedchange'), tear down our own state but do
+ *   NOT clear engine.track — the new owner controls it now.
  */
-function _clearTracking(skipViewerUntrack = false, { origin = 'programmatic' } = {}) {
+function _clearTracking(skipEngineUntrack = false, { origin = 'programmatic' } = {}) {
   // Untracking dissolves the cluster: every companion returns to its own
   // ambient label on the next collection.
   _dockedCompanions = new Set();
   _lastDockedScanMs = Number.NEGATIVE_INFINITY;
   if (!_trackedNorad) {
-    clearFocusTarget('satellites');
-    _syncIssOverlay();
+    _renderTracked();
     return;
   }
   const clearedNorad = _trackedNorad;
-  clearFocusTarget('satellites', _trackedNorad);
 
-  const lastPos = _points.get(_trackedNorad);
-
-  // Re-show the primitive (hidden while the tracked entity rendered the dot)
-  // and restore the original group palette from the shared style table (WS-D3)
-  if (lastPos) {
-    const style = _pointStyleFor(_trackedNorad, _catalog.get(_trackedNorad)?.group);
-    lastPos.show = true;
-    lastPos.pixelSize = style.pixelSize;
-    lastPos.color = style.color;
-    lastPos.outlineColor = style.outlineColor;
-    lastPos.outlineWidth = style.outlineWidth;
-    lastPos.disableDepthTestDistance = 0;
-  }
-
-  // Invalidate the per-frame tracked-position cache (WS-D2)
-  _trackedFrameNumber = -1;
+  _trackedFrameMs = Number.NEGATIVE_INFINITY;
   _trackedFrameGeo = null;
 
-  // Remove tracked entity and orbit path (unless ISS — keep its path)
-  if (_trackedNorad !== ISS_NORAD) {
-    _hideOrbitPath(_trackedNorad);
-  }
-  if (_viewer && !skipViewerUntrack) _viewer.trackedEntity = undefined;
-  if (_trackedEntity) {
-    _viewer.entities.remove(_trackedEntity);
-    _trackedEntity = null;
-  }
+  // Remove orbit path (unless ISS — keep its path)
+  if (_trackedNorad !== ISS_NORAD) _hideOrbitPath(_trackedNorad);
+  const target = _trackTarget;
+  _trackTarget = null;
+  _trackedLabelModel = null;
+  if (!skipEngineUntrack && target && _engine?.trackedTarget === target) _engine.track?.(null);
   _trackedNorad = null;
-  _syncIssOverlay();
-  clearTrackedSubjectContext('satellites');
+  _renderTracked();
+  _renderPoints();
+  clearTrackedSubjectContext(LAYER_ID);
   _contextRefreshedAtMs = 0;
   _emitAwarenessEvent('gev:awareness-subject-cleared', {
-    layerId: 'satellites', id: clearedNorad, origin,
+    layerId: LAYER_ID, id: clearedNorad, origin,
   });
 }
 
 /**
  * Get the tracked satellite's geodetic position, propagated at most once per
- * rendered frame (WS-D2). All tracked-satellite consumers (entity position
- * callback → camera, host model, point primitive, getTrackedInfo) share this
- * single `new Date()` epoch per frame, so they can never diverge by the old
- * 200ms throttle. The matching ECEF position is left in
- * `_trackedFrameCartesian`. SGP4 for one satellite per frame is cheap.
- * @returns {{ longitude: number, latitude: number, altitude: number }|null}
+ * ~16 ms "frame". All tracked-satellite consumers (camera follow, dot, card,
+ * getTrackedInfo, context slot) share this single sample.
+ * @returns {{ longitude: number, latitude: number, altitude: number, speedMps: number|null, position: {x,y,z} }|null}
  */
 function _getTrackedFramePosition() {
   if (_trackedNorad === null) return null;
   const sat = _catalog.get(_trackedNorad);
   if (!sat) return null;
 
-  const frameNumber = _viewer?.scene?.frameState?.frameNumber ?? -1;
-  if (frameNumber === -1 || frameNumber !== _trackedFrameNumber || _trackedFrameGeo === null) {
-    const pos = propagatePosition(
-      sat.satrec,
-      _trackedFrameNowForTest ? new Date(_trackedFrameNowForTest()) : new Date(),
-    );
+  const nowMs = _now();
+  if (_trackedFrameGeo === null || Math.abs(nowMs - _trackedFrameMs) >= 16) {
+    const pos = _sampleAt(sat.satrec, new Date(nowMs));
     if (!pos) return _trackedFrameGeo; // propagation hiccup — keep last good sample
     _trackedFrameGeo = pos;
-    Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, pos.altitude, undefined, _trackedFrameCartesian);
-    _trackedFrameNumber = frameNumber;
-    // Throttled inside; membership changes are rare, so resync the ISS ambient
-    // gate only when the cluster actually changed.
-    const clusterChanged = _refreshDockedCompanions(
-      _trackedFrameNowForTest ? _trackedFrameNowForTest() : Date.now(),
-    );
+    _trackedFrameMs = nowMs;
+    _points.set(_trackedNorad, pos);
+    // Throttled inside; membership changes are rare.
+    const clusterChanged = _refreshDockedCompanions(nowMs);
     _updateTrackedSatelliteLabelModel();
     // The card and the context slot describe the same satellite — keep them
     // together so voice never narrates a fix the card has already replaced.
     _refreshTrackedSubjectContext();
-    if (clusterChanged) _syncIssOverlay();
-    const name = sat.name?.trim() || `SAT-${_trackedNorad}`;
-    const altitudeText = `${Math.round(pos.altitude / 1000)} km · NORAD ${_trackedNorad}`;
-    const labelWidthPx = Math.max(name.length, altitudeText.length) * 7.8 + 20;
-    const labelHeightPx = 2 * 13 + 12;
-    const trackedPointDiameterPx = 14 + 4; // point plus its 2 px outline on both sides
-    // Exact SGP4 frame cache only: dot, host readout, camera, and focus rectangle all
-    // share one epoch, avoiding a second propagation phase and its old jitter.
-    publishFocusTargetFromCachedPosition({
-      ownerLayer: 'satellites',
-      id: _trackedNorad,
-      scene: _viewer?.scene,
-      camera: _viewer?.camera,
-      displayPosition: _trackedFrameCartesian,
-      widthPx: Math.max(trackedPointDiameterPx, Math.min(260, labelWidthPx)),
-      // Union of the 14 px point and the two-line label shifted 18 px upward.
-      heightPx: trackedPointDiameterPx + 18 + labelHeightPx,
-    });
+    if (clusterChanged) _renderPoints();
   }
   return _trackedFrameGeo;
 }
 
-/** Cached ECEF display point only; never propagates a fresh SGP4 sample. */
-function _trackedDisplayCached() {
-  return _trackedFrameGeo ? _trackedFrameCartesian : null;
-}
-
-/** Update the explicit model only when the rounded altitude line changes. */
 /** Epoch of the last shared-context refresh for the tracked satellite. */
 let _contextRefreshedAtMs = 0;
 /**
- * Shared-context refresh interval. The tracked satellite is re-propagated
- * every rendered frame; the voice context only needs to be current to about
- * the propagation cadence, so this refreshes on the same 1 s beat instead of
- * allocating a record 60 times a second.
+ * Shared-context refresh interval: the voice context only needs to be current
+ * to about the propagation cadence.
  */
 const CONTEXT_REFRESH_INTERVAL_MS = 1000;
 
 /**
  * Describe the tracked satellite for the shared context slot the voice tools
- * read. Values come from the live per-frame propagation, not a selection-time
- * snapshot, so a long follow never narrates a position the satellite has left.
+ * read. Values come from the live propagation, not a selection-time snapshot.
  * @param {number} noradId Catalog identity.
  * @param {{latitude: number, longitude: number, altitude: number}|null} [position]
- *   Explicit position; defaults to the current per-frame propagation.
  * @returns {object|null} Context metadata, or null when the satellite is gone.
  */
 function _contextSubjectMetadata(noradId, position = null) {
@@ -812,7 +646,7 @@ function _contextSubjectMetadata(noradId, position = null) {
   const altitudeKm = Number.isFinite(pos.altitude) ? Math.round(pos.altitude / 1000) : null;
   return {
     id: String(noradId),
-    layerId: 'satellites',
+    layerId: LAYER_ID,
     layerName: 'Satellites',
     source: 'CelesTrak',
     label: name,
@@ -834,35 +668,23 @@ function _contextSubjectMetadata(noradId, position = null) {
  * Reconcile the published subject with a freshly rebuilt catalog.
  *
  * A rebuild (dense↔core toggle, TLE refresh) clears and repopulates the
- * catalog, so the tracked satellite's entry is a NEW object with a new satrec.
- * A surviving subject is simply re-resolved against it. A subject that is GONE
- * must release the slot: the per-frame refresh cannot do this itself, because
- * `_getTrackedFramePosition` returns early once the satellite has no catalog
- * entry — so without this the record would linger and voice would narrate a
- * satellite the catalog no longer carries, frozen at its last position.
- *
- * Releasing is gated on PROOF. The subject is preserved unless it is absent
- * from a catalog that is both complete (`accepted`, no failed CelesTrak group)
- * and applicable (dense settled, when dense is the requested catalog). A
- * partial refresh, a failed dense load, or an empty catalog is unproven
- * absence, and unproven absence is not absence — the same honesty rule the
- * tracking-restore path already applies.
+ * catalog. A surviving subject is simply re-resolved against it. A subject that
+ * is GONE must release the slot — but releasing is gated on PROOF: the subject
+ * is preserved unless it is absent from a catalog that is both complete
+ * (`accepted`, no failed CelesTrak group) and applicable (dense settled, when
+ * dense is the requested catalog). Unproven absence is not absence.
  * @returns {Promise<void>} Resolves once the applicable catalog has settled.
  */
 async function _reconcileTrackedSubjectContext() {
   const subjectAtStart = _trackedNorad;
   if (subjectAtStart === null) return;
-  // Dense extras land AFTER the core rebuild resolves. Deciding before they
-  // settle called a dense subject missing and deleted its record; the record
-  // then stayed gone, because a refresh can update an existing record but
-  // cannot recreate one.
+  // Dense extras land AFTER the core rebuild resolves.
   const denseSettlement = _params.catalog === 'dense' ? _denseLoadPromise : null;
   if (denseSettlement) {
     try {
       await denseSettlement;
     } catch {
-      // A failed dense load proves nothing about the subject; fall through and
-      // let the outcome check below preserve it.
+      // A failed dense load proves nothing about the subject.
     }
   }
   // The operator may have moved on while we waited.
@@ -875,9 +697,8 @@ async function _reconcileTrackedSubjectContext() {
     if (store.entities.has(key)) {
       refreshTrackedSubjectContext(metadata);
     } else if (!store.selectedEntityId) {
-      // The record was dropped while the subject was briefly unresolvable.
-      // Restore it — but only into an EMPTY slot: a satellite reappearing must
-      // never yank the subject away from something the operator selected since.
+      // Restore only into an EMPTY slot: a satellite reappearing must never yank
+      // the subject away from something the operator selected since.
       selectTrackedSubjectContext(metadata);
     }
     _contextRefreshedAtMs = Date.now();
@@ -885,34 +706,17 @@ async function _reconcileTrackedSubjectContext() {
   }
 
   // Absence only counts when EVERY catalog that could carry the subject
-  // actually loaded. Unproven absence is not absence — the same honesty rule
-  // the tracking-restore path applies.
-  //
-  // Deliberately NOT scoped to the group the subject was last seen in:
-  // CelesTrak reclassifies satellites between groups, so a subject missing
-  // from its old group may simply have moved to one that failed this refresh.
-  // Believing the old group alone would drop it. Any failed or empty group is
-  // therefore a reason to wait — and `accepted` already means every group
-  // returned entries.
+  // actually loaded (CelesTrak reclassifies satellites between groups).
   if (_catalog.size === 0) return;
   if (_lastTrackingRefreshOutcome?.status !== 'accepted') return;
-  // Dense is a potential carrier too whenever it was REQUESTED — and the
-  // request is read from `denseSettlement`, captured before the await, not
-  // from `_params.catalog` now. A failed dense load reverts the mode to 'core'
-  // as part of settling (an ACTIVE chip over an empty sky would be a lie), so
-  // by the time we get here the intent that made dense a carrier has been
-  // erased. Re-reading it would skip this guard on exactly the runs that need
-  // it and delete a subject the dense catalog might have carried.
+  // Dense is a potential carrier whenever it was REQUESTED (read from the
+  // settlement captured before the await: a failed dense load reverts the mode).
   if (denseSettlement && _denseStatus !== 'ready') return;
-  clearTrackedSubjectContext('satellites');
+  clearTrackedSubjectContext(LAYER_ID);
   _contextRefreshedAtMs = 0;
 }
 
-/**
- * Keep the shared context slot current with the tracked satellite, on the
- * propagation beat rather than the frame clock.
- * @returns {void}
- */
+/** Keep the shared context slot current with the tracked satellite. */
 function _refreshTrackedSubjectContext() {
   if (_trackedNorad === null) return;
   const now = Date.now();
@@ -921,156 +725,137 @@ function _refreshTrackedSubjectContext() {
   refreshTrackedSubjectContext(_contextSubjectMetadata(_trackedNorad));
 }
 
+/** Rebuild the tracked card model only when its text changes. */
 function _updateTrackedSatelliteLabelModel(fallbackAltitudeM = null) {
-  if (!_trackedEntity || _trackedNorad === null) return;
+  if (_trackedNorad === null) return;
   const sat = _catalog.get(_trackedNorad);
   const title = sat?.name?.trim() || `SAT-${_trackedNorad}`;
   const altitudeM = _trackedFrameGeo?.altitude ?? fallbackAltitudeM;
   const detail = `${Number.isFinite(altitudeM) ? Math.round(altitudeM / 1000) : '?'} km · NORAD ${_trackedNorad}`;
   // Class leads the detail block: it is what tells the operator WHAT they are
-  // looking at, and it stays readable under the IR styles that flatten the
-  // dot colors to a single channel (the card is painted above post-FX).
+  // looking at.
   const details = [satelliteClassLabel(sat?.group, { isIss: _trackedNorad === ISS_NORAD }), detail];
   // Docked companions are consolidated onto the tracked card as SECONDARY info
-  // instead of competing with it as separate ambient labels. Identities are
-  // preserved: the catalog is untouched and every companion returns to its own
-  // label the moment the cluster is no longer tracked.
+  // instead of competing with it as separate ambient labels.
   const companions = _dockedCompanionNames();
   if (companions.length > 0) {
     const extra = companions.length - 1;
     details.push(`DOCKED · ${companions[0]}${extra > 0 ? ` · +${extra}` : ''}`);
   }
-  const current = _trackedEntity.gevLabelModel;
-  // Compare the WHOLE detail array: comparing only `details[0]` swallowed any
-  // change confined to the companions line, so the card would never republish.
+  const current = _trackedLabelModel;
   const unchanged = current?.title === title
     && current?.details?.length === details.length
     && details.every((line, index) => current.details[index] === line);
   if (unchanged) return;
-  _trackedEntity.gevLabelModel = { title, details, accent: '#ffd84d' };
-  refreshTrackedReadout(_trackedEntity);
+  _trackedLabelModel = { title, details, accent: TRACKED_COLOR };
+}
+
+function _trackCameraAltitude(altitudeM) {
+  return Number.isFinite(altitudeM) && altitudeM > HIGH_ORBIT_ALTITUDE_M
+    ? TRACK_CAMERA_ALT_HIGH_M
+    : TRACK_CAMERA_ALT_LEO_M;
 }
 
 function _trackSatellite(noradId, { origin = 'programmatic' } = {}) {
   _clearTracking(false, { origin });
 
-  const point = _points.get(noradId);
   const sat = _catalog.get(noradId);
-  if (!point || !sat) return;
+  if (!_points.get(noradId) || !sat) return;
 
   _trackedNorad = noradId;
-  _trackedFrameNumber = -1;
+  _trackedFrameMs = Number.NEGATIVE_INFINITY;
   _trackedFrameGeo = null;
-  _syncIssOverlay();
 
-  // Hide the primitive — the tracked ENTITY renders the dot below. The
-  // entity must own a point graphic so the Viewer's tracking camera can
-  // resolve a bounding sphere and engage viewFrom (a label-only entity
-  // left the camera stranded; this mirrors the proven flights pattern).
-  point.show = false;
-
-  // Show orbital path
-  _showOrbitPath(noradId, Cesium.Color.YELLOW);
-
-  // Tracked entity position propagates per evaluation through the per-frame
-  // cache (WS-D2) — dot, host readout, and camera share one SGP4 epoch per frame.
-  // Falls back to the point primitive's 1s-throttled position if SGP4 fails.
-  const positionProperty = new Cesium.CallbackProperty(() => {
-    const pos = _getTrackedFramePosition();
-    return pos ? _trackedFrameCartesian : point.position;
-  }, false);
+  _showOrbitPath(noradId, TRACKED_COLOR);
 
   const name = sat.name.trim();
-
-  // Comfortable tracking landing: ~726 km back for LEO (user-validated
-  // "slightly zoomed out" framing — no stutter, label reads cleanly), scaled
-  // up for MEO/GEO so the camera doesn't land on top of a high-orbit dot.
-  const initialPos = propagatePosition(sat.satrec, new Date());
-  const viewScale = initialPos && initialPos.altitude > HIGH_ORBIT_ALTITUDE_M
-    ? TRACK_VIEW_FROM_HIGH_SCALE
-    : 1;
-  const viewFrom = Cesium.Cartesian3.multiplyByScalar(
-    TRACK_VIEW_FROM_LEO, viewScale, new Cesium.Cartesian3()
-  );
-
-  _trackedEntity = _viewer.entities.add({
-    position: positionProperty,
-    viewFrom,
-    point: {
-      pixelSize: 14,
-      color: Cesium.Color.YELLOW,
-      outlineColor: Cesium.Color.WHITE,
-      outlineWidth: 2,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
-    },
-  });
-  _trackedEntity.gevSelectionOrigin = origin;
-  _trackedEntity.gevTrackedId = `satellites:${noradId}`;
-  _trackedEntity.gevDisplayPosition = _trackedDisplayCached;
+  const initialPos = _getTrackedFramePosition() || _points.get(noradId);
   _updateTrackedSatelliteLabelModel(initialPos?.altitude ?? null);
 
+  // Alvo de acompanhamento da câmera (engine.track): o ponto subsatélite.
+  const target = {
+    id: `satellites:${noradId}`,
+    gevTrackedId: `satellites:${noradId}`,
+    gevSelectionOrigin: origin,
+    layerId: LAYER_ID,
+    noradId,
+    releaseOnDrag: true,
+    getPosition: () => {
+      const pos = _getTrackedFramePosition();
+      return pos ? { lon: pos.longitude, lat: pos.latitude, alt: pos.altitude } : null;
+    },
+    get gevLabelModel() {
+      return _trackedLabelModel;
+    },
+  };
+  _trackTarget = target;
+
   _emitAwarenessEvent('gev:awareness-subject-selected', {
-    layerId: 'satellites',
+    layerId: LAYER_ID,
     id: noradId,
     label: name,
-    position: Cesium.Cartesian3.clone(point.position),
+    position: initialPos?.position ? { ...initialPos.position } : null,
+    latitude: initialPos?.latitude,
+    longitude: initialPos?.longitude,
+    altitudeM: initialPos?.altitude,
     origin,
   });
   selectTrackedSubjectContext(_contextSubjectMetadata(noradId, initialPos));
   _contextRefreshedAtMs = Date.now();
 
-  _viewer.trackedEntity = _trackedEntity;
+  if (_engine?.track) {
+    // Voo até ficar sobre o satélite e, a partir daí, a câmera acompanha.
+    if (initialPos && typeof _engine.flyToCamera === 'function') {
+      _engine.flyToCamera({
+        lat: initialPos.latitude,
+        lon: initialPos.longitude,
+        alt: _trackCameraAltitude(initialPos.altitude),
+        heading: 0,
+        pitch: -90,
+      }, { duration: 1.6 });
+    }
+    _engine.track(target);
+  }
+  _renderPoints();
+  _renderTracked();
   console.log(`[Data:Satellites] Tracking ${name} (NORAD ${noradId})`);
 }
 
 /**
- * Propagate all CORE satellite positions and update point primitives.
- * (~840 sats ≈ 1.6 ms/pass — fine at the 1s/200ms cadence.) Dense extras are
- * excluded: they refresh on the round-robin budget in _propagateDenseChunk.
+ * Propagate all CORE satellite positions (~840 sats ≈ 2 ms/pass). Dense extras
+ * are excluded: they refresh on the round-robin budget in _propagateDenseChunk.
  */
-function _propagateAll() {
-  const now = new Date();
+function _propagateAll(date = new Date(_now())) {
   let updated = 0;
-
   for (const [noradId, sat] of _catalog) {
     if (sat.group === 'dense') continue;
-    const pos = propagatePosition(sat.satrec, now);
+    if (noradId === _trackedNorad) continue; // per-frame tracked path owns it
+    const pos = _sampleAt(sat.satrec, date);
     if (!pos) continue;
-
-    const cartesian = Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, pos.altitude);
-    const point = _points.get(noradId);
-    if (point) {
-      point.position = cartesian;
+    if (_points.has(noradId)) {
+      _points.set(noradId, pos);
       updated++;
     }
   }
-
   return updated;
 }
 
 /**
- * Re-propagate a small per-frame slice of the dense extras (round-robin).
- * Budget: the full dense set completes one pass every ~DENSE_REFRESH_FRAMES
- * frames (~5s at 60fps ≈ 1/5 of the core cadence), so per-frame cost stays
- * ~35 propagations (~0.1 ms) even with 10K+ Starlink sats — spreading the
- * work per frame avoids the once-per-second spike a tick-sized chunk
- * (~2K props ≈ 4ms) would cause.
+ * Re-propagate one slice of the dense extras (round-robin): the full dense set
+ * completes one pass every ~5 s, so the per-tick cost stays small even with
+ * 10K+ Starlink satellites.
  */
-function _propagateDenseChunk() {
+function _propagateDenseChunk(date = new Date(_now())) {
   if (_denseIds.length === 0) return;
-  const perFrame = Math.max(1, Math.ceil(_denseIds.length / DENSE_REFRESH_FRAMES));
-  const now = new Date();
-  for (let i = 0; i < perFrame; i++) {
+  const perTick = Math.max(1, Math.ceil(_denseIds.length / DENSE_REFRESH_TICKS));
+  for (let i = 0; i < perTick; i++) {
     if (_denseCursor >= _denseIds.length) _denseCursor = 0;
     const noradId = _denseIds[_denseCursor++];
-    if (noradId === _trackedNorad) continue; // per-frame tracked path owns it
+    if (noradId === _trackedNorad) continue;
     const sat = _catalog.get(noradId);
-    const point = _points.get(noradId);
-    if (!sat || !point) continue;
-    const pos = propagatePosition(sat.satrec, now);
-    if (pos) {
-      point.position = Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, pos.altitude);
-    }
+    if (!sat || !_points.has(noradId)) continue;
+    const pos = _sampleAt(sat.satrec, date);
+    if (pos) _points.set(noradId, pos);
   }
 }
 
@@ -1080,7 +865,6 @@ function _propagateDenseChunk() {
  * frame; a token guards against mode flips / catalog rebuilds mid-load.
  */
 async function _loadDenseCatalog({ signal = null } = {}) {
-  if (!_viewer || !_pointCollection) return { status: 'source-unavailable', reason: 'layer-unavailable' };
   _denseLoadController?.abort();
   const resourceController = new AbortController();
   _denseLoadController = resourceController;
@@ -1106,13 +890,12 @@ async function _loadDenseCatalog({ signal = null } = {}) {
     }
 
     const entries = parseTLE(text);
-    const style = POINT_STYLES.dense;
-    const now = new Date();
+    const now = new Date(_now());
     let added = 0;
 
     for (let start = 0; start < entries.length; start += DENSE_CREATE_CHUNK) {
       loadSignal.throwIfAborted();
-      if (token !== _denseLoadToken || _params.catalog !== 'dense' || !_pointCollection) {
+      if (token !== _denseLoadToken || _params.catalog !== 'dense') {
         return { status: 'superseded', reason: 'dense-load-superseded' };
       }
       const end = Math.min(start + DENSE_CREATE_CHUNK, entries.length);
@@ -1122,20 +905,10 @@ async function _loadDenseCatalog({ signal = null } = {}) {
         if (!satrec || satrec.error !== 0) continue;
         const noradId = Number(satrec.satnum);
         if (_catalog.has(noradId)) continue; // core catalog keeps priority
-        const pos = propagatePosition(satrec, now);
+        const pos = _sampleAt(satrec, now);
         if (!pos) continue;
-
         _catalog.set(noradId, { name: entry.name, satrec, group: 'dense' });
-        const point = _pointCollection.add({
-          position: Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, pos.altitude),
-          pixelSize: style.pixelSize,
-          color: style.color,
-          outlineColor: style.outlineColor,
-          outlineWidth: style.outlineWidth,
-          scaleByDistance: new Cesium.NearFarScalar(1e6, 1.5, 2e7, 0.6),
-          id: noradId,
-        });
-        _points.set(noradId, point);
+        _points.set(noradId, pos);
         _denseIds.push(noradId);
         added++;
       }
@@ -1146,8 +919,7 @@ async function _loadDenseCatalog({ signal = null } = {}) {
 
     // A 200 that yields nothing usable is still a failed load — an empty body,
     // an HTML error page the proxy passed through, or a feed of TLEs the core
-    // catalog already owns. Treating it as success is the same lie as treating
-    // a 502 as success, just through a different door.
+    // catalog already owns.
     if (added === 0) {
       console.warn(`[Data:Satellites] Dense group '${DENSE_GROUP_PATH}' returned no usable satellites`);
       _denseLoadFailed(token, 'feed returned no satellites');
@@ -1158,8 +930,7 @@ async function _loadDenseCatalog({ signal = null } = {}) {
     _catalogRevision++;
     _denseStatus = 'ready';
     console.log(`[Data:Satellites] Dense catalog: +${added} ${DENSE_GROUP_PATH} (points only)`);
-    // The panel would otherwise keep the pre-load count and legend until the
-    // next natural refresh — up to the 5-minute catalog interval.
+    _renderPoints();
     _notifyRowControls();
     _applyPendingTrackingRestore();
     return { status: 'ready', added };
@@ -1179,8 +950,6 @@ async function _loadDenseCatalog({ signal = null } = {}) {
  * Settle a failed dense load: drop any partial chunk, return the layer to the
  * core catalog, and leave the reason on the chip. Reverting the param is the
  * point — a chip that reads ACTIVE over an empty sky is a lie.
- * @param {number} token The load token that failed.
- * @param {string} reason Short operator-facing cause.
  */
 function _denseLoadFailed(token, reason) {
   // A newer load (or a mode flip) already owns the state — say nothing.
@@ -1201,8 +970,6 @@ function _removeDenseCatalog() {
     _clearTracking();
   }
   for (const noradId of _denseIds) {
-    const point = _points.get(noradId);
-    if (point && _pointCollection) _pointCollection.remove(point);
     _points.delete(noradId);
     _catalog.delete(noradId);
   }
@@ -1210,138 +977,340 @@ function _removeDenseCatalog() {
   _denseCursor = 0;
   _count = _points.size;
   _catalogRevision++;
+  _renderPoints();
 }
 
-/**
- * Shared scene.preRender tick (single definition for init + enable):
- * - core fleet propagation at 200ms-tracked / 1s-idle cadence,
- * - dense extras on a per-frame round-robin budget,
- * - tracked satellite's point primitive per frame (WS-D2),
- * - orbit ring GMST re-alignment every ~1s (WS-D1).
- */
-function _preRenderTick() {
-  if (!_enabled) return;
-  const now = focusNowMs(Date.now());
+// ------------------------------------------------------------ MapLibre
 
-  const interval = _trackedNorad ? 200 : POSITION_UPDATE_MS;
-  // Space Missions keeps this layer enabled for TLE lookup while deliberately
-  // hiding its standalone fleet. Do not rebuild hidden point buffers on the
-  // one-second propagation cadence: that GPU upload presented as a periodic
-  // whole-globe pulse even though the camera remained stationary.
-  if (_params.showPoints && now - _lastPropagation >= interval) {
-    _propagateAll();
-    _lastPropagation = now;
-  }
+const SRC_POINTS = 'dg-sat-points';
+const SRC_ORBITS = 'dg-sat-orbits';
+const SRC_TRACKED = 'dg-sat-tracked';
 
-  if (_params.showPoints) _propagateDenseChunk();
-
-  // Keep the tracked dot on the per-frame epoch shared with label + camera —
-  // runs after _propagateAll so the per-frame sample wins over the 200ms one.
-  if (_trackedNorad !== null) {
-    const pos = _getTrackedFramePosition();
-    const point = _points.get(_trackedNorad);
-    if (pos && point) {
-      point.position = _trackedFrameCartesian; // primitive setter clones
-    }
-  }
-
-  _updatePointFocus(now);
-
-  // Hidden standalone orbit primitives do not need GMST matrix writes while
-  // Space Missions draws the selected mission orbit itself.
-  if (_params.showOrbits && now - _lastRingRotation >= RING_ROTATION_MS) {
-    _updateOrbitPathRotations(new Date(now));
-    _lastRingRotation = now;
-  }
+function _tooltip(props) {
+  const altKm = Number(props.altKm);
+  return `<strong>${esc(props.name)}</strong>`
+    + row('Classe', props.klass)
+    + row('Altitude', Number.isFinite(altKm) ? `${altKm.toLocaleString('pt-BR')} km` : '')
+    + row('NORAD', props.id)
+    + row('Fonte', 'CelesTrak · SGP4');
 }
 
-/**
- * Seed a single tracked satellite so tests can invoke the exact production
- * pre-render callback without constructing a WebGL viewer.
- * @param {object} state
- * @param {number} state.noradId
- * @param {string} state.name
- * @param {object} state.satrec
- * @param {object} state.entity
- * @param {object} state.point
- * @param {object} state.viewer
- * @param {() => (number|Date)} state.now
- */
-export function _setTrackedSatelliteRefreshStateForTest({
-  noradId,
-  name,
-  satrec,
-  entity,
-  point,
-  viewer,
-  now,
-  // Extra catalog/point rows so a test can exercise a docked cluster (and a
-  // control satellite that must NOT be treated as part of it).
-  neighbours = [],
-}) {
-  _viewer = viewer;
-  _catalog = new Map([[noradId, { name, satrec, group: 'stations' }]]);
-  _points = new Map([[noradId, point]]);
-  for (const neighbour of neighbours) {
-    _catalog.set(neighbour.noradId, {
-      name: neighbour.name,
-      satrec: neighbour.satrec || satrec,
-      group: neighbour.group || 'stations',
+/** Definição de estilo da camada (contrato em src/maplibre/kit.js). */
+export const SATELLITES_LAYER_DEF = defineLayer({
+  id: LAYER_ID,
+  name: 'Satellites',
+  category: 'Espaço',
+  icon: '🛰️',
+  source: 'CelesTrak',
+  sources: {
+    [SRC_ORBITS]: { type: 'geojson', data: EMPTY_FC },
+    [SRC_POINTS]: { type: 'geojson', data: EMPTY_FC },
+    [SRC_TRACKED]: { type: 'geojson', data: EMPTY_FC },
+  },
+  layers: [
+    {
+      id: 'dg-sat-orbit-line',
+      type: 'line',
+      source: SRC_ORBITS,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': ['get', 'width'],
+        'line-opacity': 0.72,
+      },
+    },
+    {
+      id: 'dg-sat-pt',
+      type: 'circle',
+      source: SRC_POINTS,
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, ['*', ['get', 'r'], 0.8], 6, ['*', ['get', 'r'], 1.4]],
+        'circle-color': ['get', 'color'],
+        'circle-opacity': ['get', 'alpha'],
+        'circle-stroke-color': 'rgba(255,255,255,0.3)',
+        'circle-stroke-width': ['get', 'stroke'],
+        'circle-pitch-alignment': 'viewport',
+      },
+    },
+    {
+      id: 'dg-sat-iss-label',
+      type: 'symbol',
+      source: SRC_POINTS,
+      filter: ['==', ['get', 'issLabel'], 1],
+      layout: {
+        'text-field': 'ISS',
+        'text-font': TEXT_FONT_BOLD,
+        'text-size': 12,
+        'text-anchor': 'bottom',
+        'text-offset': [0, -0.9],
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+      },
+      paint: {
+        'text-color': '#ff6b6b',
+        'text-halo-color': 'rgba(5,8,13,0.92)',
+        'text-halo-width': 1.4,
+      },
+    },
+    {
+      id: 'dg-sat-tracked-pt',
+      type: 'circle',
+      source: SRC_TRACKED,
+      paint: {
+        'circle-radius': 7,
+        'circle-color': TRACKED_COLOR,
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-pitch-alignment': 'viewport',
+      },
+    },
+    {
+      id: 'dg-sat-tracked-label',
+      type: 'symbol',
+      source: SRC_TRACKED,
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': TEXT_FONT_BOLD,
+        'text-size': 12,
+        'text-line-height': 1.25,
+        'text-max-width': 40,
+        'text-anchor': 'bottom',
+        'text-justify': 'center',
+        'text-offset': [0, -1.1],
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+      },
+      paint: {
+        'text-color': TRACKED_COLOR,
+        'text-halo-color': 'rgba(5,8,13,0.92)',
+        'text-halo-width': 1.6,
+      },
+    },
+  ],
+  interactive: ['dg-sat-tracked-pt', 'dg-sat-pt'],
+  tooltip: (props) => _tooltip(props),
+  click: (props) => {
+    const noradId = Number(props.id);
+    if (!_enabled || !Number.isFinite(noradId) || !_catalog.has(noradId)) return;
+    if (noradId === _trackedNorad) return; // clicking the tracked dot — ignore
+    _cancelPendingTrackingRestore();
+    _trackSatellite(noradId, { origin: 'user' });
+  },
+});
+
+let _host = null;
+function _setSource(id, data) {
+  const map = _engine?.map;
+  if (!map || typeof map.getSource !== 'function') return;
+  map.getSource(id)?.setData(data);
+}
+
+function _pointFeatures() {
+  if (!satelliteVisualsVisible(_enabled, _params.showPoints)) return EMPTY_FC;
+  const issLabel = _issLabelVisible();
+  const features = [];
+  for (const [noradId, pos] of _points) {
+    if (noradId === _trackedNorad) continue; // the tracked dot draws on its own source
+    if (!pos || !Number.isFinite(pos.longitude) || !Number.isFinite(pos.latitude)) continue;
+    const sat = _catalog.get(noradId);
+    const style = _pointStyleFor(noradId, sat?.group);
+    features.push({
+      type: 'Feature',
+      id: noradId,
+      geometry: { type: 'Point', coordinates: [pos.longitude, pos.latitude] },
+      properties: {
+        id: noradId,
+        name: sat?.name?.trim() || `SAT-${noradId}`,
+        klass: satelliteClassLabel(sat?.group, { isIss: noradId === ISS_NORAD }),
+        altKm: Math.round((pos.altitude || 0) / 1000),
+        color: style.color,
+        alpha: style.alpha,
+        r: style.radius,
+        stroke: style.strokeWidth,
+        issLabel: noradId === ISS_NORAD && issLabel ? 1 : 0,
+      },
     });
-    _points.set(neighbour.noradId, neighbour.point);
   }
-  _dockedCompanions = new Set();
-  _lastDockedScanMs = Number.NEGATIVE_INFINITY;
-  _trackedNorad = noradId;
-  _trackedEntity = entity;
-  _trackedFrameNumber = -1;
-  _trackedFrameGeo = null;
-  _trackedFrameNowForTest = now;
-  _params = { catalog: 'core', showPoints: false, showOrbits: false };
-  _enabled = true;
+  // Pontos maiores por cima (a ordem das feições é a ordem de desenho).
+  features.sort((a, b) => a.properties.r - b.properties.r);
+  return fc(features);
 }
 
-/** Seed catalog authority and optional dense settlement for share-Follow tests. */
-export function _setSatelliteTrackingRefreshOutcomeForTest({
-  status = 'accepted',
-  failedGroups = [],
-  catalog = 'core',
-  densePromise = null,
-} = {}) {
-  const epoch = ++_trackingRefreshEpoch;
-  _lastTrackingRefreshOutcome = { epoch, status, failedGroups: [...failedGroups] };
-  _params.catalog = catalog;
-  _denseLoadPromise = densePromise || Promise.resolve({ status: 'not-requested' });
+function _renderPoints() {
+  if (!_engine?.map) return;
+  _setSource(SRC_POINTS, _pointFeatures());
 }
 
-/** The tracked satellite's current ECEF sample — the value the docked-cluster
- *  scan measures against. Exposed so a test can place neighbours around it. */
-export function _trackedFrameCartesianForTest() {
-  return _trackedFrameCartesian;
+function _renderOrbits(nowDate = new Date(_now())) {
+  if (!_engine?.map) return;
+  if (!satelliteVisualsVisible(_enabled, _params.showOrbits)) {
+    _setSource(SRC_ORBITS, EMPTY_FC);
+    return;
+  }
+  const features = [];
+  for (const [noradId, orbit] of _orbitPaths) {
+    const coordinates = pathToLonLat(orbit.path, {
+      lonShiftDeg: orbitFrameLongitudeShiftDeg(orbit.gmstAtBake, nowDate),
+    });
+    if (coordinates.length < 2) continue;
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates },
+      properties: { id: noradId, color: orbit.color, width: orbit.width },
+    });
+  }
+  _setSource(SRC_ORBITS, fc(features));
 }
 
-/** Invoke the same callback registered on `scene.preRender` in production. */
-export function _runSatellitePreRenderForTest() {
-  _preRenderTick();
+function _renderTracked() {
+  if (!_engine?.map) return;
+  const pos = _trackedNorad !== null ? _trackedFrameGeo : null;
+  if (!_enabled || !pos || !_trackedLabelModel) {
+    _setSource(SRC_TRACKED, EMPTY_FC);
+    return;
+  }
+  const sat = _catalog.get(_trackedNorad);
+  _setSource(SRC_TRACKED, fc([{
+    type: 'Feature',
+    id: _trackedNorad,
+    geometry: { type: 'Point', coordinates: [pos.longitude, pos.latitude] },
+    properties: {
+      id: _trackedNorad,
+      name: _trackedLabelModel.title,
+      klass: satelliteClassLabel(sat?.group, { isIss: _trackedNorad === ISS_NORAD }),
+      altKm: Math.round((pos.altitude || 0) / 1000),
+      label: [_trackedLabelModel.title, ..._trackedLabelModel.details].join('\n'),
+    },
+  }]));
 }
 
 /**
- * Seed the minimum render state a dense-catalog load needs, so a test can
- * exercise the real async load/settle/fail path (and the row-control states it
- * drives) without constructing a WebGL viewer.
+ * Laço da camada (substitui o scene.preRender do Cesium):
+ * - frota core re-propagada a cada 1 s,
+ * - extras densos num orçamento round-robin (passada completa a cada ~5 s),
+ * - rastreado e seu cartão a cada tick (250 ms),
+ * - anéis orbitais realinhados ao GMST a cada ~1 s.
+ */
+function _tick() {
+  if (!_enabled) return;
+  const nowMs = _now();
+  const date = new Date(nowMs);
+  _tickCount++;
+  let pointsDirty = false;
+  if (_params.showPoints && nowMs - _lastPropagation >= POSITION_UPDATE_MS) {
+    _propagateAll(date);
+    _lastPropagation = nowMs;
+    pointsDirty = true;
+  }
+  if (_params.showPoints && _denseIds.length) {
+    _propagateDenseChunk(date);
+    pointsDirty = true;
+  }
+  if (_trackedNorad !== null) {
+    _getTrackedFramePosition();
+    _renderTracked();
+  }
+  if (pointsDirty && nowMs - _lastPointsRender >= POSITION_UPDATE_MS) {
+    _lastPointsRender = nowMs;
+    _renderPoints();
+  }
+  if (_params.showOrbits && _orbitPaths.size && nowMs - _lastRingRotation >= RING_ROTATION_MS) {
+    _renderOrbits(date);
+    _lastRingRotation = nowMs;
+  }
+}
+let _lastPointsRender = 0;
+
+function _startLoop() {
+  if (_tickTimer || typeof setInterval !== 'function' || !_engine?.map) return;
+  _tickTimer = setInterval(_tick, TICK_MS);
+}
+
+function _stopLoop() {
+  if (_tickTimer) clearInterval(_tickTimer);
+  _tickTimer = null;
+}
+
+function _onKeyDown(e) {
+  if (_enabled && e.key === 'Escape' && _trackedNorad) {
+    _cancelPendingTrackingRestore();
+    _clearTracking(false, { origin: 'user' });
+  }
+}
+
+/** Clique no vazio desmarca; clique noutra camada não mexe no nosso rastreio. */
+function _onEngineClick(event) {
+  if (!_enabled || !_trackedNorad || !_engine) return;
+  const hit = _host?.pickAt?.(event.x, event.y);
+  if (hit) return; // um satélite (tratado pelo click da definição) ou outra camada
+  let features = [];
+  try {
+    features = _engine.pick?.(event.x, event.y, { radius: 4 }) || [];
+  } catch {
+    features = [];
+  }
+  // Feições de outra camada do app (prefixo dg-) = não é "espaço vazio".
+  if (features.some((f) => String(f?.layer?.id || '').startsWith('dg-') && !String(f.layer.id).startsWith('dg-slot'))) return;
+  _cancelPendingTrackingRestore();
+  _clearTracking(false, { origin: 'user' });
+}
+
+/** Outra camada assumiu a câmera: largamos o nosso rastreio sem mexer no dela. */
+function _onTrackedChange(target) {
+  if (!_enabled || !_trackedNorad || !_trackTarget) return;
+  if (target && target !== _trackTarget) {
+    _clearTracking(true, { origin: target.gevSelectionOrigin || 'programmatic' });
+  }
+}
+
+function _installInteraction() {
+  if (!_engine?.on || _engineListeners.length) return;
+  _engineListeners = [
+    _engine.on('click', _onEngineClick),
+    _engine.on('trackedchange', _onTrackedChange),
+  ];
+  if (typeof document !== 'undefined') document.addEventListener('keydown', _onKeyDown);
+}
+
+function _removeInteraction() {
+  for (const off of _engineListeners) off?.();
+  _engineListeners = [];
+  if (typeof document !== 'undefined') document.removeEventListener('keydown', _onKeyDown);
+}
+
+function _attachToEngine(engine) {
+  _engine = engine || null;
+  if (!_engine?.map) return;
+  _host = getActiveLayerHost();
+  if (!_host) {
+    console.warn('[Data:Satellites] anfitrião de camadas MapLibre ausente');
+    return;
+  }
+  _host.register(SATELLITES_LAYER_DEF);
+  _host.ensureAdded(SATELLITES_LAYER_DEF);
+}
+
+function _setHostVisible(visible) {
+  if (_host && _engine?.map) _host.setVisible(LAYER_ID, visible);
+}
+
+function _renderAll() {
+  _renderPoints();
+  _renderOrbits();
+  _renderTracked();
+}
+
+// ------------------------------------------------------------ test seams
+
+/**
+ * Seed the minimum state a dense-catalog load needs, so a test can exercise the
+ * real async load/settle/fail path (and the row-control states it drives)
+ * without a map.
  * @param {{ catalog?: 'core'|'dense', showPoints?: boolean }} [options]
  */
 export function _setDenseCatalogStateForTest({ catalog = 'core', showPoints = true } = {}) {
-  _viewer = { scene: { primitives: { add: (p) => p, remove() {} } } };
-  // Neutralize the shared world-overlay host: these tests exercise catalog and
-  // row-control logic, not the ISS callout.
-  _overlayHost = { setEntries() {}, setVisible() {}, clearSource() {} };
-  _pointCollection = {
-    show: true,
-    add: (opts) => ({ ...opts }),
-    remove() {},
-    removeAll() {},
-  };
+  _engine = null;
+  _host = null;
   _catalog = new Map();
   _points = new Map();
   _detectionObjects = new Map();
@@ -1353,6 +1322,8 @@ export function _setDenseCatalogStateForTest({ catalog = 'core', showPoints = tr
   _denseError = null;
   _catalogRevision++;
   _trackedNorad = null;
+  _trackTarget = null;
+  _trackedLabelModel = null;
   _cancelPendingTrackingRestore();
   _params = { catalog, showPoints, showOrbits: false };
   _enabled = true;
@@ -1361,10 +1332,9 @@ export function _setDenseCatalogStateForTest({ catalog = 'core', showPoints = tr
 /** Tear the dense seam back down so ordering cannot leak into other tests. */
 export function _clearDenseCatalogStateForTest() {
   _rowControlsListener = null;
-  _overlayHost = DEFAULT_OVERLAY_HOST;
   _orbitPaths = new Map();
-  _viewer = null;
-  _pointCollection = null;
+  _engine = null;
+  _host = null;
   _catalog = new Map();
   _points = new Map();
   _denseIds = [];
@@ -1381,36 +1351,93 @@ export function _catalogGroupForTest(noradId) {
   return _catalog.get(Number(noradId))?.group;
 }
 
-/** Seed ISS/tracking state while retaining the production track and host paths. */
-export function _setSatelliteLabelLifecycleStateForTest({
-  viewer,
-  satrec,
-  point,
-  overlayHost,
+/**
+ * Seed a catalog (and optional fake engine) while retaining the production
+ * tracking, label and context paths.
+ * @param {object} state
+ * @param {Array<{noradId:number,name:string,satrec:object,group?:string}>} state.satellites
+ * @param {object} [state.engine] Fake engine ({track, trackedTarget, flyToCamera}).
+ * @param {() => number} [state.now] Deterministic clock (ms).
+ * @param {boolean} [state.preservePending]
+ * @param {Map<number, {x:number,y:number,z:number}>|null} [state.positions]
+ *   Optional fixed ECEF positions (neighbours of a docked cluster); a getter
+ *   function per id is also accepted so a test can place a point relative to
+ *   the tracked sample.
+ */
+export function _seedSatellitesForTest({
+  satellites,
+  engine = null,
+  now = null,
   preservePending = false,
+  positions = null,
+  params = {},
 }) {
-  _viewer = viewer;
-  _catalog = new Map([[ISS_NORAD, { name: 'ISS (ZARYA)', satrec, group: 'stations' }]]);
-  _points = new Map([[ISS_NORAD, point]]);
-  _orbitPaths = new Map([[
-    ISS_NORAD,
-    { primitive: { show: true, modelMatrix: new Cesium.Matrix4() }, gmstAtBake: 0 },
-  ]]);
+  _engine = engine;
+  _host = null;
+  _nowForTest = now;
+  _catalog = new Map();
+  _points = new Map();
+  _orbitPaths = new Map();
+  _detectionObjects = new Map();
+  const date = new Date(_now());
+  for (const sat of satellites) {
+    _catalog.set(sat.noradId, { name: sat.name, satrec: sat.satrec, group: sat.group || 'stations' });
+    const fixed = positions?.get(sat.noradId);
+    if (fixed) {
+      const record = { longitude: 0, latitude: 0, altitude: 0, speedMps: null };
+      Object.defineProperty(record, 'position', {
+        get: typeof fixed === 'function' ? fixed : () => fixed,
+        enumerable: true,
+      });
+      _points.set(sat.noradId, record);
+    } else {
+      const pos = _sampleAt(sat.satrec, date);
+      if (pos) _points.set(sat.noradId, pos);
+    }
+  }
+  _dockedCompanions = new Set();
+  _lastDockedScanMs = Number.NEGATIVE_INFINITY;
   _trackedNorad = null;
-  _trackedEntity = null;
+  _trackTarget = null;
+  _trackedLabelModel = null;
   if (!preservePending) _cancelPendingTrackingRestore();
-  _trackedFrameNumber = -1;
+  _trackedFrameMs = Number.NEGATIVE_INFINITY;
   _trackedFrameGeo = null;
   _enabled = true;
-  _params = { catalog: 'core', showPoints: true, showOrbits: true };
-  _overlayHost = overlayHost || DEFAULT_OVERLAY_HOST;
-  _syncIssOverlay();
+  _params = { catalog: 'core', showPoints: true, showOrbits: true, ...params };
 }
 
-/** Exercise production ISS tracking from the cached catalog and point. */
-export function _trackIssForTest() {
-  _trackSatellite(ISS_NORAD);
-  return _trackedEntity;
+/** Seed catalog authority and optional dense settlement for share-Follow tests. */
+export function _setSatelliteTrackingRefreshOutcomeForTest({
+  status = 'accepted',
+  failedGroups = [],
+  catalog = 'core',
+  densePromise = null,
+} = {}) {
+  const epoch = ++_trackingRefreshEpoch;
+  _lastTrackingRefreshOutcome = { epoch, status, failedGroups: [...failedGroups] };
+  _params.catalog = catalog;
+  _denseLoadPromise = densePromise || Promise.resolve({ status: 'not-requested' });
+}
+
+/** Run one tick of the layer loop (propagation, tracked sample, card). */
+export function _runSatelliteTickForTest() {
+  _tick();
+}
+
+/** The tracked satellite's current ECEF sample (what the docked scan measures against). */
+export function _trackedFramePositionForTest() {
+  return _trackedFrameGeo?.position ?? null;
+}
+
+/** Whether the ambient "ISS" label would be drawn now. */
+export function _issLabelVisibleForTest() {
+  return _issLabelVisible();
+}
+
+/** Current orbit rings (noradId list) — which rings the layer would draw. */
+export function _orbitPathIdsForTest() {
+  return [..._orbitPaths.keys()];
 }
 
 /** Return the deferred restore target held by the production tracker. */
@@ -1430,40 +1457,22 @@ export function _removeSatelliteTrackingCandidateForTest(noradId) {
   _points.delete(id);
 }
 
-/** Exercise production untrack and restore the default host seam. */
-export function _clearSatelliteLabelLifecycleForTest() {
+/** Exercise production untrack and reset the seeded state. */
+export function _clearSatelliteSeedForTest() {
   _clearTracking();
   _enabled = false;
-  _overlayHost.clearSource(ISS_OVERLAY_SOURCE_ID);
-  _overlayHost.setVisible(ISS_OVERLAY_SOURCE_ID, false);
-  _overlayHost = DEFAULT_OVERLAY_HOST;
-}
-
-/** Focus alpha for satellite points, inside the existing shared preRender tick. */
-function _updatePointFocus(nowMs) {
-  const target = getFocusTarget();
-  if (!_params.showPoints || !focusPassIsNeeded(target, _activeFocusCount)) return;
-  if (nowMs - _lastFocusUpdate < 80) return;
-  _lastFocusUpdate = nowMs;
-  const scene = _viewer.scene;
-  const camera = _viewer.camera;
-  const result = applySatellitePointFocusDeemphasis({
-    points: _points,
-    trackedId: _trackedNorad,
-    target,
-    previousActiveCount: _activeFocusCount,
-    nowMs,
-    screenPositionFor: (position) => (
-      Cesium.SceneTransforms.worldToWindowCoordinates(scene, position, _scratchFocusScreen)
-    ),
-    cameraDistanceFor: (position) => Cesium.Cartesian3.distance(camera.positionWC, position),
-    baseColorFor: (noradId) => _pointStyleFor(noradId, _catalog.get(noradId)?.group).color,
-  });
-  _activeFocusCount = result.activeCount;
+  _engine = null;
+  _nowForTest = null;
+  _catalog = new Map();
+  _points = new Map();
+  _orbitPaths = new Map();
 }
 
 /**
  * Apply the gated satellite-point focus pass through the production color path.
+ * Pure (callbacks injected): no MapLibre dependency. Kept for the shared
+ * focus-resume gate tests; the MapLibre render does not dim points around the
+ * tracked satellite.
  * @param {object} input
  * @returns {{writes:number,transitioning:boolean,activeCount:number,ran:boolean}}
  */
@@ -1490,8 +1499,6 @@ export function applySatellitePointFocusDeemphasis({
     const distanceScale = nearFarScalarValueAtDistance(point.scaleByDistance, cameraDistance);
     const halfExtentPx = (point.pixelSize || 5) * distanceScale * 0.5;
     const focus = advanceSpriteFocus(point, {
-      // Hidden points still release toward identity, preventing stale dim
-      // alpha if a catalog/presentation toggle later makes them visible.
       screenPosition: point.show === false ? null : screenPositionFor(point.position),
       cameraDistance,
       nowMs,
@@ -1505,8 +1512,6 @@ export function applySatellitePointFocusDeemphasis({
     const base = baseColorFor(noradId);
     const alpha = base.alpha * focus.factor;
     if (focusAlphaNeedsWrite(point.color?.alpha, alpha, params)) {
-      // Point stays continuously present at the non-zero emphasis floor; its
-      // own alpha yields around the tracked target, independent of draw order.
       point.color = base.withAlpha(alpha);
       writes += 1;
     }
@@ -1514,19 +1519,20 @@ export function applySatellitePointFocusDeemphasis({
   return { writes, transitioning, activeCount, ran: true };
 }
 
+// ------------------------------------------------------------ o módulo
 
 const satellitesLayer = {
-  id: 'satellites',
+  id: LAYER_ID,
   name: 'Satellites',
   icon: '🛰️',
   source: 'CelesTrak',
-  updateInterval: 0, // We use preRender for real-time updates, not interval polling
-  refreshInterval: 5 * 60 * 1000, // Catalog data refresh; propagation remains preRender-owned.
+  maplibre: true,
+  updateInterval: 0, // real-time updates come from the layer loop, not interval polling
+  refreshInterval: 5 * 60 * 1000, // Catalog data refresh; propagation remains loop-owned.
 
-  async init(viewer) {
+  /** @param {object} engine motor MapLibre (src/maplibre/engine.js) */
+  async init(engine) {
     _abortActiveUpdates();
-    clearFocusTarget('satellites');
-    _viewer = viewer;
     _catalog = new Map();
     _points = new Map();
     _detectionObjects = new Map();
@@ -1534,16 +1540,13 @@ const satellitesLayer = {
     _count = 0;
     _lastUpdate = null;
     _trackedNorad = null;
+    _trackTarget = null;
+    _trackedLabelModel = null;
     _cancelPendingTrackingRestore();
-    _trackedEntity = null;
-    _trackedFrameNumber = -1;
+    _trackedFrameMs = Number.NEGATIVE_INFINITY;
     _trackedFrameGeo = null;
-    _trackedFrameNowForTest = null;
-    _lastFocusUpdate = 0;
-    _activeFocusCount = 0;
+    _nowForTest = null;
     _enabled = false;
-    _overlayHost.clearSource(ISS_OVERLAY_SOURCE_ID);
-    _overlayHost.setVisible(ISS_OVERLAY_SOURCE_ID, false);
     // Dense extras rebuild via update() when _params.catalog === 'dense'
     // (the catalog-mode preference itself is sticky across init/destroy).
     _denseIds = [];
@@ -1553,68 +1556,39 @@ const satellitesLayer = {
     _denseStatus = 'idle';
     _denseError = null;
     _catalogRevision++;
-
-    // Point primitives for satellite dots
-    _pointCollection = new Cesium.PointPrimitiveCollection();
-    viewer.scene.primitives.add(_pointCollection);
-
-    _installClickHandler(viewer);
-
-    // Pre-render listener for real-time position updates
-    // (fleet propagation + tracked per-frame dot + orbit ring GMST rotation)
-    _preRenderListener = viewer.scene.preRender.addEventListener(_preRenderTick);
-
+    _attachToEngine(engine);
+    _installInteraction();
     console.log('[Data:Satellites] Initialized');
   },
 
-  enable(viewer) {
+  enable(engine) {
+    if (engine && engine !== _engine) _attachToEngine(engine);
     _enabled = true;
-    holdContinuousRender('satellites'); // per-frame animator (perf wave 2)
-    if (_pointCollection) _pointCollection.show = satelliteVisualsVisible(_enabled, _params.showPoints);
-    // Orbit ring primitives + persistent ISS host label — show them
-    for (const path of _orbitPaths.values()) path.primitive.show = satelliteVisualsVisible(_enabled, _params.showOrbits);
-    _syncIssOverlay();
-    // Re-attach input handlers and preRender propagation
-    _installClickHandler(viewer);
-    // Pick-ownership (H2): satellite dot ids are numeric NORAD catalog numbers;
-    // the registry hands predicates String()-coerced ids, so match via Number().
-    registerPickOwner('satellites', (pickedId) => {
+    _setHostVisible(true);
+    _installInteraction();
+    // Pick-ownership: satellite ids are numeric NORAD catalog numbers.
+    registerPickOwner(LAYER_ID, (pickedId) => {
       const norad = Number(pickedId);
       return Number.isFinite(norad) && _points.has(norad);
     });
-    if (!_preRenderListener && viewer) {
-      _preRenderListener = viewer.scene.preRender.addEventListener(_preRenderTick);
-    }
+    _renderAll();
+    _startLoop();
     _applyPendingTrackingRestore();
   },
 
-  disable(viewer) {
+  disable() {
     _abortActiveUpdates();
     _cancelPendingTrackingRestore();
-    _enabled = false;
-    releaseContinuousRender('satellites');
-    if (_pointCollection) _pointCollection.show = false;
-    for (const path of _orbitPaths.values()) path.primitive.show = false;
     _clearTracking();
-    _syncIssOverlay();
-    // Remove click handler + keydown listener + preRender propagation while disabled
-    if (_clickHandler) {
-      _clickHandler.destroy();
-      _clickHandler = null;
-    }
-    if (_trackedEntityChangedRemove) {
-      _trackedEntityChangedRemove();
-      _trackedEntityChangedRemove = null;
-    }
-    document.removeEventListener('keydown', _onKeyDown);
-    unregisterPickOwner('satellites');
-    if (_preRenderListener) {
-      _preRenderListener();
-      _preRenderListener = null;
-    }
+    _enabled = false;
+    _stopLoop();
+    _removeInteraction();
+    unregisterPickOwner(LAYER_ID);
+    _renderAll();
+    _setHostVisible(false);
   },
 
-  async update(viewer, { signal = null } = {}) {
+  async update(engine, { signal = null } = {}) {
     const trackingRefreshEpoch = ++_trackingRefreshEpoch;
     _lastTrackingRefreshOutcome = {
       epoch: trackingRefreshEpoch,
@@ -1650,43 +1624,33 @@ const satellitesLayer = {
       }
       console.log(`[Data:Satellites] Loaded ${results.map(r => `${r.tag}:${r.entries.length}`).join(' ')}`);
 
-      // CelesTrak outage guard (H3): if EVERY group failed, bail BEFORE clearing.
-      // Wiping the collection + catalog here would blank all 838 satellites while
-      // the chip still read "just now". Keep the existing (stale) catalog on
-      // screen and surface the outage instead — do NOT stamp _lastUpdate.
+      // CelesTrak outage guard: if EVERY group failed, bail BEFORE clearing —
+      // keep the existing (stale) catalog on screen and surface the outage
+      // instead; do NOT stamp _lastUpdate.
       if (results.every(r => !r.ok)) {
         _lastError = 'CelesTrak unreachable';
         console.warn('[Data:Satellites] All CelesTrak groups failed — keeping existing catalog, surfacing outage');
-        // Re-apply dense mode is skipped (no fresh core catalog); tracking untouched.
         return;
       }
 
-      // At least one group loaded — proceed with a fresh rebuild, but keep the
-      // partial outage visible at the layer control instead of presenting the
-      // reduced catalog as a fully healthy refresh.
       _lastError = failed.length
         ? `${failed.length} CelesTrak group${failed.length === 1 ? '' : 's'} unavailable`
         : null;
 
-      // Clear existing
-      _pointCollection.removeAll();
+      // Clear existing (the tracked subject survives: same NORAD re-resolved below)
       _points.clear();
-      for (const path of _orbitPaths.values()) viewer.scene.primitives.remove(path.primitive);
       _orbitPaths.clear();
       _catalog.clear();
       // The detection overlay caches one record per satellite and stamps its
-      // id/class at creation only. A rebuild can re-tag a satellite (a failed
-      // group shifts which one wins dedupe), so the cache must go with the
-      // catalog or those labels stay stale for the life of the session.
+      // id/class at creation only; the cache must go with the catalog.
       _detectionObjects.clear();
       _denseIds = [];
       _denseCursor = 0;
       _denseLoadController?.abort();
       _denseLoadController = null;
       _denseLoadToken++; // cancel any in-flight dense load against the old catalog
-      _syncIssOverlay();
 
-      const now = new Date();
+      const now = new Date(_now());
 
       // Process all TLE entries in CATALOG_GROUPS order
       const allEntries = [];
@@ -1696,75 +1660,46 @@ const satellitesLayer = {
 
       // Deduplicate by NORAD ID — first (most specific) group tag wins
       const seen = new Set();
-
       for (const entry of allEntries) {
         const satrec = twoline2satrec(entry.line1, entry.line2);
         if (!satrec || satrec.error !== 0) continue;
-
         const noradId = Number(satrec.satnum);
         if (seen.has(noradId)) continue;
         seen.add(noradId);
-
-        // Store in catalog
-        _catalog.set(noradId, {
-          name: entry.name,
-          satrec,
-          group: entry.group,
-        });
-
-        // Propagate initial position
-        const pos = propagatePosition(satrec, now);
+        _catalog.set(noradId, { name: entry.name, satrec, group: entry.group });
+        const pos = _sampleAt(satrec, now);
         if (!pos) continue;
-
-        const cartesian = Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, pos.altitude);
-
-        // Add point primitive (styling from the shared table, WS-D3)
-        const style = _pointStyleFor(noradId, entry.group);
-        const point = _pointCollection.add({
-          position: cartesian,
-          pixelSize: style.pixelSize,
-          color: style.color,
-          outlineColor: style.outlineColor,
-          outlineWidth: style.outlineWidth,
-          scaleByDistance: new Cesium.NearFarScalar(1e6, 1.5, 2e7, 0.6),
-          id: noradId,
-        });
-
-        _points.set(noradId, point);
+        _points.set(noradId, pos);
       }
 
-      // Show ISS orbital path by default
-      if (_catalog.has(ISS_NORAD)) {
-        _showOrbitPath(ISS_NORAD, POINT_STYLES.iss.color);
-        const issPath = _orbitPaths.get(ISS_NORAD);
-        if (issPath) issPath.primitive.show = _params.showOrbits;
-
-        _syncIssOverlay();
+      // Show ISS orbital path by default (and the tracked one, if it survived)
+      if (_catalog.has(ISS_NORAD)) _showOrbitPath(ISS_NORAD, POINT_STYLES.iss.color);
+      if (_trackedNorad !== null && _catalog.has(_trackedNorad)) {
+        _trackedFrameGeo = null;
+        _showOrbitPath(_trackedNorad, TRACKED_COLOR);
       }
 
       _count = _points.size;
       _catalogRevision++;
       _lastUpdate = Date.now();
-      _lastPropagation = Date.now();
+      _lastPropagation = _now();
       _lastTrackingRefreshOutcome = {
         epoch: trackingRefreshEpoch,
         status: failed.length ? 'partial' : 'accepted',
         failedGroups: [...failed],
       };
       console.log(`[Data:Satellites] ${_count} satellites active, ISS path shown`);
+      _renderAll();
 
       // Re-apply dense mode after a full catalog rebuild (fire-and-forget —
       // _loadDenseCatalog handles its own errors and token invalidation).
       _denseLoadPromise = _params.catalog === 'dense'
         ? _loadDenseCatalog({ signal: updateSignal })
         : Promise.resolve({ status: 'not-requested' });
-      // The catalog the published voice subject was resolved against is gone.
-      // Re-resolve it, or release the slot if the subject provably did not
-      // survive. Deliberately not awaited: it waits on dense settlement, and
-      // the rebuild must not block on that.
+      // Re-resolve the published voice subject, or release the slot if it
+      // provably did not survive. Not awaited: it waits on dense settlement.
       void _reconcileTrackedSubjectContext();
       _applyPendingTrackingRestore();
-
     } catch (e) {
       if (updateSignal.aborted || e?.name === 'AbortError') {
         throw new DOMException('Satellite update aborted', 'AbortError');
@@ -1775,40 +1710,20 @@ const satellitesLayer = {
     }
   },
 
-  destroy(viewer) {
+  destroy() {
     _abortActiveUpdates();
-    releaseContinuousRender('satellites'); // direct-destroy path (perf wave 2 fix)
     _enabled = false;
     _clearTracking();
     _cancelPendingTrackingRestore();
-    if (_clickHandler) {
-      _clickHandler.destroy();
-      _clickHandler = null;
-    }
-    if (_trackedEntityChangedRemove) {
-      _trackedEntityChangedRemove();
-      _trackedEntityChangedRemove = null;
-    }
-    document.removeEventListener('keydown', _onKeyDown);
-    unregisterPickOwner('satellites');
-    if (_preRenderListener) {
-      _preRenderListener();
-      _preRenderListener = null;
-    }
-    _overlayHost.clearSource(ISS_OVERLAY_SOURCE_ID);
-    _overlayHost.setVisible(ISS_OVERLAY_SOURCE_ID, false);
-    if (_pointCollection) {
-      viewer.scene.primitives.remove(_pointCollection);
-      _pointCollection = null;
-    }
-    // Orbit ring primitives are removed (and destroyed) here
-    for (const path of _orbitPaths.values()) {
-      viewer.scene.primitives.remove(path.primitive);
-    }
+    _stopLoop();
+    _removeInteraction();
+    unregisterPickOwner(LAYER_ID);
     _points.clear();
     _detectionObjects.clear();
     _orbitPaths.clear();
     _catalog.clear();
+    _renderAll();
+    _setHostVisible(false);
     _denseIds = [];
     _denseCursor = 0;
     _denseLoadToken++;
@@ -1819,19 +1734,22 @@ const satellitesLayer = {
     _count = 0;
     _lastUpdate = null;
     _lastError = null;
-    _lastFocusUpdate = 0;
-    _activeFocusCount = 0;
     _trackingRefreshEpoch += 1;
     _lastTrackingRefreshOutcome = {
       epoch: _trackingRefreshEpoch,
       status: 'destroyed',
       failedGroups: [],
     };
-    _viewer = null;
+    _engine = null;
+    _host = null;
   },
 
+  /**
+   * Objetos para o overlay de detecção. `position` é {x,y,z} ECEF; também
+   * trazem lon/lat/alt (graus, metros).
+   */
   getDetectableObjects(options = {}) {
-    if (!_pointCollection || !_pointCollection.show) return [];
+    if (!_enabled || !_params.showPoints) return [];
     // Dense extras are points-only: excluded from the detection overlay.
     const eligibleCount = Math.max(1, _points.size - _denseIds.length);
     const maxCount = Number.isFinite(options.maxCount)
@@ -1850,10 +1768,8 @@ const satellitesLayer = {
       if (!shouldTake) continue;
       if (!point.position) continue;
       const isTracked = noradId === _trackedNorad;
-      // A docked companion sits at the tracked subject's own position, so its
-      // mark and label would stack underneath the tracked card. It is listed on
-      // that card instead. Only members of the tracked cluster are affected —
-      // unrelated nearby satellites are never suppressed.
+      // A docked companion sits at the tracked subject's own position; it is
+      // listed on that card instead.
       if (!isTracked && _dockedCompanions.has(noradId)) continue;
       const cat = _catalog.get(noradId);
       let object = _detectionObjects.get(noradId);
@@ -1863,13 +1779,14 @@ const satellitesLayer = {
           id: cat?.name || `SAT-${noradId}`,
           type: 'SAT',
           // Human class ("NAV · GPS"), not the raw CelesTrak tag ("GPS-OPS").
-          // The detection canvas composites ABOVE the post-FX chain, so this
-          // is how class survives NVG/FLIR once the dot colors are collapsed.
           klass: satelliteClassLabel(cat?.group, { isIss: noradId === ISS_NORAD }),
         };
         _detectionObjects.set(noradId, object);
       }
       object.position = point.position;
+      object.lon = point.longitude;
+      object.lat = point.latitude;
+      object.alt = point.altitude;
       object.skipLabel = isTracked;
       result.push(object);
       if (result.length >= maxCount) break;
@@ -1881,7 +1798,7 @@ const satellitesLayer = {
    * Find a satellite by exact NORAD id (numeric string) or case-insensitive
    * name substring. Position is freshly propagated via SGP4.
    * @param {string|number} query NORAD id or partial name.
-   * @returns {{ noradId: number, name: string, position: Cesium.Cartesian3, latitude: number, longitude: number, altitudeM: number }|null}
+   * @returns {{ noradId: number, name: string, position: {x,y,z}, latitude: number, longitude: number, altitudeM: number }|null}
    */
   findByQuery(query) {
     if (query === null || query === undefined || !_catalog || _catalog.size === 0) return null;
@@ -1903,13 +1820,13 @@ const satellitesLayer = {
     if (noradId === null) return null;
 
     const sat = _catalog.get(noradId);
-    const pos = propagatePosition(sat.satrec, new Date());
+    const pos = _sampleAt(sat.satrec, new Date(_now()));
     if (!pos) return null;
 
     return {
       noradId,
       name: sat.name.trim(),
-      position: Cesium.Cartesian3.fromDegrees(pos.longitude, pos.latitude, pos.altitude),
+      position: pos.position,
       latitude: pos.latitude,
       longitude: pos.longitude,
       altitudeM: pos.altitude,
@@ -1920,7 +1837,7 @@ const satellitesLayer = {
    * Get positions of currently rendered satellites from per-point state
    * (no SGP4 re-propagation).
    * @param {number} [maxCount=300] Maximum entries to return.
-   * @returns {Array<{ id: number, label: string, position: Cesium.Cartesian3, latitude: number, longitude: number, altitudeM: number }>}
+   * @returns {Array<{ id: number, label: string, position: {x,y,z}, latitude: number, longitude: number, altitudeM: number }>}
    */
   getAllPositions(maxCount = 300) {
     const result = [];
@@ -1932,16 +1849,14 @@ const satellitesLayer = {
       if (!point.position) continue;
       // Dense extras are points-only — keep voice/framing lists to the core catalog.
       if (_denseIds.length > 0 && _catalog.get(noradId)?.group === 'dense') continue;
-      const carto = Cesium.Cartographic.fromCartesian(point.position);
-      if (!carto) continue;
       const sat = _catalog.get(noradId);
       result.push({
         id: noradId,
         label: sat ? sat.name.trim() : String(noradId),
         position: point.position,
-        latitude: Cesium.Math.toDegrees(carto.latitude),
-        longitude: Cesium.Math.toDegrees(carto.longitude),
-        altitudeM: carto.height,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        altitudeM: point.altitude,
       });
     }
     return result;
@@ -1955,7 +1870,7 @@ const satellitesLayer = {
    */
   trackById(noradId, { origin = 'programmatic' } = {}) {
     const id = Number(noradId);
-    if (!Number.isFinite(id) || !_viewer || !_catalog.has(id) || !_points.has(id)) return false;
+    if (!Number.isFinite(id) || !_catalog.has(id) || !_points.has(id)) return false;
     _cancelPendingTrackingRestore();
     _trackSatellite(id, { origin });
     return _trackedNorad === id;
@@ -2042,7 +1957,6 @@ const satellitesLayer = {
   getTrackedInfo() {
     if (_trackedNorad === null || !_catalog.has(_trackedNorad)) return null;
     const sat = _catalog.get(_trackedNorad);
-    // Per-frame cache (WS-D2) — same epoch as the dot/label/camera this frame.
     const pos = _getTrackedFramePosition();
     if (!pos) return null;
     return {
@@ -2052,6 +1966,13 @@ const satellitesLayer = {
       longitude: pos.longitude,
       altitudeM: pos.altitude,
     };
+  },
+
+  /** Cartão do rastreado {title, details[], accent} (antes: entity.gevLabelModel). */
+  getTrackedLabelModel() {
+    if (_trackedNorad === null) return null;
+    _getTrackedFramePosition();
+    return _trackedLabelModel ? { ..._trackedLabelModel, details: [..._trackedLabelModel.details] } : null;
   },
 
   /**
@@ -2073,21 +1994,19 @@ const satellitesLayer = {
     }
     if (params.showPoints !== undefined) {
       _params.showPoints = params.showPoints !== false;
-      if (_pointCollection) _pointCollection.show = satelliteVisualsVisible(_enabled, _params.showPoints);
+      _renderPoints();
     }
     if (params.showOrbits !== undefined) {
       _params.showOrbits = params.showOrbits !== false;
-      for (const path of _orbitPaths.values()) path.primitive.show = satelliteVisualsVisible(_enabled, _params.showOrbits);
-      _syncIssOverlay();
+      _renderOrbits();
+      _renderPoints(); // the ambient ISS label follows showOrbits
     }
     if (catalogChanged && catalog === 'dense') {
       _denseLoadPromise = _loadDenseCatalog();
     } else if (catalog === 'core') {
       if (catalogChanged) _removeDenseCatalog();
       // Any explicit request for core clears the error, even when the mode did
-      // NOT change: a failed dense load already reverted the param to core, so
-      // a Space Missions restore of an already-core snapshot would otherwise
-      // leave the user staring at a DENSE ✕ they never caused.
+      // NOT change (a failed dense load already reverted the param to core).
       _denseStatus = 'idle';
       _denseError = null;
     }
@@ -2109,7 +2028,7 @@ const satellitesLayer = {
     return true;
   },
 
-  /** @returns {{ catalog: string }} Current runtime params. */
+  /** @returns {{ catalog: string, showPoints: boolean, showOrbits: boolean, selectedSatTrackingId: number|null }} */
   getParams() {
     return {
       catalog: _params.catalog,
@@ -2121,25 +2040,16 @@ const satellitesLayer = {
 
   /**
    * Layer-row sub-controls (DataLayerManager row-controls contract): the DENSE
-   * catalog chip plus a class legend so the point colors are learnable without
-   * a new panel.
+   * catalog chip plus a class legend so the point colors are learnable.
    *
    * The chip is stateless — it declares the params to apply and the manager
-   * owns the write, so the Space Missions snapshot/restore path (which drives
-   * the same `catalog` param) stays the single source of truth and the chip
-   * always renders whatever the layer actually has.
-   *
-   * The chip reports the dense LOAD state, not the catalog param: the param
-   * flips synchronously while the Starlink shell takes seconds to arrive and
-   * frequently 502s, so ACTIVE means "dense points are on screen" and nothing
-   * less. The legend tally is cached against the catalog revision.
+   * owns the write. It reports the dense LOAD state, not the catalog param:
+   * ACTIVE means "dense points are on screen" and nothing less.
    * @returns {{ chips: Array<object>, legend: Array<object> }} Row controls.
    */
   getRowControls() {
     // A dependency owner (Space Missions) borrows this layer for TLE lookup
-    // with showPoints:false. Nothing is rendered, so a legend would describe an
-    // empty sky and a chip write would be silently reverted by that owner's
-    // restore. Surrender the row rather than lie about it.
+    // with showPoints:false. Nothing is rendered, so surrender the row.
     if (!_params.showPoints) return { chips: [], legend: [] };
 
     const loading = _denseStatus === 'loading';
@@ -2166,8 +2076,7 @@ const satellitesLayer = {
 
   /**
    * Install the manager's "row controls changed" callback. The dense load is
-   * asynchronous, so completion and failure have to push a re-render — nothing
-   * else would repaint this row before the 5-minute catalog refresh.
+   * asynchronous, so completion and failure have to push a re-render.
    * @param {(() => void)|null} listener Callback, or null to detach.
    */
   setRowControlsListener(listener) {
@@ -2186,71 +2095,6 @@ const satellitesLayer = {
     };
   },
 };
-
-function _onKeyDown(e) {
-  if (_enabled && e.key === 'Escape' && _trackedNorad) {
-    _cancelPendingTrackingRestore();
-    _clearTracking(false, { origin: 'user' });
-  }
-}
-
-function _installClickHandler(viewer) {
-  if (_clickHandler) return; // already installed
-
-  // Cross-layer untrack (H2, mirror of flights): if ANOTHER layer (flights,
-  // military, …) grabs the follow-camera, drop our tracking so the orbit ring /
-  // tracked entity don't orphan — without touching viewer.trackedEntity (the
-  // new owner controls it). Guarded so our OWN switch (viewer.trackedEntity
-  // briefly undefined mid-_trackSatellite) doesn't self-clear.
-  if (!_trackedEntityChangedRemove) {
-    _trackedEntityChangedRemove = viewer.trackedEntityChanged.addEventListener(() => {
-      if (!_enabled) return;
-      if (_trackedNorad && _viewer && _viewer.trackedEntity && _viewer.trackedEntity !== _trackedEntity) {
-        _clearTracking(true, {
-          origin: _viewer.trackedEntity?.gevSelectionOrigin || 'programmatic',
-        });
-      }
-    });
-  }
-
-  _clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  _clickHandler.setInputAction((click) => {
-    if (!_enabled) return;
-    const picked = viewer.scene.pick(click.position);
-
-    if (picked) {
-      // Clicking tracked entity itself — ignore
-      if (picked.id === _trackedEntity) return;
-
-      // Check if it's a satellite point (id is NORAD catalog number)
-      const prim = picked.primitive;
-      if (prim && prim.id != null) {
-        const noradId = Number(prim.id);
-        if (!isNaN(noradId) && _catalog.has(noradId)) {
-          _cancelPendingTrackingRestore();
-          _trackSatellite(noradId, { origin: 'user' });
-          return;
-        }
-      }
-    }
-
-    // A pick that belongs to a sibling layer (plane, vessel, station, CCTV
-    // camera…) is not "empty space" — leave OUR tracking (and crucially
-    // viewer.trackedEntity, which that sibling may have JUST set) alone (H2).
-    if (picked) {
-      const pickedId = resolvePickId(picked);
-      if (pickedId && isOwnedByOtherLayer('satellites', pickedId)) return;
-    }
-
-    // Clicked empty space — deselect
-    if (_trackedNorad) {
-      _cancelPendingTrackingRestore();
-      _clearTracking(false, { origin: 'user' });
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-
-  document.addEventListener('keydown', _onKeyDown);
-}
 
 /**
  * Next ISS pass for an observer. Requires the catalog to have loaded (the
@@ -2341,7 +2185,7 @@ function orbitTrackFromRecord(name, satrec) {
  * @param {string} tleText Three-line-element catalog text.
  * @param {string} query Mission or payload name.
  * @param {{launchTime?: string|null}} [options] Optional launch epoch for namesake rejection.
- * @returns {{noradId:number,name:string,current:object,periodSec:number,orbitPath:Cesium.Cartesian3[],positionAt:function(Date):object|null}|null}
+ * @returns {{noradId:number,name:string,current:object,periodSec:number,orbitPath:Array<{x:number,y:number,z:number}>,gmstAtBake:number,positionAt:function(Date):object|null}|null}
  */
 export function findSatelliteOrbitTrackInTle(tleText, query, options = {}) {
   const launchYear = Number.isFinite(Date.parse(options.launchTime))
@@ -2369,7 +2213,7 @@ export function findSatelliteOrbitTrackInTle(tleText, query, options = {}) {
  * Return the current propagated position and one-orbit path for a catalog satellite.
  * @param {string|number} query NORAD id or mission/payload name.
  * @param {{launchTime?: string|null}} [options] Optional launch epoch used to reject namesakes from another launch year.
- * @returns {{noradId:number,name:string,current:object,periodSec:number,orbitPath:Cesium.Cartesian3[],positionAt:function(Date):object|null}|null}
+ * @returns {{noradId:number,name:string,current:object,periodSec:number,orbitPath:Array<{x:number,y:number,z:number}>,gmstAtBake:number,positionAt:function(Date):object|null}|null}
  */
 export function getSatelliteOrbitTrack(query, options = {}) {
   if (query === null || query === undefined || !_catalog?.size) return null;

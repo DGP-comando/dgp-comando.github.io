@@ -12,37 +12,22 @@
  * Uso: node scripts/qa-estradas.mjs [--url http://localhost:5173] [--shot out.png]
  * Requer dev server rodando.
  */
-import puppeteer from 'puppeteer';
+import {
+  argValue, createReport, launchQaBrowser, openApp, setCamera, sleep, waitMapIdle, zoomGatedLayers,
+} from './lib/qaBrowser.mjs';
 
-const argv = process.argv;
-const arg = (name, def) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : def);
-const url = arg('--url', 'http://localhost:5173');
-const shot = arg('--shot', 'qa-estradas.png');
+const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
+const shot = argValue('--shot', 'qa-estradas.png');
 const LAYER_ID = 'datageo-estradas';
+// Só os layers da malha municipal (dg-estradas-0/1/outros), não os das conveniadas.
+const MALHA = '^dg-estradas-(\\d+|outros)$';
 
-const results = [];
-function check(name, pass, detail) {
-  results.push({ name, pass });
-  console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${name}${detail !== undefined ? ` — ${JSON.stringify(detail)}` : ''}`);
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const browser = await puppeteer.launch({
-  headless: 'new',
-  protocolTimeout: 300_000,
-  args: ['--no-sandbox', '--window-size=1440,900', '--disable-renderer-backgrounding',
-    '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows'],
-});
+const { check, finish } = createReport('qa-estradas');
+const { browser, page, errors } = await launchQaBrowser({ viewport: { width: 1440, height: 860 } });
 
 try {
-  const page = await browser.newPage();
-  const errors = [];
   page.on('console', (m) => { if (/datageo-estradas/.test(m.text())) console.log('   console:', m.text()); });
-  page.on('pageerror', (e) => errors.push(e.message));
-  await page.setViewport({ width: 1440, height: 860 });
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!window.__godsEyeView?.viewer, { timeout: 90_000 });
-  await sleep(10_000);
+  await openApp(page, url);
 
   // Antes de qualquer interação: é isto que o operador encontra ao abrir.
   // O HUD é construído sempre; quem liga e desliga é a classe `active` em
@@ -58,87 +43,48 @@ try {
   check('botão de foco começa desabilitado, sem município selecionado',
     primeiroFrame.focoDesabilitado === true, primeiroFrame);
 
-  const setView = (height) => page.evaluate((h) => {
-    const v = window.__godsEyeView.viewer;
-    v.camera.cancelFlight();
-    v.camera.setView({
-      destination: v.scene.globe.ellipsoid.cartographicToCartesian({
-        longitude: -49.27 * Math.PI / 180, latitude: -25.45 * Math.PI / 180, height: h,
-      }),
-      orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-    });
-  }, height);
-
-  // Conta os primitives VISÍVEIS da coleção da camada, por profundidade: só a
-  // raiz das estradas guarda COLEÇÕES (uma por célula), e cada célula guarda um
-  // primitive por classe. Um primitive é reconhecido por NÃO ser coleção:
-  // `geometryInstances` não serve, porque o Cesium libera as instâncias assim
-  // que o primitive fica pronto e o getter passa a devolver undefined.
-  const visibleGroups = () => page.evaluate(() => {
-    const gp = window.__godsEyeView.viewer.scene.groundPrimitives;
-    const isCollection = (x) => !!x && typeof x.get === 'function' && typeof x.length === 'number';
-    let cells = 0; let shown = 0; let hidden = 0;
-    for (let i = 0; i < gp.length; i++) {
-      const root = gp.get(i);
-      if (!root?.show || !isCollection(root)) continue;
-      for (let j = 0; j < root.length; j++) {
-        const cell = root.get(j);
-        if (!isCollection(cell)) continue;
-        cells++;
-        for (let k = 0; k < cell.length; k++) {
-          const p = cell.get(k);
-          if (!p || isCollection(p)) continue;
-          if (p.show) shown++; else hidden++;
-        }
-      }
-    }
-    return { cells, shown, hidden };
-  });
+  const setView = (alt) => setCamera(page, { lat: -25.45, lon: -49.27, alt });
 
   await setView(20_000);
   await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, true, { origin: 'user' }), LAYER_ID);
 
   const loaded = await page.evaluate(async (id) => {
-    const gev = window.__godsEyeView;
-    const mod = gev.dataManager.layers.get(id)?.module;
+    const mod = window.__godsEyeView.dataManager.layers.get(id)?.module;
     const t0 = performance.now();
     while (performance.now() - t0 < 120_000) {
       const stats = mod?.getStats?.() ?? {};
-      if (stats.count > 0) {
-        return { ms: Math.round(performance.now() - t0), count: stats.count, error: stats.error };
-      }
-      gev.viewer.scene.requestRender?.();
+      if (stats.count > 0) return { ms: Math.round(performance.now() - t0), count: stats.count, error: stats.error };
       await new Promise((r) => setTimeout(r, 250));
     }
     return { timedOut: true, stats: mod?.getStats?.() };
   }, LAYER_ID);
   check('células carregadas em Curitiba', !loaded.timedOut && loaded.count > 5_000, loaded);
 
-  const perto = await visibleGroups();
-  check('a 20 km urbanas e rurais estão visíveis', perto.shown > 0 && perto.hidden === 0, perto);
-  await sleep(2_000);
+  const perto = await zoomGatedLayers(page, MALHA);
+  check('a 20 km urbanas e rurais estão visíveis', perto.shown.length >= 2 && perto.gated.length === 0, perto);
+  await waitMapIdle(page);
+  await sleep(1_000);
   await page.screenshot({ path: shot });
   console.log('   screenshot:', shot);
 
   await setView(60_000);
-  await sleep(1_500);
-  const medio = await visibleGroups();
-  check('a 60 km as urbanas se escondem e as rurais ficam', medio.hidden > 0 && medio.shown > 0, medio);
+  await sleep(800);
+  const medio = await zoomGatedLayers(page, MALHA);
+  check('a 60 km as urbanas se escondem e as rurais ficam', medio.gated.length > 0 && medio.shown.length > 0, medio);
 
   await setView(400_000);
-  await sleep(1_500);
-  const longe = await page.evaluate(() => {
-    const gp = window.__godsEyeView.viewer.scene.groundPrimitives;
-    const shows = [];
-    for (let i = 0; i < gp.length; i++) shows.push(gp.get(i).show);
-    return shows;
-  });
-  check('acima do teto a coleção inteira fica oculta', longe.includes(false), longe);
+  await sleep(800);
+  const longe = await zoomGatedLayers(page, MALHA);
+  check('acima do teto a camada inteira fica oculta', longe.shown.length === 0 && longe.gated.length > 0, longe);
 
   // Foco num município GRANDE: Guarapuava (3.117 km²) só cabe na tela acima do
   // teto de 90 km das rurais, então é o caso que o botão precisa resolver.
-  await page.evaluate(() => window.__godsEyeView.dataManager.layers
-    .get('datageo-municipios')?.module?.openMunicipioFicha({ ibge: '4109401', nome: 'Guarapuava' }));
+  // Mesmo caminho da busca de município (ui.js): o dev server devolve a
+  // instância do próprio app do módulo.
+  await page.evaluate(async () => {
+    const { openMunicipioFicha } = await import('/src/maplibre/layers/municipios.js');
+    await openMunicipioFicha('4109401', 'Guarapuava');
+  });
   await sleep(1_500);
   const habilitado = await page.evaluate(() => ({
     disabled: document.getElementById('focus-municipio')?.disabled,
@@ -149,56 +95,39 @@ try {
 
   await page.click('#focus-municipio');
   await sleep(7_000);
-  const foco = await page.evaluate(() => {
-    const c = window.__godsEyeView.viewer.camera;
-    return { heightKm: Math.round(c.positionCartographic.height / 1000) };
-  });
-  const noFoco = await visibleGroups();
-  check('Guarapuava enquadrado fica ACIMA do teto de 90 km',
-    foco.heightKm > 90, foco);
+  const foco = await page.evaluate(() => ({ heightKm: Math.round(window.__godsEyeView.engine.getCameraView().alt / 1000) }));
+  const noFoco = await zoomGatedLayers(page, MALHA);
+  check('Guarapuava enquadrado fica ACIMA do teto de 90 km', foco.heightKm > 90, foco);
   check('mesmo assim as duas classes aparecem: o foco suspende os tetos',
-    noFoco.shown > 0 && noFoco.hidden === 0, { ...foco, ...noFoco });
+    noFoco.shown.length >= 2 && noFoco.gated.length === 0, { ...foco, ...noFoco });
 
   // Sair da divisa desarma o foco sozinho: os tetos voltam a valer.
   await setView(120_000);
   await sleep(2_500);
-  const foraDaDivisa = await page.evaluate(() => {
-    const gp = window.__godsEyeView.viewer.scene.groundPrimitives;
-    const shows = [];
-    for (let i = 0; i < gp.length; i++) shows.push(gp.get(i).show);
-    return shows;
-  });
-  check('fora da divisa o foco se desarma e o teto volta a valer',
-    foraDaDivisa.includes(false), foraDaDivisa);
+  const foraDaDivisa = await zoomGatedLayers(page, MALHA);
+  check('fora da divisa o foco se desarma e o teto volta a valer', foraDaDivisa.gated.length > 0, foraDaDivisa);
 
   // Reset: gira e inclina a câmera antes, para provar que o botão restaura
   // norte para cima e vista ortogonal, não só a altura.
-  await page.evaluate(() => {
-    const v = window.__godsEyeView.viewer;
-    v.camera.setView({
-      destination: v.scene.globe.ellipsoid.cartographicToCartesian({
-        longitude: -49.27 * Math.PI / 180, latitude: -25.45 * Math.PI / 180, height: 15_000,
-      }),
-      orientation: { heading: 2.1, pitch: -0.5, roll: 0 },
-    });
-  });
+  await setCamera(page, { lat: -25.45, lon: -49.27, alt: 15_000, heading: 120, pitch: -30 });
   await page.click('#reset-parana-view');
   await sleep(6_000);
   const reset = await page.evaluate(() => {
-    const c = window.__godsEyeView.viewer.camera;
-    const carto = c.positionCartographic;
+    const v = window.__godsEyeView.engine.getCameraView();
     return {
-      heightKm: Math.round(carto.height / 1000),
-      lat: +(carto.latitude * 180 / Math.PI).toFixed(2),
-      lon: +(carto.longitude * 180 / Math.PI).toFixed(2),
-      headingDeg: +(c.heading * 180 / Math.PI).toFixed(1),
-      pitchDeg: +(c.pitch * 180 / Math.PI).toFixed(1),
+      heightKm: Math.round(v.alt / 1000),
+      lat: +v.targetLat.toFixed(2),
+      lon: +v.targetLon.toFixed(2),
+      headingDeg: +(((v.heading % 360) + 360) % 360).toFixed(1),
+      pitchDeg: +v.pitch.toFixed(1),
     };
   });
   const norteCima = reset.headingDeg < 0.5 || reset.headingDeg > 359.5;
+  // O enquadramento é o bbox do PR (flyToBounds com folga): o centro fica em
+  // torno de (-24.6, -51.3) e a altura depende do tamanho da janela.
   check('reset volta ao Paraná inteiro, norte para cima e ortogonal',
-    Math.abs(reset.heightKm - 900) < 20 && norteCima && Math.abs(reset.pitchDeg + 90) < 1
-      && Math.abs(reset.lat + 24.7) < 0.2 && Math.abs(reset.lon + 51.6) < 0.2,
+    reset.heightKm > 300 && reset.heightKm < 2_500 && norteCima && Math.abs(reset.pitchDeg + 90) < 1
+      && Math.abs(reset.lat + 24.62) < 0.5 && Math.abs(reset.lon + 51.32) < 0.5,
     reset);
 
   await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, false, { origin: 'user' }), LAYER_ID);
@@ -207,6 +136,4 @@ try {
   await browser.close();
 }
 
-const passed = results.filter((r) => r.pass).length;
-console.log(`\nqa-estradas: ${passed}/${results.length} passed`);
-process.exit(passed === results.length ? 0 : 1);
+finish();

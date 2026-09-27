@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as Cesium from 'cesium';
 import { createHybridAnnotationRenderer } from './hybridAnnotationRenderer.js';
 
 class FakeClassList {
@@ -139,47 +138,48 @@ function findAnnotationGroup(document) {
   };
 }
 
-function cameraLookingAt(lon, lat) {
-  const target = Cesium.Cartesian3.fromDegrees(lon, lat);
-  const radial = Cesium.Cartesian3.normalize(target, new Cesium.Cartesian3());
-  const position = Cesium.Cartesian3.multiplyByScalar(
-    radial,
-    Cesium.Cartesian3.magnitude(target) + 1_000_000,
-    new Cesium.Cartesian3(),
-  );
-  const direction = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.subtract(target, position, new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
-  );
-  const right = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.cross(direction, Cesium.Cartesian3.UNIT_Z, new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
-  );
-  const up = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.cross(right, direction, new Cesium.Cartesian3()),
-    new Cesium.Cartesian3(),
-  );
-  const frustum = new Cesium.PerspectiveFrustum({
-    fov: Cesium.Math.toRadians(60),
-    aspectRatio: 1280 / 720,
-    near: 1,
-    far: 20_000_000,
-  });
-  return {
-    positionWC: position,
-    directionWC: direction,
-    rightWC: right,
-    upWC: up,
-    viewMatrix: Cesium.Matrix4.computeView(
-      position,
-      direction,
-      up,
-      right,
-      new Cesium.Matrix4(),
-    ),
-    frustum,
-    positionCartographic: { height: 1_000_000 },
+/**
+ * Motor MapLibre falso: projeção linear em torno de (lon0, lat0) e um mapa que
+ * guarda fontes/layers GeoJSON, o bastante para os dois sub-renderizadores.
+ */
+function fakeViewer(lon0, lat0) {
+  const sources = new Map();
+  const layers = new Map();
+  const map = {
+    getSource: (id) => sources.get(id),
+    addSource(id, spec) {
+      const source = {
+        data: spec.data,
+        setData(data) {
+          if (map.failNextSetData) {
+            map.failNextSetData = false;
+            throw new Error('setData failed');
+          }
+          source.data = data;
+        },
+      };
+      sources.set(id, source);
+    },
+    removeSource: (id) => sources.delete(id),
+    getLayer: (id) => layers.get(id),
+    addLayer: (spec) => layers.set(spec.id, spec),
+    removeLayer: (id) => layers.delete(id),
+    setPaintProperty() {},
+    failNextSetData: false,
   };
+  const project = (lon, lat) => ({ x: 640 + (lon - lon0) * 20, y: 360 - (lat - lat0) * 20, visible: true });
+  const viewer = {
+    map,
+    container: { clientWidth: 1280, clientHeight: 720 },
+    trackedTarget: null,
+    project,
+    getCameraView: () => ({ alt: 1_000_000 }),
+    on: () => () => {},
+    requestRender() {},
+  };
+  /** Feições desenhadas no mapa (fonte dg-annotations). */
+  const worldFeatures = () => [...sources.entries()].find(([id]) => id.startsWith('dg-annotations'))?.[1]?.data?.features || [];
+  return { viewer, map, project, worldFeatures };
 }
 
 /** Install the browser globals both renderers touch, restored after the test. */
@@ -187,16 +187,13 @@ function installBrowserGlobals(t) {
   const originalDocument = globalThis.document;
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   const originalWindow = globalThis.window;
-  const originalBrowserConstructors = new Map([
-    ['HTMLCanvasElement', globalThis.HTMLCanvasElement],
-    ['HTMLImageElement', globalThis.HTMLImageElement],
-    ['ImageBitmap', globalThis.ImageBitmap],
-    ['OffscreenCanvas', globalThis.OffscreenCanvas],
-  ]);
   globalThis.document = fakeDocument();
-  globalThis.requestAnimationFrame = (callback) => { callback(); return 1; };
+  // Sem loop contínuo nos testes: o rAF do callout roda na hora, o do pulso nunca.
+  globalThis.requestAnimationFrame = (callback) => {
+    if (callback.length === 0) callback();
+    return 1;
+  };
   globalThis.window = { setTimeout: (fn) => { fn(); return 1; } };
-  for (const name of originalBrowserConstructors.keys()) globalThis[name] = class {};
   t.after(() => {
     if (originalDocument === undefined) delete globalThis.document;
     else globalThis.document = originalDocument;
@@ -204,44 +201,7 @@ function installBrowserGlobals(t) {
     else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
     if (originalWindow === undefined) delete globalThis.window;
     else globalThis.window = originalWindow;
-    for (const [name, original] of originalBrowserConstructors) {
-      if (original === undefined) delete globalThis[name];
-      else globalThis[name] = original;
-    }
   });
-}
-
-/** A viewer whose scene/camera is just enough for both sub-renderers. */
-function fakeViewer(lon, lat) {
-  const camera = cameraLookingAt(lon, lat);
-  const dataSources = [];
-  const scene = {
-    camera,
-    canvas: { clientWidth: 1280, clientHeight: 720, width: 1280, height: 720 },
-    frameState: { mode: Cesium.SceneMode.SCENE3D },
-    clampToHeightSupported: true,
-    clampToHeight: (world) => world,
-    postRender: { addEventListener() {}, removeEventListener() {} },
-  };
-  return {
-    dataSources,
-    viewer: {
-      scene,
-      camera,
-      trackedEntity: null,
-      dataSources: {
-        add(dataSource) {
-          dataSources.push(dataSource);
-          return dataSource;
-        },
-        remove(dataSource) {
-          const index = dataSources.indexOf(dataSource);
-          if (index >= 0) dataSources.splice(index, 1);
-          return index >= 0;
-        },
-      },
-    },
-  };
 }
 
 function annotationGroups(svg) {
@@ -256,55 +216,25 @@ function naiveRingCentroid(ring) {
   return { lon: totals.lon / ring.length, lat: totals.lat / ring.length, height: 0 };
 }
 
-test('hybrid outline upgrade preserves the screen group and adds world geometry', (t) => {
-  const originalDocument = globalThis.document;
-  const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
-  const originalBrowserConstructors = new Map([
-    ['HTMLCanvasElement', globalThis.HTMLCanvasElement],
-    ['HTMLImageElement', globalThis.HTMLImageElement],
-    ['ImageBitmap', globalThis.ImageBitmap],
-    ['OffscreenCanvas', globalThis.OffscreenCanvas],
-  ]);
-  globalThis.document = fakeDocument();
-  globalThis.requestAnimationFrame = (callback) => { callback(); return 1; };
-  for (const name of originalBrowserConstructors.keys()) globalThis[name] = class {};
-  t.after(() => {
-    if (originalDocument === undefined) delete globalThis.document;
-    else globalThis.document = originalDocument;
-    if (originalRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
-    else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-    for (const [name, original] of originalBrowserConstructors) {
-      if (original === undefined) delete globalThis[name];
-      else globalThis[name] = original;
-    }
-  });
+const TEXAS = [[-106, 25], [-93, 25], [-93, 36], [-106, 36], [-106, 25]];
 
-  const camera = cameraLookingAt(-99, 31);
-  const dataSources = [];
-  const scene = {
-    camera,
-    canvas: { clientWidth: 1280, clientHeight: 720, width: 1280, height: 720 },
-    frameState: { mode: Cesium.SceneMode.SCENE3D },
-    clampToHeightSupported: true,
-    clampToHeight: (world) => world,
-    postRender: { addEventListener() {}, removeEventListener() {} },
+function texasArea(id) {
+  return {
+    id,
+    type: 'area',
+    color: 'primary',
+    label: 'Texas',
+    alpha: 1,
+    anchor: naiveRingCentroid(TEXAS),
+    ring: TEXAS,
+    footprintKind: 'area',
+    synthesized: false,
   };
-  const viewer = {
-    scene,
-    camera,
-    trackedEntity: null,
-    dataSources: {
-      add(dataSource) {
-        dataSources.push(dataSource);
-        return dataSource;
-      },
-      remove(dataSource) {
-        const index = dataSources.indexOf(dataSource);
-        if (index >= 0) dataSources.splice(index, 1);
-        return index >= 0;
-      },
-    },
-  };
+}
+
+test('hybrid outline upgrade preserves the screen group and adds world geometry', (t) => {
+  installBrowserGlobals(t);
+  const { viewer, project, worldFeatures } = fakeViewer(-99, 31);
   const renderer = createHybridAnnotationRenderer(viewer);
   const anno = {
     id: 'anno-hybrid-fb3',
@@ -323,27 +253,16 @@ test('hybrid outline upgrade preserves the screen group and adds world geometry'
   const originalCallout = before.group.querySelector('.gev-anno-callout');
   const originalDot = before.group.querySelector('.gev-anno-dot');
   assert.equal(before.group.querySelectorAll('.gev-anno-ring').length, 2);
-  assert.equal(dataSources.length, 1);
-  assert.equal(dataSources[0].entities.values.length, 0);
+  assert.equal(worldFeatures().length, 0, 'a pending area draws nothing on the map yet');
 
-  const ring = [
-    [-106, 25],
-    [-93, 25],
-    [-93, 36],
-    [-106, 36],
-    [-106, 25],
-  ];
-  const centroid = naiveRingCentroid(ring);
-  anno.ring = ring;
+  const centroid = naiveRingCentroid(TEXAS);
+  anno.ring = TEXAS;
   anno.anchor = centroid;
   anno.footprintKind = 'area';
   renderer.update(anno);
 
   const after = findAnnotationGroup(globalThis.document);
-  const expectedWindow = Cesium.SceneTransforms.worldToWindowCoordinates(
-    scene,
-    Cesium.Cartesian3.fromDegrees(centroid.lon, centroid.lat, centroid.height),
-  );
+  const expectedWindow = project(centroid.lon, centroid.lat);
   assert.equal(after.group, before.group, 'the real hybrid keeps the existing SVG group');
   assert.equal(after.svg.children.filter((child) => child.classList.contains('gev-anno')).length, 1);
   assert.equal(after.group.querySelectorAll('.gev-anno-ring').length, 0, 'screen reticle rings are removed');
@@ -352,40 +271,26 @@ test('hybrid outline upgrade preserves the screen group and adds world geometry'
   assert.equal(originalDot.getAttribute('cx'), expectedWindow.x.toFixed(1));
   assert.equal(originalDot.getAttribute('cy'), expectedWindow.y.toFixed(1));
   assert.deepEqual(centroid, { lon: -100.8, lat: 29.4, height: 0 }, 'closed-ring vertex mean stays pinned');
-  assert.equal(dataSources[0].entities.values.length, 2, 'world area adds one fill and one outline');
-  assert.equal(dataSources[0].entities.values.filter((entity) => entity.polygon).length, 1);
-  assert.equal(dataSources[0].entities.values.filter((entity) => entity.polyline).length, 1);
-  assert.equal(Object.hasOwn(anno, '_entities'), false, 'world entity state stays on the inherited proxy');
+  const features = worldFeatures();
+  assert.equal(features.length, 2, 'world area adds one fill and one outline');
+  assert.equal(features.filter((f) => f.geometry.type === 'Polygon').length, 1);
+  assert.equal(features.filter((f) => f.geometry.type === 'LineString').length, 1);
+  assert.ok(features.every((f) => f.properties.annoId === 'anno-hybrid-fb3'));
   renderer.destroy();
 });
 
 // ── Partial-add rollback (second review) ─────────────────────────────────────
 //
-// The hybrid builds a mark across TWO sub-renderers. It used to record the
-// route only after both had run, so a throw in the second one left the first
-// one's content live with nothing pointing at it: remove() was a no-op and the
-// engine's rollback (which knows only the id) could not reach it. The next
-// annotate of the same geometry then stacked a fresh mark over that orphan.
+// The hybrid builds a mark across TWO sub-renderers. A throw in the second one
+// must not leave the first one's content live with nothing pointing at it:
+// remove() has to reach it by id, and a retry must draw exactly ONE mark.
 
 test('a sub-renderer throw mid-add leaves state the rollback can still remove', (t) => {
   installBrowserGlobals(t);
-  const { viewer, dataSources } = fakeViewer(-99, 31);
+  const { viewer, worldFeatures } = fakeViewer(-99, 31);
   const renderer = createHybridAnnotationRenderer(viewer);
-  const ring = [[-106, 25], [-93, 25], [-93, 36], [-106, 36], [-106, 25]];
-  const anno = {
-    id: 'anno-partial-add',
-    type: 'area',
-    color: 'primary',
-    label: 'Texas',
-    alpha: 1,
-    anchor: naiveRingCentroid(ring),
-    ring,
-    footprintKind: 'area',
-    synthesized: false,
-  };
+  const anno = texasArea('anno-partial-add');
 
-  // The world drape lands first; the screen caption then fails the way a lost
-  // context does, AFTER the world geometry is already on the board.
   const { svg } = findAnnotationGroup(globalThis.document);
   const appendChild = svg.appendChild.bind(svg);
   let failNextInsert = true;
@@ -398,104 +303,65 @@ test('a sub-renderer throw mid-add leaves state the rollback can still remove', 
   };
 
   assert.throws(() => renderer.add(anno), /screen insert failed/);
-  assert.equal(dataSources[0].entities.values.length, 2, 'the world drape is already live');
+  assert.equal(worldFeatures().length, 2, 'the world layer is already live');
   assert.equal(annotationGroups(svg).length, 0, 'the half-built screen group detached itself');
 
-  // The engine's rollback path — it must reach the partial state by id.
   renderer.remove(anno);
-  assert.equal(dataSources[0].entities.values.length, 0, 'partial world state must be released');
+  assert.equal(worldFeatures().length, 0, 'partial world state must be released');
 
-  // …and the id is free again: a retry draws ONE mark, not a second one over
-  // an orphan nothing owns.
   renderer.add(anno);
-  assert.equal(dataSources[0].entities.values.length, 2, 'the retry draws exactly one world drape');
+  assert.equal(worldFeatures().length, 2, 'the retry draws exactly one world mark');
   assert.equal(annotationGroups(svg).length, 1, 'and exactly one screen caption');
   renderer.remove(anno);
-  assert.equal(dataSources[0].entities.values.length, 0);
+  assert.equal(worldFeatures().length, 0);
   renderer.destroy();
 });
 
 test('a release that throws keeps the mark addressable for a retry cleanup', (t) => {
   installBrowserGlobals(t);
-  const { viewer, dataSources } = fakeViewer(-99, 31);
+  const { viewer, worldFeatures } = fakeViewer(-99, 31);
   const renderer = createHybridAnnotationRenderer(viewer);
-  const ring = [[-106, 25], [-93, 25], [-93, 36], [-106, 36], [-106, 25]];
-  const anno = {
-    id: 'anno-release-throw',
-    type: 'area',
-    color: 'primary',
-    label: 'Texas',
-    alpha: 1,
-    anchor: naiveRingCentroid(ring),
-    ring,
-    footprintKind: 'area',
-    synthesized: false,
-  };
+  const anno = texasArea('anno-release-throw');
 
   renderer.add(anno);
   const { svg } = findAnnotationGroup(globalThis.document);
-  assert.equal(dataSources[0].entities.values.length, 2);
+  assert.equal(worldFeatures().length, 2);
   assert.equal(annotationGroups(svg).length, 1);
 
-  // The world route releases fine, then the screen release fails part-way
-  // (its fade-out timer throws) — so its SVG group is still in the document.
   const workingSetTimeout = globalThis.window.setTimeout;
   globalThis.window.setTimeout = () => { throw new Error('teardown scheduling failed'); };
   assert.throws(() => renderer.remove(anno), /teardown scheduling failed/);
-  assert.equal(dataSources[0].entities.values.length, 0, 'the world route did release');
+  assert.equal(worldFeatures().length, 0, 'the world route did release');
   assert.equal(annotationGroups(svg).length, 1, 'the screen route did NOT — that is the orphan');
 
-  // Dropping the routing entry here would make that orphan permanently
-  // unreachable. It must still be addressable, so a retry finishes the job.
   globalThis.window.setTimeout = workingSetTimeout;
   renderer.remove(anno);
   assert.equal(annotationGroups(svg).length, 0, 'the retry cleanup must reach the orphan');
-  assert.equal(dataSources[0].entities.values.length, 0, 'without double-releasing the world route');
+  assert.equal(worldFeatures().length, 0, 'without double-releasing the world route');
 
-  // Fully released now — a third call is inert.
   renderer.remove(anno);
   assert.equal(annotationGroups(svg).length, 0);
   renderer.destroy();
 });
 
-test('a world add that fails mid-way leaves its landed entities removable', (t) => {
+test('a map write that fails mid-add never orphans the world mark', (t) => {
   installBrowserGlobals(t);
-  const { viewer, dataSources } = fakeViewer(-99, 31);
+  const { viewer, map, worldFeatures } = fakeViewer(-99, 31);
   const renderer = createHybridAnnotationRenderer(viewer);
-  const ring = [[-106, 25], [-93, 25], [-93, 36], [-106, 36], [-106, 25]];
-  const anno = {
-    id: 'anno-partial-world-add',
-    type: 'area',
-    color: 'primary',
-    label: 'Texas',
-    alpha: 1,
-    anchor: naiveRingCentroid(ring),
-    ring,
-    footprintKind: 'area',
-    synthesized: false,
-  };
+  const anno = texasArea('anno-partial-world-add');
 
-  // The draped fill lands; the outline throws (bad geometry / lost context).
-  const entities = dataSources[0].entities;
-  const realAdd = entities.add.bind(entities);
-  let addsLeft = 1;
-  entities.add = (options) => {
-    if (addsLeft <= 0) throw new Error('entity add failed');
-    addsLeft -= 1;
-    return realAdd(options);
-  };
-
-  assert.throws(() => renderer.add(anno), /entity add failed/);
-  assert.equal(entities.values.length, 1, 'one entity landed before the failure');
-
-  entities.add = realAdd;
-  renderer.remove(anno);
-  assert.equal(entities.values.length, 0,
-    'the rollback must see the entities that landed before the throw');
-
-  const { svg } = findAnnotationGroup(globalThis.document);
+  // The style is mid-swap: the GeoJSON write fails. The mark is still owned by
+  // the renderer, so the next write (another mark, or a sync) draws it…
+  renderer.add(texasArea('warm-up'));
+  map.failNextSetData = true;
   renderer.add(anno);
-  assert.equal(entities.values.length, 2, 'the retry draws a complete mark');
-  assert.equal(annotationGroups(svg).length, 1);
+  assert.equal(worldFeatures().length, 2, 'the failed write left the previous board intact');
+  assert.ok(worldFeatures().every((f) => f.properties.annoId === 'warm-up'));
+  renderer.sync(new Map());
+  assert.equal(worldFeatures().filter((f) => f.properties.annoId === anno.id).length, 2);
+
+  // …and the rollback reaches it by id.
+  renderer.remove(anno);
+  assert.equal(worldFeatures().filter((f) => f.properties.annoId === anno.id).length, 0);
   renderer.destroy();
 });

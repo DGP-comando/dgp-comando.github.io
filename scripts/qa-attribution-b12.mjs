@@ -1,50 +1,35 @@
+#!/usr/bin/env node
 /**
- * qa-attribution-b12.mjs — visual + state proof for Batch 12 (data attribution).
+ * qa-attribution-b12.mjs — visual + state proof for Batch 12 (data attribution)
+ * on the MapLibre engine.
  *
  * Public attribution checks:
- *   H10 — the Google/Cesium credit MUST stay visible in clean-view AND
- *         recording modes (those are the modes used to record demos).
+ *   H10 — the map attribution (MapLibre's AttributionControl: base-map /
+ *         terrain sources) and the "Data attribution" control MUST stay
+ *         visible in clean-view AND recording modes (the modes used to record
+ *         demos).
  *   H11 — every data layer's required attribution must surface in the
- *         expandable bottom-left "Data attribution" lightbox.
+ *         "Data attribution" lightbox (src/data/dataCredits.js).
  *
  * This script drives the REAL app headless and proves:
- *   (i)   per-layer credits are registered in viewer.creditDisplay (H11),
- *         and appear in the "Data attribution" lightbox when opened;
+ *   (i)   the per-layer credits are registered (getDataCreditsHtml) and appear
+ *         in the lightbox opened from the on-map "Data attribution" control;
  *   (ii)  enabling datacenters + submarine cables keeps their credits present;
- *   (iii) toggling clean-view keeps #cesium-credits visible (screenshot);
- *   (iv)  toggling recording-mode keeps #cesium-credits visible (screenshot).
+ *   (iii) toggling clean-view keeps the attribution controls visible (screenshot);
+ *   (iv)  toggling recording-mode keeps them visible (screenshot).
  *
- * Run:  node scripts/qa-attribution-b12.mjs --url http://localhost:4300
+ * Run:  node scripts/qa-attribution-b12.mjs --url http://localhost:4400
  */
-import puppeteer from 'puppeteer';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { argValue, launchQaBrowser, openApp } from './lib/qaBrowser.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const argv = process.argv.slice(2);
-function getOpt(flag, def) {
-  const i = argv.indexOf(flag);
-  return i >= 0 && argv[i + 1] ? argv[i + 1] : def;
-}
-const APP_URL = getOpt('--url', 'http://localhost:4300');
+const APP_URL = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:4300');
 const APP_ORIGIN = new URL(APP_URL).origin;
 const SHOT_DIR = resolve(__dirname, '..', 'qa-shots', 'b12');
 mkdirSync(SHOT_DIR, { recursive: true });
-
-const CHROME_EXECUTABLE_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-
-function findChromeExecutable() {
-  return CHROME_EXECUTABLE_CANDIDATES.find((candidate) => {
-    try { return existsSync(candidate); } catch { return false; }
-  }) || null;
-}
 
 let passed = 0;
 let failed = 0;
@@ -69,15 +54,22 @@ const REQUIRED_CREDIT_SUBSTRINGS = [
   'Radio Browser',               // internet-radio directory
 ];
 
+/** The dev server hands back the app's own module instance. */
+const registeredCredits = (page) => page.evaluate(async () => {
+  const { getDataCreditsHtml } = await import('/src/data/dataCredits.js');
+  return getDataCreditsHtml(window.__godsEyeView.engine.map);
+});
+const openLightbox = (page) => page.evaluate(async () => {
+  document.querySelector('#dg-data-credits button')?.click();
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  return Boolean(document.querySelector('.dg-credit-lightbox'));
+});
+const closeLightbox = (page) => page.evaluate(() => {
+  document.querySelector('.dg-credit-lightbox-close')?.click();
+});
+
 async function main() {
-  const chromeExecutable = findChromeExecutable();
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    ...(chromeExecutable ? { executablePath: chromeExecutable } : {}),
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  });
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
+  const { browser, page, errors: consoleErrors } = await launchQaBrowser({ viewport: { width: 1440, height: 900 } });
   await page.setRequestInterception(true);
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -91,43 +83,22 @@ async function main() {
     }
     request.continue();
   });
-
-  const consoleErrors = [];
   const failedResponses = [];
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
-      const sourceUrl = msg.location()?.url || '';
-      consoleErrors.push(sourceUrl ? `${msg.text()} [${sourceUrl}]` : msg.text());
-    }
-  });
   page.on('response', (response) => {
-    if (response.status() >= 500) {
-      failedResponses.push(`HTTP ${response.status()} ${response.url()}`);
-    }
+    if (response.status() >= 500) failedResponses.push(`HTTP ${response.status()} ${response.url()}`);
   });
 
   console.log(`\n  qa-attribution-b12 → ${APP_URL}\n`);
-  await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await openApp(page, APP_URL);
+  await page.waitForSelector('#dg-data-credits button', { timeout: 30_000 }).catch(() => {});
 
-  // Wait for the app + viewer.creditDisplay to be live.
-  await page.waitForFunction(
-    () => window.__godsEyeView && window.__godsEyeView.viewer && window.__godsEyeView.viewer.creditDisplay,
-    { timeout: 60000 },
-  );
-  // Give Cesium a few frames to render the on-screen credit line (logo + link).
-  await new Promise((r) => setTimeout(r, 2500));
-
-  // ── (i) H11: static credits registered ────────────────────────────
-  console.log('H11 — per-layer credits registered in viewer.creditDisplay');
-  const registeredHtml = await page.evaluate(() => {
-    const cd = window.__godsEyeView.viewer.creditDisplay;
-    const statics = cd._staticCredits || [];
-    return statics.map((c) => c.html);
-  });
+  // ── (i) H11: credits registered ───────────────────────────────────
+  console.log('H11 — per-layer credits registered (dataCredits.js)');
+  const registeredHtml = await registeredCredits(page);
   check(
-    'creditDisplay has static per-layer credits',
+    'the "Data attribution" set carries the per-layer credits',
     registeredHtml.length >= 10,
-    `${registeredHtml.length} static credits registered`,
+    `${registeredHtml.length} credits registered`,
   );
   for (const sub of REQUIRED_CREDIT_SUBSTRINGS) {
     const found = registeredHtml.some((h) => h.includes(sub));
@@ -136,22 +107,16 @@ async function main() {
 
   // ── (i) H11: credits render in the "Data attribution" lightbox ─────
   console.log('\nH11 — "Data attribution" lightbox surfaces the credits');
-  // Force a render frame so the credit display flushes, then open the lightbox.
-  const lightboxState = await page.evaluate(async () => {
-    const viewer = window.__godsEyeView.viewer;
-    viewer.scene.requestRender();
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const cd = viewer.creditDisplay;
-    cd.showLightbox();
-    viewer.scene.requestRender();
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const box = document.querySelector('.cesium-credit-lightbox');
+  const opened = await openLightbox(page);
+  check('the on-map "Data attribution" control opens the lightbox', opened);
+  const lightboxState = await page.evaluate(() => {
+    const box = document.querySelector('.dg-credit-lightbox');
     const list = box?.querySelector(':scope > ul');
-    const title = box?.querySelector('.cesium-credit-lightbox-title');
-    const close = box?.querySelector('.cesium-credit-lightbox-close');
+    const title = box?.querySelector('.dg-credit-lightbox-title');
+    const close = box?.querySelector('.dg-credit-lightbox-close');
     const boxRect = box?.getBoundingClientRect();
     const listRect = list?.getBoundingClientRect();
-    const overlay = document.querySelector('.cesium-credit-lightbox-overlay');
+    const overlay = document.querySelector('.dg-credit-lightbox-overlay');
     const worldOverlay = document.getElementById('world-overlay-root');
     document.querySelector('[data-qa-attribution-stack-probe]')?.remove();
     const stackProbe = document.createElement('div');
@@ -190,8 +155,8 @@ async function main() {
       listOverflowY: list ? getComputedStyle(list).overflowY : '',
       titleVisible: Boolean(title?.getBoundingClientRect().height),
       closeVisible: Boolean(close?.getBoundingClientRect().height),
-      overlayZIndex: Number(getComputedStyle(overlay).zIndex),
-      worldOverlayZIndex: Number(getComputedStyle(worldOverlay).zIndex),
+      overlayZIndex: overlay ? Number(getComputedStyle(overlay).zIndex) : NaN,
+      worldOverlayZIndex: worldOverlay ? Number(getComputedStyle(worldOverlay).zIndex) : NaN,
       stackProbeIntersectsModal: Boolean(boxRect
         && stackProbeRect.left < boxRect.left
         && stackProbeRect.right > boxRect.left
@@ -238,30 +203,25 @@ async function main() {
       && lightboxState.stackProbeExtendsOutsideModal,
     `modal z=${lightboxState.overlayZIndex}, world labels z=${lightboxState.worldOverlayZIndex}, overlap=${lightboxState.stackProbeIntersectsModal}`,
   );
-  await page.evaluate(() => window.__godsEyeView.viewer.creditDisplay.hideLightbox());
+  await closeLightbox(page);
   await page.screenshot({ path: resolve(SHOT_DIR, 'attribution-stacking-before-desktop.png') });
+  await openLightbox(page);
   await page.evaluate(() => {
-    window.__godsEyeView.viewer.creditDisplay.showLightbox();
-    const list = document.querySelector('.cesium-credit-lightbox > ul');
+    const list = document.querySelector('.dg-credit-lightbox > ul');
     if (list) list.scrollTop = 0;
   });
   await page.screenshot({ path: resolve(SHOT_DIR, 'attribution-lightbox-desktop.png') });
-  await page.evaluate(() => {
-    window.__godsEyeView.viewer.creditDisplay.hideLightbox();
-    document.querySelector('[data-qa-attribution-stack-probe]')?.remove();
-  });
+  await closeLightbox(page);
+  await page.evaluate(() => document.querySelector('[data-qa-attribution-stack-probe]')?.remove());
 
   await page.setViewport({ width: 560, height: 760, deviceScaleFactor: 1 });
   await page.evaluate(async () => {
-    const viewer = window.__godsEyeView.viewer;
-    viewer.resize();
-    viewer.scene.requestRender();
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    window.__godsEyeView.engine.map.resize();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
   });
+  await openLightbox(page);
   const mobileLightbox = await page.evaluate(() => {
-    const viewer = window.__godsEyeView.viewer;
-    viewer.creditDisplay.showLightbox();
-    const box = document.querySelector('.cesium-credit-lightbox');
+    const box = document.querySelector('.dg-credit-lightbox');
     const list = box?.querySelector(':scope > ul');
     const rect = box?.getBoundingClientRect();
     if (list) list.scrollTop = list.scrollHeight;
@@ -274,8 +234,7 @@ async function main() {
       bottom: rect?.bottom || 0,
       viewportWidth: innerWidth,
       viewportHeight: innerHeight,
-      lastItemReachable: Boolean(lastRect && listRect
-        && lastRect.bottom <= listRect.bottom + 1),
+      lastItemReachable: Boolean(lastRect && listRect && lastRect.bottom <= listRect.bottom + 1),
     };
   });
   check(
@@ -288,25 +247,19 @@ async function main() {
     `box=${Math.round(mobileLightbox.left)},${Math.round(mobileLightbox.top)}–${Math.round(mobileLightbox.right)},${Math.round(mobileLightbox.bottom)}`,
   );
   await page.screenshot({ path: resolve(SHOT_DIR, 'attribution-lightbox-mobile.png') });
-  await page.evaluate(() => window.__godsEyeView.viewer.creditDisplay.hideLightbox());
+  await closeLightbox(page);
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 });
 
   // ── (ii) enable datacenters + cables; credits still present ────────
   console.log('\nH11 — enabling datacenters + submarine cables');
-  const layerIds = await page.evaluate(() => {
-    const dm = window.__godsEyeView.dataManager;
-    return [...dm.layers.keys()];
-  });
-  // Find the datacenter + cable layer ids by fuzzy match on the id string.
+  const layerIds = await page.evaluate(() => [...window.__godsEyeView.dataManager.layers.keys()]);
   const dcId = layerIds.find((id) => /datacenter/i.test(id));
   const cableId = layerIds.find((id) => /cable|submarine|telegeo/i.test(id));
   check('found datacenter + cable layer ids', !!dcId && !!cableId, `dc=${dcId} cable=${cableId}`);
   if (dcId) await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, true), dcId);
   if (cableId) await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, true), cableId);
   await new Promise((r) => setTimeout(r, 800));
-  const afterEnableHtml = await page.evaluate(() =>
-    (window.__godsEyeView.viewer.creditDisplay._staticCredits || []).map((c) => c.html),
-  );
+  const afterEnableHtml = await registeredCredits(page);
   check(
     'datacenter credit (OSM/ODbL) still present after enable',
     afterEnableHtml.some((h) => h.includes('OpenStreetMap contributors')),
@@ -318,54 +271,57 @@ async function main() {
     '',
   );
 
-  // helper: is #cesium-credits visible (line rendered, not display:none)?
+  // helper: are the map attribution + "Data attribution" controls visible?
   const creditVisibility = async () =>
     page.evaluate(() => {
-      const el = document.getElementById('cesium-credits');
-      if (!el) return { present: false };
-      const cs = getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
+      const probe = (el) => {
+        if (!el) return { present: false };
+        const cs = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        let hidden = false;
+        for (let node = el; node instanceof Element; node = node.parentElement) {
+          const st = getComputedStyle(node);
+          if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) hidden = true;
+        }
+        return {
+          present: true,
+          display: cs.display,
+          visibility: cs.visibility,
+          hidden,
+          width: rect.width,
+          height: rect.height,
+          text: (el.textContent || '').trim().slice(0, 120),
+        };
+      };
       return {
-        present: true,
-        display: cs.display,
-        visibility: cs.visibility,
-        opacity: cs.opacity,
-        width: rect.width,
-        height: rect.height,
-        text: (el.textContent || '').trim().slice(0, 120),
-        hasLogo: !!el.querySelector('.cesium-credit-logoContainer, img'),
+        attrib: probe(document.querySelector('.maplibregl-ctrl-attrib')),
+        data: probe(document.getElementById('dg-data-credits')),
       };
     });
+  const visible = (v) => v.present && !v.hidden && v.width > 0 && v.height > 0;
 
-  // ── (iii) clean-view: credit line STILL visible ───────────────────
-  console.log('\nH10 — clean-view keeps the credit line visible');
+  // ── (iii) clean-view: credits STILL visible ───────────────────────
+  console.log('\nH10 — clean-view keeps the credits visible');
   await page.evaluate(() => document.body.classList.add('ui-clean-view'));
   await new Promise((r) => setTimeout(r, 400));
   const cleanVis = await creditVisibility();
   await page.screenshot({ path: resolve(SHOT_DIR, 'clean-view.png') });
+  check('clean-view: map attribution visible', visible(cleanVis.attrib), JSON.stringify(cleanVis.attrib));
   check(
-    'clean-view: #cesium-credits not display:none',
-    cleanVis.present && cleanVis.display !== 'none' && cleanVis.visibility !== 'hidden',
-    `display=${cleanVis.display} visibility=${cleanVis.visibility} w=${Math.round(cleanVis.width)} h=${Math.round(cleanVis.height)}`,
-  );
-  check(
-    'clean-view: "Data attribution" link to per-layer popover still present',
-    !!cleanVis.text && /Data attribution/i.test(cleanVis.text),
-    `credit text = "${cleanVis.text}"`,
+    'clean-view: "Data attribution" control still visible',
+    visible(cleanVis.data) && /Data attribution/i.test(cleanVis.data.text || ''),
+    JSON.stringify(cleanVis.data),
   );
   await page.evaluate(() => document.body.classList.remove('ui-clean-view'));
 
-  // ── (iv) recording-mode: credit line STILL visible ────────────────
-  console.log('\nH10 — recording-mode keeps the credit line visible');
+  // ── (iv) recording-mode: credits STILL visible ────────────────────
+  console.log('\nH10 — recording-mode keeps the credits visible');
   await page.evaluate(() => document.body.classList.add('recording-mode'));
   await new Promise((r) => setTimeout(r, 400));
   const recVis = await creditVisibility();
   await page.screenshot({ path: resolve(SHOT_DIR, 'recording-mode.png') });
-  check(
-    'recording-mode: #cesium-credits not display:none',
-    recVis.present && recVis.display !== 'none' && recVis.visibility !== 'hidden',
-    `display=${recVis.display} visibility=${recVis.visibility} w=${Math.round(recVis.width)} h=${Math.round(recVis.height)}`,
-  );
+  check('recording-mode: map attribution visible', visible(recVis.attrib), JSON.stringify(recVis.attrib));
+  check('recording-mode: "Data attribution" control visible', visible(recVis.data), JSON.stringify(recVis.data));
   await page.evaluate(() => document.body.classList.remove('recording-mode'));
 
   // baseline (normal) screenshot for comparison

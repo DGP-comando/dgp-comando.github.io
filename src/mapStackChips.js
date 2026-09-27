@@ -1,9 +1,12 @@
 // MAP STACK source chips — the always-visible replacement for the `<select>`
 // that used to sit in the Map Stack panel. One button per stack, rendered from
-// `MapStackController.getStacks()`. The four accepted sources below are
-// the whole shipped set; keeping the allowlist explicit means a stack added to
-// `MAP_STACKS` for internal use cannot reach the tray until someone names it
-// here.
+// `MapStackController.getStacks()`. The three accepted sources below (the
+// MapLibre basemaps: Satélite, OSM, OSM vetorial) are the whole shipped set;
+// keeping the allowlist explicit means a stack added to `MAP_STACKS` for
+// internal use cannot reach the tray until someone names it here.
+//
+// After the sources come the presentation TOGGLES (rótulos, globo/2D, relevo
+// 3D): same chip look, `data-toggle-id` instead of `data-stack-id`, lit when on.
 //
 // The chips are a control SURFACE only: selecting one calls back into the same
 // `_setMapStack()` path the dropdown's `change` handler used, and the active
@@ -12,12 +15,11 @@
 
 export const MAP_STACK_CHIP_CLASS = 'map-stack-chip';
 export const PRESENTED_MAP_STACK_IDS = Object.freeze([
-  'photoreal',
   'esri',
-  'bing-aerial',
-  'bing-labels',
   'osm',
+  'osm-vector',
 ]);
+export const MAP_TOGGLE_CHIP_CLASS = 'map-stack-toggle';
 
 /**
  * Presentation model for one map-stack chip.
@@ -36,8 +38,8 @@ export function mapStackChipModel(stack, activeId) {
   const label = String(stack?.label ?? stack?.id ?? '');
   const requiresIon = stack?.requiresIon === true;
   const fallbackReason = requiresIon
-    ? 'Cesium ion token required'
-    : `${label || 'This map stack'} is unavailable`;
+    ? 'Chave necessária'
+    : `${label || 'Este mapa base'} indisponível`;
   const unavailableHint = available ? '' : String(stack?.unavailableReason || fallbackReason);
   return {
     id: String(stack?.id ?? ''),
@@ -80,10 +82,12 @@ export function mapStackChipModels(stacks, activeId) {
  * @param {object} [options]
  * @param {string|null} [options.activeId] - Currently active stack id.
  * @param {(stackId: string) => void} [options.onSelect] - Selection callback.
+ * @param {Array<{id: string, label: string, title?: string, active?: boolean, available?: boolean, onToggle?: (on: boolean) => void}>} [options.toggles]
+ *   Presentation toggles rendered after the sources (rótulos, globo/2D, relevo).
  * @param {Document} [options.doc] - Document override (tests).
  * @returns {Array<object>} The rendered chip models.
  */
-export function renderMapStackChips(container, stacks, { activeId = null, onSelect = null, doc } = {}) {
+export function renderMapStackChips(container, stacks, { activeId = null, onSelect = null, toggles = [], doc } = {}) {
   if (!container) return [];
   const ownerDoc = doc || container.ownerDocument || globalThis.document;
   if (!ownerDoc?.createElement) return [];
@@ -126,20 +130,65 @@ export function renderMapStackChips(container, stacks, { activeId = null, onSele
     container.appendChild(chip);
   }
 
+  for (const toggle of Array.isArray(toggles) ? toggles : []) {
+    if (!toggle?.id) continue;
+    const available = toggle.available !== false;
+    const active = !!toggle.active;
+    const chip = ownerDoc.createElement('button');
+    chip.type = 'button';
+    chip.className = [
+      MAP_STACK_CHIP_CLASS,
+      MAP_TOGGLE_CHIP_CLASS,
+      active ? 'active' : '',
+      available ? '' : 'unavailable',
+    ].filter(Boolean).join(' ');
+    chip.dataset.toggleId = String(toggle.id);
+    chip.title = String(toggle.title || toggle.label || toggle.id);
+    chip.setAttribute('aria-pressed', String(active));
+    chip.setAttribute('aria-disabled', String(!available));
+    const label = ownerDoc.createElement('span');
+    label.className = 'map-stack-chip-label';
+    label.textContent = String(toggle.label || toggle.id);
+    chip.appendChild(label);
+    chip.addEventListener('click', () => {
+      if (chip.getAttribute('aria-disabled') === 'true') return;
+      const next = chip.getAttribute('aria-pressed') !== 'true';
+      toggle.onToggle?.(next);
+    });
+    container.appendChild(chip);
+  }
+
   return models;
 }
 
 /**
  * Re-points the active chip at controller state. Availability never changes at
  * runtime (it tracks the ion token), so only the active/pressed pair is synced.
+ * Toggle chips follow `toggleState` ({[toggleId]: {active, available}}) when
+ * given.
  * @param {HTMLElement} container - Row element.
  * @param {string|null} activeId - Currently active stack id.
+ * @param {Record<string, {active?: boolean, available?: boolean}>} [toggleState]
  * @returns {void}
  */
-export function syncMapStackChips(container, activeId) {
+export function syncMapStackChips(container, activeId, toggleState = null) {
   const chips = container?.children;
   if (!chips) return;
   for (const chip of Array.from(chips)) {
+    const toggleId = chip?.dataset?.toggleId;
+    if (toggleId) {
+      const entry = toggleState?.[toggleId];
+      if (!entry) continue;
+      if (typeof entry.active === 'boolean') {
+        chip.classList?.toggle('active', entry.active);
+        chip.setAttribute?.('aria-pressed', String(entry.active));
+      }
+      if (typeof entry.available === 'boolean') {
+        chip.classList?.toggle('unavailable', !entry.available);
+        chip.setAttribute?.('aria-disabled', String(!entry.available));
+      }
+      continue;
+    }
     const stackId = chip?.dataset?.stackId;
     if (!stackId) continue;
     const active = stackId === activeId;

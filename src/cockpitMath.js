@@ -324,3 +324,114 @@ export function resolveHudRailLayout({
     constrained: panelHeight > availableHeight,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Câmera do cockpit no MapLibre (sem Cesium)
+//
+// O cockpit do Cesium sentava a câmera dentro do modelo 3D, presa ao chão
+// fotorrealista. No MapLibre não há modelo 3D nem malha, e o ícone da
+// aeronave é desenhado no chão. A câmera é de PERSEGUIÇÃO sobre o alvo
+// rastreado: o centro da vista é o ponto da aeronave (o mesmo que o laço
+// `engine.track` usa, então os dois nunca disputam a câmera), bearing = rumo,
+// pitch alto, e a distância é escolhida para a câmera ficar na altitude da
+// aeronave (um pouco acima), olhando para a frente e para o horizonte.
+// ---------------------------------------------------------------------------
+
+const EARTH_RADIUS_M = 6_371_008.8;
+const DEG = Math.PI / 180;
+
+/** Pitch MapLibre da perseguição (graus a partir do nadir; 76 = -14 Cesium). */
+export const COCKPIT_CHASE_PITCH_DEG = 76;
+/** Distância mínima câmera→alvo (m), para aeronaves no chão ou baixas. */
+export const COCKPIT_CHASE_MIN_DISTANCE_M = 1200;
+/** Folga acima da altitude da aeronave (m). */
+export const COCKPIT_CHASE_HEADROOM_M = 150;
+
+/** Desloca (lat, lon) por `eastM`/`northM` metros num plano tangente local. */
+export function offsetLatLon(lat, lon, eastM, northM) {
+  const dLat = (Number(northM) || 0) / EARTH_RADIUS_M / DEG;
+  const cosLat = Math.max(1e-6, Math.cos(lat * DEG));
+  const dLon = (Number(eastM) || 0) / (EARTH_RADIUS_M * cosLat) / DEG;
+  return { lat: lat + dLat, lon: ((lon + dLon + 540) % 360) - 180 };
+}
+
+/** Vetor leste/norte/cima (m) de `from` até `to` no plano tangente de `from`. */
+export function localDeltaM(from, to) {
+  const north = (to.lat - from.lat) * DEG * EARTH_RADIUS_M;
+  let dLon = to.lon - from.lon;
+  if (dLon > 180) dLon -= 360;
+  else if (dLon < -180) dLon += 360;
+  const east = dLon * DEG * EARTH_RADIUS_M * Math.cos(from.lat * DEG);
+  const up = (Number(to.alt) || 0) - (Number(from.alt) || 0);
+  return { east, north, up };
+}
+
+/**
+ * Opções de câmera do MapLibre para a perseguição de uma aeronave.
+ * @param {{lat:number, lon:number, altitudeM?:number, groundM?:number, headingDeg:number,
+ *   viewportHeight:number, fovDeg?:number, pitchDeg?:number, onGround?:boolean}} input
+ * @returns {{center:[number, number], zoom:number, bearing:number, pitch:number, distanceM:number}|null}
+ */
+export function cockpitChaseMapView({
+  lat,
+  lon,
+  altitudeM = null,
+  groundM = 0,
+  headingDeg,
+  viewportHeight,
+  fovDeg = 36.86989764584402,
+  pitchDeg = COCKPIT_CHASE_PITCH_DEG,
+  onGround = false,
+}) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const ground = Number.isFinite(groundM) ? groundM : 0;
+  const heightAboveGround = onGround || !Number.isFinite(altitudeM) ? 0 : Math.max(0, altitudeM - ground);
+  const pitch = Math.max(0, Math.min(85, pitchDeg));
+  const distanceM = Math.max(
+    COCKPIT_CHASE_MIN_DISTANCE_M,
+    (heightAboveGround + COCKPIT_CHASE_HEADROOM_M) / Math.cos(pitch * DEG),
+  );
+  const ctcdPx = (0.5 * Math.max(1, viewportHeight || 1)) / Math.tan((fovDeg * DEG) / 2);
+  const metersPerPixel = distanceM / ctcdPx;
+  const zoom = Math.log2((2 * Math.PI * EARTH_RADIUS_M * Math.max(1e-6, Math.cos(lat * DEG))) / (512 * metersPerPixel));
+  return { center: [lon, lat], zoom, bearing: normalizeHeading(headingDeg), pitch, distanceM };
+}
+
+/** ECEF WGS84 (m) -> {lat, lon, alt}; usado para posições herdadas em Cartesian3. */
+export function ecefToGeodetic(x, y, z) {
+  if (![x, y, z].every(Number.isFinite)) return null;
+  const a = 6378137.0;
+  const f = 1 / 298.257223563;
+  const b = a * (1 - f);
+  const e2 = f * (2 - f);
+  const ep2 = (a * a - b * b) / (b * b);
+  const p = Math.hypot(x, y);
+  if (p < 1e-9 && Math.abs(z) < 1e-9) return null;
+  const theta = Math.atan2(z * a, p * b);
+  const lat = Math.atan2(z + ep2 * b * Math.sin(theta) ** 3, p - e2 * a * Math.cos(theta) ** 3);
+  const lon = Math.atan2(y, x);
+  const n = a / Math.sqrt(1 - e2 * Math.sin(lat) ** 2);
+  const alt = Math.abs(Math.cos(lat)) > 1e-9 ? p / Math.cos(lat) - n : Math.abs(z) - b;
+  return { lat: lat / DEG, lon: lon / DEG, alt };
+}
+
+/**
+ * Lê lat/lon de uma posição em qualquer dos formatos que as camadas publicam:
+ * {lat, lon}, {latitude, longitude}, [lon, lat] ou Cartesian3 {x, y, z}.
+ * @returns {{lat:number, lon:number}|null}
+ */
+export function positionLatLon(value) {
+  if (!value) return null;
+  if (Array.isArray(value) && value.length >= 2 && value.every(Number.isFinite)) {
+    return { lat: value[1], lon: value[0] };
+  }
+  if (Number.isFinite(value.lat) && Number.isFinite(value.lon)) return { lat: value.lat, lon: value.lon };
+  if (Number.isFinite(value.latitude) && Number.isFinite(value.longitude)) {
+    return { lat: value.latitude, lon: value.longitude };
+  }
+  if (Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z)) {
+    const geo = ecefToGeodetic(value.x, value.y, value.z);
+    return geo ? { lat: geo.lat, lon: geo.lon } : null;
+  }
+  return null;
+}

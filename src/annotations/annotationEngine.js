@@ -1,10 +1,7 @@
-import * as Cesium from 'cesium';
+import { Cartesian3, boundingCircle } from '../voice/geo3d.js';
 import { holdContinuousRender, releaseContinuousRender } from '../renderGovernor.js';
 import { isRateLimitedOutcome, resolveAnnotationTarget } from './annotationResolver.js';
 
-// Dev convenience: expose the app's Cesium instance for console/preview probing
-// (single shared module instance — avoids dual-Cesium state bugs when testing).
-if (typeof window !== 'undefined' && !window.__CESIUM__) window.__CESIUM__ = Cesium;
 
 /**
  * Annotation engine — the voice agent's "whiteboard" over the 3D world.
@@ -28,7 +25,7 @@ const DEFAULT_TTL_MS = 22_000;
 const FADE_MS = 1200;
 // Hard ceiling on simultaneously-live marks. Protects against a runaway voice
 // session (or a bad model call that keeps appending) from accumulating unbounded
-// Cesium entities + SVG nodes. Persistent marks accumulate until cleared.
+// MapLibre GeoJSON layers + SVG nodes. Persistent marks accumulate until cleared.
 const MAX_LIVE_ANNOTATIONS = 120;
 // Deferred-outline retry backoff. A TRANSIENT Overpass failure (slow mirror, network
 // blip) aborts the client fetch, but the /api/overpass proxy keeps the upstream
@@ -93,12 +90,18 @@ export function normalizeTargetKey(target) {
   return head || raw;
 }
 
+/**
+ * @param {object} options
+ * @param {object} options.viewer Motor MapLibre (src/maplibre/engine.js); `engine` é sinônimo.
+ */
 export function createAnnotationEngine({
-  viewer,
+  viewer: viewerOption = null,
+  engine: engineOption = null,
   renderer,
   outlineRetryDelaysMs = OUTLINE_RETRY_DELAYS_MS,
   resolveTarget = resolveAnnotationTarget,
 }) {
+  const viewer = engineOption || viewerOption;
   /** @type {Map<string, object>} live annotations keyed by id */
   const annotations = new Map();
   let tickHandle = null;
@@ -804,14 +807,12 @@ export function createAnnotationEngine({
         frameAnnotation(marks[0]);
         return;
       }
-      const cart = points.map((p) => Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.height || 0));
-      const sphere = Cesium.BoundingSphere.fromPoints(cart);
-      viewer.camera.flyToBoundingSphere(sphere, {
-        offset: new Cesium.HeadingPitchRange(
-          viewer.camera.heading,
-          Cesium.Math.toRadians(-35),
-          Math.max(900, sphere.radius * 2.6),
-        ),
+      const circle = boundingCircle(points);
+      if (!circle) return;
+      viewer.flyToTarget({ lat: circle.lat, lon: circle.lon }, {
+        rangeM: Math.max(900, circle.radiusM * 2.6),
+        heading: currentHeading(),
+        pitch: -35,
         duration: 1.6,
       });
     } catch {
@@ -819,18 +820,28 @@ export function createAnnotationEngine({
     }
   }
 
-  /** Whether a lon/lat point is inside the camera frustum AND on the near side of the
-   *  globe. On any API hiccup, report visible — bad data must never move the camera. */
+  /** Whether a lon/lat point projects inside the map viewport AND on the near side of
+   *  the globe. On any API hiccup, report visible — bad data must never move the camera. */
   function isPointOnScreen(p) {
     try {
-      const camera = viewer.camera;
-      const pos = Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.height || 0);
-      const cv = camera.frustum.computeCullingVolume(camera.position, camera.direction, camera.up);
-      if (cv.computeVisibility(new Cesium.BoundingSphere(pos, 1)) === Cesium.Intersect.OUTSIDE) return false;
-      const occluder = new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, camera.position);
-      return occluder.isPointVisible(pos);
+      const screen = viewer.project(p.lon, p.lat, p.height || 0);
+      if (!screen || screen.visible === false) return false;
+      const el = viewer.container;
+      const w = el?.clientWidth || 0;
+      const h = el?.clientHeight || 0;
+      if (!w || !h) return true;
+      return screen.x >= 0 && screen.y >= 0 && screen.x <= w && screen.y <= h;
     } catch {
       return true;
+    }
+  }
+
+  function currentHeading() {
+    try {
+      const heading = viewer.getCameraView().heading;
+      return Number.isFinite(heading) ? heading : 0;
+    } catch {
+      return 0;
     }
   }
 
@@ -843,20 +854,12 @@ export function createAnnotationEngine({
       // Places viewport box when we have one, so a big compound isn't framed at
       // building scale while its outline is traced. Never re-fly when the ring lands.
       const range = anno.ring ? ringRange(anno.ring) : (viewportRange(anno.viewport) || 600);
-      viewer.camera.flyToBoundingSphere(
-        new Cesium.BoundingSphere(
-          Cesium.Cartesian3.fromDegrees(target.lon, target.lat, anno.anchor.height || 0),
-          range,
-        ),
-        {
-          offset: new Cesium.HeadingPitchRange(
-            viewer.camera.heading,
-            Cesium.Math.toRadians(-35),
-            range * 2.4,
-          ),
-          duration: 1.8,
-        },
-      );
+      viewer.flyToTarget({ lat: target.lat, lon: target.lon, height: anno.anchor.height || 0 }, {
+        rangeM: range * 2.4,
+        heading: currentHeading(),
+        pitch: -35,
+        duration: 1.8,
+      });
     } catch {
       /* framing is best-effort */
     }
@@ -923,15 +926,7 @@ export function createAnnotationEngine({
 
   function flyTo({ lon, lat, height, heading = 0, pitch = -30, duration = 2.5 }) {
     try {
-      viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
-        orientation: {
-          heading: Cesium.Math.toRadians(heading),
-          pitch: Cesium.Math.toRadians(pitch),
-          roll: 0,
-        },
-        duration,
-      });
+      viewer.flyToCamera({ lon, lat, alt: height, heading, pitch, roll: 0 }, { duration });
     } catch {
       /* camera flight best-effort */
     }
@@ -1034,9 +1029,9 @@ const VIEWPORT_ASSIST_RANGE_CAP_M = 120000;
 function viewportRange(vp) {
   if (!vp?.low || !vp?.high) return null;
   try {
-    const span = Cesium.Cartesian3.distance(
-      Cesium.Cartesian3.fromDegrees(vp.low.longitude, vp.low.latitude),
-      Cesium.Cartesian3.fromDegrees(vp.high.longitude, vp.high.latitude),
+    const span = Cartesian3.distance(
+      Cartesian3.fromDegrees(vp.low.longitude, vp.low.latitude),
+      Cartesian3.fromDegrees(vp.high.longitude, vp.high.latitude),
     );
     return Number.isFinite(span) && span > 0
       ? Math.max(300, Math.min(span * 0.7, VIEWPORT_ASSIST_RANGE_CAP_M))
@@ -1057,9 +1052,9 @@ function ringRange(ring) {
     if (lon < minLon) minLon = lon;
     if (lon > maxLon) maxLon = lon;
   }
-  const span = Cesium.Cartesian3.distance(
-    Cesium.Cartesian3.fromDegrees(minLon, minLat),
-    Cesium.Cartesian3.fromDegrees(maxLon, maxLat),
+  const span = Cartesian3.distance(
+    Cartesian3.fromDegrees(minLon, minLat),
+    Cartesian3.fromDegrees(maxLon, maxLat),
   );
   return Math.max(300, span * 0.7);
 }

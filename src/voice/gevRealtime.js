@@ -193,11 +193,16 @@ export function silenceRadioForVoice({ duckRadio, pauseRadio } = {}) {
  */
 const SUPERSEDED_RESPONSE_MEMORY = 8;
 
-export function initGevVoiceCommands({ viewer, styleManager, dataManager, sceneDirector = null, annotations = null }) {
+/**
+ * Liga a voz (só no dev — main.js). `engine` é o motor MapLibre; `viewer` é
+ * aceito como sinônimo para chamadores antigos.
+ */
+export function initGevVoiceCommands({ engine = null, viewer = null, styleManager, dataManager, sceneDirector = null, annotations = null }) {
   if (window.__gevVoiceCommands && typeof window.__gevVoiceCommands.stop === 'function') {
     window.__gevVoiceCommands.stop({ removeUi: true });
   }
-  const runner = createGevActionRunner({ viewer, styleManager, dataManager, sceneDirector, annotations });
+  const mapEngine = engine || viewer;
+  const runner = createGevActionRunner({ viewer: mapEngine, styleManager, dataManager, sceneDirector, annotations });
   const ui = createVoiceControl({ reset: true });
   const radioLayer = dataManager?.layers?.get('radio')?.module || null;
   const controller = new GevRealtimeController({ runner, ui, radioLayer, dataManager });
@@ -2178,14 +2183,16 @@ function isSecretLikeKey(key) {
 }
 
 async function captureViewportImage() {
-  const viewer = window.__godsEyeView?.viewer;
-  const source = viewer?.scene?.canvas || document.querySelector('#cesiumContainer .cesium-widget canvas');
+  // Canvas do MapLibre: o motor sobe com preserveDrawingBuffer no dev, então o
+  // último quadro continua legível para o drawImage.
+  const engine = window.__godsEyeView?.engine || window.__godsEyeView?.viewer;
+  const source = engine?.canvas || document.querySelector('.maplibregl-canvas');
   if (!source || !source.width || !source.height) return null;
   // No fresh frame (hidden, or the bounded render wait timed out) → no
   // capture. The caller labels this image "Current"; a stale preserved
   // frame would feed the model old entities as current context. (perf
   // wave 2 fix)
-  const fresh = await renderFreshCesiumFrame(viewer);
+  const fresh = await renderFreshMapFrame(engine);
   if (!fresh) return null;
 
   // Clamp BOTH dimensions by a total-pixel budget so tall portrait windows are
@@ -2199,7 +2206,7 @@ async function captureViewportImage() {
   try {
     ctx.drawImage(source, 0, 0, width, height);
     if (isNearlyBlackFrame(ctx, width, height)) {
-      console.warn('[GEV Voice] Skipped black Cesium viewport capture');
+      console.warn('[GEV Voice] Skipped black map viewport capture');
       return null;
     }
     const dataUrl = canvas.toDataURL('image/jpeg', 0.74);
@@ -2255,22 +2262,21 @@ export function estimateDataUrlBytes(dataUrl) {
  *   when the bounded wait timed out. Callers must not label a non-fresh
  *   canvas as current. (perf wave 2)
  */
-export async function renderFreshCesiumFrame(viewer) {
-  const scene = viewer?.scene;
-  if (!scene) return false;
+export async function renderFreshMapFrame(engine) {
+  if (!engine || typeof engine.on !== 'function') return false;
   // While the document is hidden the render loop is suspended — don't
   // secretly restart rendering for an optional screenshot, and don't pass
   // the stale preserved frame off as current.
   if (typeof document !== 'undefined' && document.hidden) return false;
   try {
-    // Under the idle render governor a bare scene.render() doesn't
-    // necessarily draw — request a frame and await its postRender (bounded),
-    // which also covers the just-became-visible race.
+    // Under the idle render governor the map may not be drawing — request a
+    // frame and await its 'render' event (bounded), which also covers the
+    // just-became-visible race.
     const rendered = new Promise((resolve) => {
-      const remove = scene.postRender.addEventListener(() => { remove(); resolve(true); });
+      const remove = engine.on('render', () => { remove(); resolve(true); });
       setTimeout(() => { remove(); resolve(false); }, 400);
     });
-    scene.requestRender?.();
+    engine.requestRender?.();
     const fresh = await rendered;
     // A tab switch during the bounded wait invalidates freshness.
     if (typeof document !== 'undefined' && document.hidden) return false;

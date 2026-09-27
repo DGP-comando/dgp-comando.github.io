@@ -39,7 +39,24 @@ const _holds = new Set();
 const _recentRequests = [];
 const RECENT_REQUEST_CAP = 16;
 
+// MapLibre (src/maplibre/engine.js): o mapa já redesenha sob demanda; com
+// alguma hold ativa, um laço de rAF pede um quadro por vsync, que é o
+// equivalente do modo contínuo do Cesium.
+let _raf = null;
+function engineLoop() {
+  _raf = null;
+  if (!_installed || _holds.size === 0 || !_viewer?.requestRender) return;
+  _viewer.requestRender();
+  _raf = requestAnimationFrame(engineLoop);
+}
+
 function applyMode() {
+  if (_installed && _viewer && !_viewer.scene && typeof _viewer.requestRender === 'function') {
+    if (_holds.size > 0 && _raf == null && typeof requestAnimationFrame === 'function') {
+      _raf = requestAnimationFrame(engineLoop);
+    }
+    return;
+  }
   if (!_installed || !_viewer?.scene) return;
   const continuous = _holds.size > 0;
   const scene = _viewer.scene;
@@ -61,13 +78,15 @@ function applyMode() {
  * @returns {void}
  */
 export function installRenderGovernor(viewer) {
-  if (!viewer?.scene) throw new TypeError('installRenderGovernor requires a Cesium viewer');
+  if (!viewer?.scene && typeof viewer?.requestRender !== 'function') {
+    throw new TypeError('installRenderGovernor requires the map engine');
+  }
   _viewer = viewer;
   _installed = true;
   // Never let Cesium re-render on simulation-time deltas behind our back —
   // idle means idle. All re-renders are camera/tiles (Cesium-native) or
   // explicit requests.
-  viewer.scene.maximumRenderTimeChange = Infinity;
+  if (viewer.scene) viewer.scene.maximumRenderTimeChange = Infinity;
   applyMode();
 }
 
@@ -107,12 +126,13 @@ export function releaseContinuousRender(ownerId) {
  * @returns {void}
  */
 export function governorRequestRender(reason = 'unspecified') {
-  if (!_installed || !_viewer?.scene) return;
+  if (!_installed || !(_viewer?.scene || _viewer?.requestRender)) return;
   if (_holds.size === 0) {
     _recentRequests.push({ reason, at: Date.now() });
     if (_recentRequests.length > RECENT_REQUEST_CAP) _recentRequests.shift();
   }
-  _viewer.scene.requestRender?.();
+  if (_viewer.scene) _viewer.scene.requestRender?.();
+  else _viewer.requestRender?.();
 }
 
 /**

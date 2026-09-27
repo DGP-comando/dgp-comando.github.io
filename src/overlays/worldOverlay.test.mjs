@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import * as Cesium from 'cesium';
 import {
   getKeyholeGeometry,
   keyholeLabelAlphaFromGeometry,
@@ -298,7 +297,7 @@ function installMockEnvironment({
   globalThis.window = window;
 
   const viewerContainer = new MockElement('div');
-  viewerContainer.id = 'cesiumContainer';
+  viewerContainer.id = 'map';
   body.appendChild(viewerContainer);
   const root = new MockElement('div');
   root.id = 'world-overlay-root';
@@ -359,20 +358,31 @@ function installMockEnvironment({
       set(value) { viewerCanvasHeight = value; },
     },
   });
+  // Mock of the MapLibre engine (src/maplibre/engine.js). Projection is the
+  // old identity-matrix harness: a position's lon/lat ARE normalized device
+  // coordinates, so `pos(x, y)` lands at ((x+1)/2·W, (1−y)/2·H). The camera
+  // sits over (0°, 0°) at `camera.positionCartographic.height`; distance to a
+  // `pos(0, 0, h)` entry is therefore |alt − h|. Flat map: no horizon culling.
   const viewer = {
     container: viewerContainer,
     canvas: viewerCanvas,
-    camera: {
-      positionWC: new Cesium.Cartesian3(0, 0, 10_000_000),
-      positionCartographic: { height: 1000 },
-      viewMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY),
-      frustum: { projectionMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY) },
-      moveEnd,
+    camera: { positionCartographic: { height: 1000 } },
+    scene: { requestRenderCount: 0 },
+    globe: false,
+    on(type, fn) {
+      if (type === 'render') return postRender.addEventListener(fn);
+      if (type === 'moveend') return moveEnd.addEventListener(fn);
+      return () => {};
     },
-    scene: {
-      postRender,
-      requestRenderCount: 0,
-      requestRender() { this.requestRenderCount++; },
+    requestRender() { this.scene.requestRenderCount++; },
+    isGlobe() { return this.globe; },
+    getCameraView() {
+      return { lon: 0, lat: 0, alt: this.camera.positionCartographic.height, heading: 0, pitch: -90, zoom: 5 };
+    },
+    projectInto(p, out) {
+      out.x = (p.lon * 0.5 + 0.5) * viewerCanvasWidth;
+      out.y = (0.5 - p.lat * 0.5) * viewerCanvasHeight;
+      return true;
     },
   };
 
@@ -402,8 +412,13 @@ function installMockEnvironment({
   };
 }
 
+/** Neutral WorldPosition; in this harness lon/lat are normalized device coords. */
+function pos(x, y, height = 0) {
+  return { lon: x, lat: y, height };
+}
+
 function position() {
-  return new Cesium.Cartesian3(0, 0, 0);
+  return pos(0, 0, 0);
 }
 
 function selectedEntry(id, overrides = {}) {
@@ -618,7 +633,7 @@ test('shared fade tuning reaches a host-painted card on the next rendered frame'
     setKeyholeFadeTuning({ fadeRatio: 0.16, outsideOpacity: 0.05 });
     initWorldOverlay(env.viewer);
     setOverlayEntries('fade-host', [selectedEntry('CARD', {
-      position: new Cesium.Cartesian3(0.85, 0, 0),
+      position: pos(0.85, 0, 0),
       variant: 'card',
       edgeFade: 'keyhole',
       placement: 'above',
@@ -655,10 +670,12 @@ test('inlined host alpha binding matches combinedOverlayAlpha across channel ran
   try {
     for (let index = 0; index < cases.length; index++) {
       const channels = cases[index];
-      env.viewer.camera.positionCartographic.height = 9500 - channels.altitude * 2000;
+      const cameraAltitude = 9500 - channels.altitude * 2000;
+      env.viewer.camera.positionCartographic.height = cameraAltitude;
       setOverlayEntries('alpha-binding', [{
         id: `alpha-${index}`,
-        position: new Cesium.Cartesian3(0, 0, channels.distance * 10_000_000),
+        // Straight above the camera, (1 − d)·10 000 km away: distance fade = d.
+        position: pos(0, 0, cameraAltitude + (1 - channels.distance) * 10_000_000),
         variant: 'label',
         title: 'ALPHA',
         protected: true,
@@ -1154,10 +1171,16 @@ test('custom detection lane receives the shared host frame and paints below ordi
   assert.equal(capturedFrame.width, 400);
   assert.equal(capturedFrame.height, 300);
   assert.equal(capturedFrame.dpr, 2);
-  assert.equal(capturedFrame.viewProjectionMatrix[0], 1);
-  assert.equal(capturedFrame.viewProjection.m0, 1);
-  assert.equal(capturedFrame.cameraPosition, env.viewer.camera.positionWC);
+  assert.equal(capturedFrame.viewProjectionMatrix, undefined, 'no Cesium matrices in the frame');
+  assert.equal(capturedFrame.camera.alt, 1000);
+  assert.equal(capturedFrame.cameraAltitude, 1000);
+  assert.equal(capturedFrame.cameraPosition, capturedFrame.camera);
   assert.ok(capturedFrame.occluder);
+  assert.equal(typeof capturedFrame.projector.project, 'function');
+  const projected = {};
+  assert.equal(capturedFrame.projectPosition(pos(0, 0, 400), projected), true);
+  assert.deepEqual([projected.x, projected.y, projected.distance], [200, 150, 600]);
+  assert.equal(capturedFrame.projectPosition({ lon: Number.NaN, lat: 0 }, projected), false);
   assert.equal(capturedFrame.uiRects.length, capturedFrame.uiRectCount);
   assert.ok(capturedFrame.uiRectCount > 0);
 
@@ -1247,7 +1270,7 @@ test('custom lanes without the detection target paint on the shared canvas', () 
 
 /** Screen-space (x, y) -> the world position that projects there in the mock. */
 function positionAtScreen(x, y, width = 400, height = 300) {
-  return new Cesium.Cartesian3((x / (width / 2)) - 1, 1 - (y / (height / 2)), 0);
+  return pos((x / (width / 2)) - 1, 1 - (y / (height / 2)), 0);
 }
 
 function rectsIntersect(a, b) {
@@ -1582,7 +1605,7 @@ test('FIRMS and vessels enlarge the ambient-card lane under an explicit aggregat
     const row = Math.floor(slot / 16);
     return {
       id: `${sourceOffset}-${index}`,
-      position: new Cesium.Cartesian3(
+      position: pos(
         -0.9 + column * (1.8 / 15),
         0.82 - row * (1.64 / 9),
         0,
@@ -1709,7 +1732,7 @@ test('pinned CCTV chrome may paint before frame one while ordinary safe-top poli
   initWorldOverlay(env.viewer);
   const ambient = createCctvThumbnailOverlayEntry({
     id: 'ambient-top',
-    position: new Cesium.Cartesian3(0, 0.9, 0),
+    position: pos(0, 0.9, 0),
     title: 'AMBIENT',
     frameSlot: { frame: { id: 'ready' }, stamp: 1 },
   });
@@ -1717,7 +1740,7 @@ test('pinned CCTV chrome may paint before frame one while ordinary safe-top poli
   ambient.maxDistance = Number.POSITIVE_INFINITY;
   const pinned = createCctvThumbnailOverlayEntry({
     id: 'pinned-top',
-    position: new Cesium.Cartesian3(0.5, 0.9, 0),
+    position: pos(0.5, 0.9, 0),
     title: 'PINNED',
     frameSlot: createFrameSlot(),
     pinned: true,
@@ -1739,7 +1762,7 @@ test('safe-top yield culls an uncontested ambient entry at projection, with a be
   initWorldOverlay(env.viewer);
   const above = createCctvThumbnailOverlayEntry({
     id: 'yield-above',
-    position: new Cesium.Cartesian3(-0.5, 0.9, 0),
+    position: pos(-0.5, 0.9, 0),
     title: 'ABOVE',
     frameSlot: { frame: { id: 'ready' }, stamp: 1 },
   });
@@ -1747,7 +1770,7 @@ test('safe-top yield culls an uncontested ambient entry at projection, with a be
   above.maxDistance = Number.POSITIVE_INFINITY;
   const below = createCctvThumbnailOverlayEntry({
     id: 'yield-below',
-    position: new Cesium.Cartesian3(0.5, 0, 0),
+    position: pos(0.5, 0, 0),
     title: 'BELOW',
     frameSlot: { frame: { id: 'ready' }, stamp: 1 },
   });
@@ -1884,7 +1907,7 @@ test('active CCTV thumbnail is protected outside the ambient quota and excludes 
 test('protected tracked entry bypasses ambient quota and excludes its paint footprint', () => {
   const env = installMockEnvironment({ width: 800, height: 600, dpr: 1 });
   initWorldOverlay(env.viewer);
-  const position = new Cesium.Cartesian3(0, 0, 0);
+  const position = pos(0, 0, 0);
   setOverlayEntries('ambient-source', [{
     id: 'ambient',
     position,
@@ -1927,7 +1950,7 @@ test('protected tracked entry bypasses ambient quota and excludes its paint foot
 test('three clustered protected cards fall back to the least-overlapping placement', () => {
   const env = installMockEnvironment({ width: 800, height: 600, dpr: 1 });
   initWorldOverlay(env.viewer);
-  const anchor = new Cesium.Cartesian3(0, 0, 0);
+  const anchor = pos(0, 0, 0);
   setOverlayEntries('protected-cluster', [
     selectedEntry('wide-first', {
       position: anchor,
@@ -2020,7 +2043,7 @@ test('destroy empties paint pools and releases pooled record and entry payloads'
 
 /** A position getter whose visibility can be toggled without touching the host. */
 function togglablePosition(box) {
-  return () => (box.hidden ? new Cesium.Cartesian3(0, 0, Number.NaN) : position());
+  return () => (box.hidden ? pos(0, 0, Number.NaN) : position());
 }
 
 test('a candidate that is not projected this frame stops painting immediately', () => {

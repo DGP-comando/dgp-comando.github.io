@@ -1,4 +1,4 @@
-import { getKeyholeGeometry } from './celestialRing.js';
+import { engineCameraAltitude, getKeyholeGeometry } from './celestialRing.js';
 
 /**
  * Scope mask — the app's signature circular viewport treatment, made real.
@@ -10,7 +10,7 @@ import { getKeyholeGeometry } from './celestialRing.js';
  * the decision set: draw it explicitly on a canvas, make the edge featherable
  * (like the NVG/FLIR tube masks), and free the six shader passes for real.
  *
- * Implementation: one fixed canvas parented into the viewer container
+ * Implementation: one fixed canvas parented into the map engine container
  * BELOW the detection surface (z-index 2 < 5) so detection's
  * mix-blend-mode still composites over the masked scene, exactly like the
  * old in-scene artifact. The mask is a radial gradient — fully transparent
@@ -100,7 +100,7 @@ const SCOPE_TERMINUS_SAMPLE_MS = 120;
 
 let _canvas = null;
 let _container = null;
-let _viewer = null;
+let _engine = null;
 let _enabled = true;
 let _featherRatio = SCOPE_FEATHER_RATIO_DEFAULT;
 let _resizeObserver = null;
@@ -388,14 +388,14 @@ function draw() {
 }
 
 /**
- * Install the scope mask into the viewer container. Idempotent.
- * @param {Cesium.Viewer} viewer
+ * Install the scope mask into the map engine's container. Idempotent.
+ * @param {object} engine - src/maplibre/engine.js (container, getCameraView, on)
  * @returns {void}
  */
-export function installScopeMask(viewer) {
-  if (_canvas || !viewer?.container) return;
-  _container = viewer.container;
-  _viewer = viewer;
+export function installScopeMask(engine) {
+  if (_canvas || !engine?.container) return;
+  _container = engine.container;
+  _engine = engine;
   _canvas = document.createElement('canvas');
   _canvas.id = 'scope-mask';
   _canvas.setAttribute('aria-hidden', 'true');
@@ -403,49 +403,45 @@ export function installScopeMask(viewer) {
   _resizeObserver = new ResizeObserver(() => draw());
   _resizeObserver.observe(_container);
   watchDevicePixelRatio();
-  watchCameraHeight(viewer);
+  watchCameraHeight(engine);
   // Seed from the live camera so the first paint is already correct for the
   // restored/initial altitude instead of flashing the globe-scale terminus.
   _terminusAlpha = currentTerminusTarget();
   draw();
 }
 
-/** @returns {number} Live camera height above the ellipsoid, or +Inf if unknown. */
+/** @returns {number} Live camera altitude (engine semantics), or +Inf if unknown. */
 function currentCameraHeightM() {
-  const height = _viewer?.camera?.positionCartographic?.height;
+  const height = engineCameraAltitude(_engine);
   return Number.isFinite(height) ? height : Number.POSITIVE_INFINITY;
 }
 
 /**
- * Sample camera height on the scene's existing frame signal, throttled, and
- * let {@link updateScopeTerminusForHeight} decide whether a repaint is even
- * warranted. Two cheap compares per rendered frame; under the idle governor a
- * parked camera renders no frames at all, so this costs nothing at rest.
- * moveEnd additionally pins the exact settled value.
- * @param {Cesium.Viewer} viewer
+ * Sample camera height on the engine's per-frame camera signal
+ * ('camerachange', fired only while the camera moves), throttled, and let
+ * {@link updateScopeTerminusForHeight} decide whether a repaint is even
+ * warranted. Two cheap compares per moving frame; a parked camera emits no
+ * events at all, so this costs nothing at rest. 'moveend' additionally pins
+ * the exact settled value.
+ * @param {object} engine
  * @returns {void}
  */
-function watchCameraHeight(viewer) {
-  const preRender = viewer?.scene?.preRender;
-  if (preRender?.addEventListener) {
-    _cameraSampleRemover = preRender.addEventListener(() => {
-      // SCOPE OFF paints nothing, so it samples nothing: no height read, no
-      // throttle bookkeeping, no quantize — the listener is a single compare.
-      // setScopeMaskEnabled(true) re-syncs the alpha it skipped.
-      if (!_enabled) return;
-      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-      if (now - _lastTerminusSampleMs < SCOPE_TERMINUS_SAMPLE_MS) return;
-      _lastTerminusSampleMs = now;
-      updateScopeTerminusForHeight(currentCameraHeightM());
-    });
-  }
-  const moveEnd = viewer?.camera?.moveEnd;
-  if (moveEnd?.addEventListener) {
-    _cameraMoveEndRemover = moveEnd.addEventListener(() => {
-      if (!_enabled) return;
-      updateScopeTerminusForHeight(currentCameraHeightM());
-    });
-  }
+function watchCameraHeight(engine) {
+  if (typeof engine?.on !== 'function') return;
+  _cameraSampleRemover = engine.on('camerachange', () => {
+    // SCOPE OFF paints nothing, so it samples nothing: no height read, no
+    // throttle bookkeeping, no quantize — the listener is a single compare.
+    // setScopeMaskEnabled(true) re-syncs the alpha it skipped.
+    if (!_enabled) return;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (now - _lastTerminusSampleMs < SCOPE_TERMINUS_SAMPLE_MS) return;
+    _lastTerminusSampleMs = now;
+    updateScopeTerminusForHeight(currentCameraHeightM());
+  });
+  _cameraMoveEndRemover = engine.on('moveend', () => {
+    if (!_enabled) return;
+    updateScopeTerminusForHeight(currentCameraHeightM());
+  });
 }
 
 function teardownCameraHeightWatch() {
@@ -504,7 +500,7 @@ export function destroyScopeMask() {
   _canvas?.remove();
   _canvas = null;
   _container = null;
-  _viewer = null;
+  _engine = null;
   _painted = false;
 }
 
@@ -517,7 +513,7 @@ export function _resetScopeMaskForTest() {
   _canvas?.remove();
   _canvas = null;
   _container = null;
-  _viewer = null;
+  _engine = null;
   _enabled = true;
   _featherRatio = SCOPE_FEATHER_RATIO_DEFAULT;
   _terminusAlpha = SCOPE_OUTSIDE_ALPHA;

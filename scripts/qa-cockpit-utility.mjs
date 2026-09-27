@@ -1,9 +1,17 @@
 #!/usr/bin/env node
-/** Focused rendered proof for adaptive Cockpit Display/Radio layout. */
+/**
+ * Focused rendered proof for adaptive Cockpit Display/Radio layout.
+ *
+ * MapLibre engine: the cockpit is a chase camera behind the tracked contact
+ * (engine.trackedTarget replaces viewer.trackedEntity). Needs live flights
+ * and the military-awareness Contacts layer on the dev server.
+ *
+ * Run: QA_BASE_URL=http://localhost:4400 node scripts/qa-cockpit-utility.mjs [--headful]
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import puppeteer from 'puppeteer';
+import { appUrl as withSemLogin, launchQaBrowser } from './lib/qaBrowser.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const shotsDir = path.join(repoRoot, 'qa-shots', 'cockpit-utility');
@@ -11,18 +19,7 @@ const appUrl = process.env.QA_BASE_URL || 'http://localhost:4173';
 const headful = process.argv.includes('--headful');
 fs.mkdirSync(shotsDir, { recursive: true });
 
-const chromeCandidates = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-].filter(Boolean);
-const executablePath = chromeCandidates.find((candidate) => fs.existsSync(candidate));
-const browser = await puppeteer.launch({
-  headless: headful ? false : 'new',
-  ...(executablePath ? { executablePath } : {}),
-  args: ['--use-angle=metal', '--enable-gpu', '--no-sandbox'],
-});
-const page = await browser.newPage();
+const { browser, page } = await launchQaBrowser({ headful, viewport: { width: 1440, height: 900 }, ignoreConsole: null });
 const failures = [];
 const consoleErrors = [];
 const localHttpErrors = [];
@@ -112,7 +109,7 @@ try {
     }
     request.continue();
   });
-  await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await page.goto(withSemLogin(appUrl), { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForFunction(() => window.__godsEyeView?.styleManager, { timeout: 60_000 });
   await page.waitForFunction(
     () => document.getElementById('loading-screen')?.classList.contains('hidden'),
@@ -615,15 +612,15 @@ try {
   });
   check('real airborne flight is tracked before Contacts activation', tracked.tracked, JSON.stringify(tracked));
   await page.waitForFunction(
-    () => Boolean(window.__godsEyeView.viewer.trackedEntity?.position),
+    () => Boolean(window.__godsEyeView.engine.trackedTarget?.getPosition?.()),
     { timeout: 10_000 },
   );
   const preselectedContactAdoption = await page.evaluate(async () => {
-    const { styleManager, dataManager, viewer } = window.__godsEyeView;
+    const { styleManager, dataManager, engine: viewer } = window.__godsEyeView;
     const flights = dataManager.layers.get('flights')?.module;
     await dataManager.setEnabled('military', true, { origin: 'programmatic' });
     const before = flights?.getTrackedInfo?.() || null;
-    const trackedEntityBefore = viewer.trackedEntity;
+    const trackedEntityBefore = viewer.trackedTarget;
     const blockerId = '__qa_slow_contacts_sibling__';
     const gateTimeoutMs = 5_000;
     // The transition settles behind real dependency enables (network-bound), so its
@@ -686,7 +683,7 @@ try {
         changing: styleManager._contextModeChanging,
         entryHidden: Boolean(entry?.hidden),
         enterResult: styleManager.cockpitView.enter(),
-        trackerPreserved: viewer.trackedEntity === trackedEntityBefore,
+        trackerPreserved: viewer.trackedTarget === trackedEntityBefore,
       };
       releaseDisable();
       const settleStartedAt = performance.now();
@@ -710,7 +707,7 @@ try {
         } : null,
         navigation: snapshot?.navigation || null,
         afterId: trackedInfo?.icao24 || null,
-        viewerTrackedId: viewer.trackedEntity?.gevTrackedId || null,
+        viewerTrackedId: viewer.trackedTarget?.gevTrackedId || null,
         contextVisible: !document.getElementById('military-awareness-panel')?.hidden,
         entryAvailableAfterSettlement: Boolean(entry && !entry.hidden),
         blockerStillRegistered: dataManager.layers.has(blockerId),
@@ -955,13 +952,13 @@ try {
     }),
   );
   const locationContactHandoff = await page.evaluate(async () => {
-    const { styleManager, dataManager, viewer } = window.__godsEyeView;
+    const { styleManager, dataManager, engine: viewer } = window.__godsEyeView;
     const awareness = dataManager.layers.get('military-awareness')?.module;
     const before = awareness?.getContextSnapshot?.()?.subject || null;
     document.querySelector('#location-pills .location-pill')?.click();
     await new Promise((resolve) => setTimeout(resolve, 3600));
     const after = awareness?.getContextSnapshot?.()?.subject || null;
-    const released = !viewer.trackedEntity;
+    const released = !viewer.trackedTarget;
     const refocused = awareness?.focusCurrent?.() === true;
     await new Promise((resolve) => setTimeout(resolve, 120));
     const owningLayer = after?.layerId === 'militaryFlights' ? 'military-flights' : after?.layerId;
@@ -988,16 +985,26 @@ try {
     JSON.stringify(locationContactHandoff),
   );
   const zoomedOutContactRefocus = await page.evaluate(async () => {
-    const { dataManager, viewer } = window.__godsEyeView;
+    const { dataManager, engine: viewer } = window.__godsEyeView;
     const awareness = dataManager.layers.get('military-awareness')?.module;
     const before = awareness?.getContextSnapshot?.()?.subject || null;
-    const entityBefore = viewer.trackedEntity;
-    viewer.camera.zoomOut(1_500_000);
-    const cameraRange = () => Math.hypot(
-      viewer.camera.position.x,
-      viewer.camera.position.y,
-      viewer.camera.position.z,
-    );
+    const entityBefore = viewer.trackedTarget;
+    // Zoom the camera straight out by 1,500 km (the old camera.zoomOut).
+    const view = viewer.getCameraView();
+    viewer.setCameraView({ ...view, alt: view.alt + 1_500_000 });
+    // Camera-to-subject range (the Cesium camera position was relative to the
+    // tracked entity; here it is measured between the two geographic points).
+    const cameraRange = () => {
+      const cam = viewer.getCameraView();
+      const target = viewer.trackedTarget?.getPosition?.();
+      if (!target) return Infinity;
+      const rad = Math.PI / 180;
+      const dLat = (target.lat - cam.lat) * rad;
+      const dLon = (target.lon - cam.lon) * rad;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(cam.lat * rad) * Math.cos(target.lat * rad) * Math.sin(dLon / 2) ** 2;
+      const ground = 2 * 6_371_008.8 * Math.asin(Math.min(1, Math.sqrt(a)));
+      return Math.hypot(ground, cam.alt - (target.alt ?? target.height ?? 0));
+    };
     const zoomedRange = cameraRange();
     const refocused = awareness?.focusCurrent?.() === true;
     await new Promise((resolve) => setTimeout(resolve, 180));
@@ -1006,7 +1013,7 @@ try {
     return {
       before: before ? { layerId: before.layerId, id: before.id } : null,
       after: after ? { layerId: after.layerId, id: after.id } : null,
-      sameEntity: viewer.trackedEntity === entityBefore,
+      sameEntity: viewer.trackedTarget === entityBefore,
       refocused,
       zoomedRange: Math.round(zoomedRange),
       focusedRange: Math.round(focusedRange),
@@ -1241,13 +1248,13 @@ try {
     JSON.stringify(contactsDetection),
   );
   const densityNavigation = await page.evaluate(async () => {
-    const { styleManager, dataManager, viewer } = window.__godsEyeView;
+    const { styleManager, dataManager, engine: viewer } = window.__godsEyeView;
     const cockpit = styleManager.cockpitView;
     const awareness = dataManager.layers.get('military-awareness')?.module;
     const settle = (ms = 260) => new Promise((resolve) => setTimeout(resolve, ms));
     const snapshot = (step) => {
       const context = awareness?.getContextSnapshot?.() || null;
-      const tracker = viewer.trackedEntity || cockpit.trackedEntity;
+      const tracker = viewer.trackedTarget || cockpit.trackedEntity;
       return {
         step,
         cockpitActive: cockpit.active,
@@ -1336,31 +1343,29 @@ try {
     JSON.stringify(densityNavigation),
   );
   const cockpitExitOwnership = await page.evaluate(async () => {
-    const { styleManager, dataManager, viewer } = window.__godsEyeView;
+    const { styleManager, dataManager, engine: viewer } = window.__godsEyeView;
     const awareness = dataManager.layers.get('military-awareness')?.module;
-    const entity = viewer.trackedEntity || styleManager.cockpitView.trackedEntity;
-    const listenersBeforeExit = viewer.scene.preUpdate.numberOfListeners;
+    const entity = viewer.trackedTarget || styleManager.cockpitView.trackedEntity;
     const exited = styleManager.cockpitView.exit() === true;
     await new Promise((resolve) => setTimeout(resolve, 80));
-    const listenersAfterExit = viewer.scene.preUpdate.numberOfListeners;
     const refocused = awareness?.focusCurrent?.() === true;
     await new Promise((resolve) => setTimeout(resolve, 80));
     return {
       exited,
       refocused,
-      sameEntity: viewer.trackedEntity === entity,
-      listenersBeforeExit,
-      listenersAfterExit,
-      listenersAfterFocus: viewer.scene.preUpdate.numberOfListeners,
+      sameEntity: viewer.trackedTarget === entity,
+      // The Cesium build also counted scene.preUpdate listeners here; the
+      // MapLibre follow camera is the engine's single track() loop, so the
+      // ownership proof is the tracked subject surviving exit + Focus.
+      stillTracked: Boolean(viewer.trackedTarget),
     };
   });
   check(
-    'Cockpit exit and later Contact Focus retain one source-owned camera-frame listener',
+    'Cockpit exit and later Contact Focus keep the same source-owned follow subject',
     cockpitExitOwnership.exited
       && cockpitExitOwnership.refocused
       && cockpitExitOwnership.sameEntity
-      && cockpitExitOwnership.listenersAfterExit === cockpitExitOwnership.listenersBeforeExit + 1
-      && cockpitExitOwnership.listenersAfterFocus === cockpitExitOwnership.listenersAfterExit,
+      && cockpitExitOwnership.stillTracked,
     JSON.stringify(cockpitExitOwnership),
   );
   const cockpitPanelRoundTrip = await page.evaluate(async () => {
@@ -2020,9 +2025,9 @@ try {
     { timeout: 6_000 },
   );
   await page.waitForFunction(() => {
-    const viewer = window.__godsEyeView.viewer;
+    const viewer = window.__godsEyeView.engine;
     if (!viewer) return false;
-    const height = viewer.camera.positionCartographic?.height;
+    const height = viewer.getCameraView().alt;
     return Math.abs(height - 18_000_000) < 150_000;
   }, { timeout: 6_000 });
   const resetState = await page.evaluate(() => {
@@ -2030,13 +2035,13 @@ try {
     const qa = window.__qaCockpitReset;
     const awareness = gev.dataManager.layers.get('military-awareness')?.module;
     const subjectId = awareness?.getContextSnapshot?.()?.subject?.id || null;
-    const height = gev.viewer.camera.positionCartographic?.height;
+    const height = gev.engine.getCameraView().alt;
     gev.styleManager.resetToGlobeView = qa.original;
     delete window.__qaCockpitReset;
     return {
       calls: qa.calls,
       cockpitActive: gev.styleManager.cockpitView.active,
-      trackedEntity: Boolean(gev.viewer.trackedEntity),
+      trackedEntity: Boolean(gev.engine.trackedTarget),
       resetHidden: document.getElementById('cockpit-reset-globe')?.hidden,
       height,
       subjectPreserved: Boolean(qa.subjectId && subjectId === qa.subjectId),

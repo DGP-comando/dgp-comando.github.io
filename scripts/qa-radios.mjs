@@ -8,50 +8,27 @@
  * Uso: node scripts/qa-radios.mjs [--url http://localhost:5173] [--shot out.png]
  * Requer dev server rodando e internet (o áudio vem direto das emissoras).
  */
-import puppeteer from 'puppeteer';
+import {
+  argValue, createReport, interactiveFeature, launchQaBrowser, openApp, setCamera, sleep, waitMapIdle,
+} from './lib/qaBrowser.mjs';
 
-const argv = process.argv;
-const arg = (name, def) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : def);
-const url = arg('--url', 'http://localhost:5173');
-const shot = arg('--shot', 'qa-radios.png');
+const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
+const shot = argValue('--shot', 'qa-radios.png');
 const LAYER_ID = 'datageo-radios';
 const CURITIBA = '4106902';
 
-const results = [];
-function check(name, pass, detail) {
-  results.push({ name, pass });
-  console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${name}${detail !== undefined ? ` — ${JSON.stringify(detail)}` : ''}`);
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const browser = await puppeteer.launch({
-  headless: 'new',
-  protocolTimeout: 300_000,
-  args: ['--no-sandbox', '--window-size=1440,900', '--autoplay-policy=user-gesture-required',
-    '--disable-renderer-backgrounding', '--disable-background-timer-throttling'],
+const { check, finish } = createReport('qa-radios');
+const { browser, page, errors } = await launchQaBrowser({
+  viewport: { width: 1440, height: 860 },
+  extraArgs: ['--autoplay-policy=user-gesture-required'],
 });
 
 try {
-  const page = await browser.newPage();
-  const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  await page.setViewport({ width: 1440, height: 860 });
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!window.__godsEyeView?.viewer, { timeout: 90_000 });
-  await sleep(10_000);
+  await openApp(page, url);
   await page.keyboard.press('Escape'); // tutorial de primeira visita cobre o mapa
   await sleep(500);
 
-  await page.evaluate(() => {
-    const v = window.__godsEyeView.viewer;
-    v.camera.cancelFlight();
-    v.camera.setView({
-      destination: v.scene.globe.ellipsoid.cartographicToCartesian({
-        longitude: -49.27 * Math.PI / 180, latitude: -25.43 * Math.PI / 180, height: 400_000,
-      }),
-      orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-    });
-  });
+  await setCamera(page, { lon: -49.27, lat: -25.43, alt: 400_000 });
   await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, true, { origin: 'user' }), LAYER_ID);
   const stats = await page.evaluate(async (id) => {
     const mod = window.__godsEyeView.dataManager.layers.get(id)?.module;
@@ -67,16 +44,14 @@ try {
   await sleep(2_000);
 
   // Clique REAL no ponto (gesto do usuário libera o autoplay).
-  const xy = await page.evaluate((ibge) => {
-    const gev = window.__godsEyeView;
-    const ds = gev.viewer.dataSources.getByName('datageo-radios')[0];
-    const e = ds?.entities.getById(`datageo-radios:${ibge}`);
-    if (!e) return null;
-    gev.viewer.scene.render();
-    const p = gev.viewer.scene.cartesianToCanvasCoordinates(e.position.getValue(gev.viewer.clock.currentTime));
-    const r = gev.viewer.scene.canvas.getBoundingClientRect();
+  await waitMapIdle(page);
+  const ponto = await interactiveFeature(page, LAYER_ID, { ibge: CURITIBA });
+  const xy = ponto ? await page.evaluate((lo, la) => {
+    const { engine } = window.__godsEyeView;
+    const p = engine.project(lo, la);
+    const r = engine.container.getBoundingClientRect();
     return p ? { x: r.left + p.x, y: r.top + p.y } : null;
-  }, CURITIBA);
+  }, ponto.lon, ponto.lat) : null;
   check('ponto de Curitiba na tela', !!xy, xy);
   if (xy) await page.mouse.click(xy.x, xy.y);
 
@@ -112,6 +87,4 @@ try {
   await browser.close();
 }
 
-const passed = results.filter((r) => r.pass).length;
-console.log(`\nqa-radios: ${passed}/${results.length} passed`);
-process.exit(passed === results.length ? 0 : 1);
+finish();

@@ -1,4 +1,10 @@
-import * as Cesium from 'cesium';
+// Nuvens do cockpit num canvas WebGL próprio (#cockpit-cloud-effects), por
+// cima do mapa MapLibre. Não depende do motor do mapa além de
+// `engine.getCameraView()` (posição da câmera em lat/lon/alt, semântica
+// Cesium), usada para buscar o tempo local em /api/weather-effects.
+// Degradação: no Cesium as nuvens ficavam sobre o céu/terreno 3D; no MapLibre
+// ficam sobre o céu do estilo (setSky) e o relevo raster-dem. O shader é o
+// mesmo, só transparente, então o resultado visual é equivalente.
 import { deriveWeatherEffectProfile, weatherAltitudeFactors } from './weatherEffectsMath.js';
 
 const WEATHER_REFRESH_MS = 5 * 60_000;
@@ -17,7 +23,7 @@ const VERTEX_SHADER = `
 `;
 
 // Adapted from the supplied R&D cloudscape. This pass outputs transparent
-// clouds only so Cesium remains the sky/terrain renderer. Three FBM octaves
+// clouds only so the map engine remains the sky/terrain renderer. Three FBM octaves
 // and 24 ray steps keep the presentation bounded on integrated GPUs.
 const FRAGMENT_SHADER = `
   precision highp float;
@@ -121,12 +127,14 @@ function compileShader(gl, type, source) {
   throw new Error(error);
 }
 
+const DEG = Math.PI / 180;
+
 function greatCircleM(a, b) {
   if (![a?.latitude, a?.longitude, b?.latitude, b?.longitude].every(Number.isFinite)) return Infinity;
-  const latitudeA = Cesium.Math.toRadians(a.latitude);
-  const latitudeB = Cesium.Math.toRadians(b.latitude);
-  const latitudeDelta = Cesium.Math.toRadians(b.latitude - a.latitude);
-  const longitudeDelta = Cesium.Math.toRadians(b.longitude - a.longitude);
+  const latitudeA = a.latitude * DEG;
+  const latitudeB = b.latitude * DEG;
+  const latitudeDelta = (b.latitude - a.latitude) * DEG;
+  const longitudeDelta = (b.longitude - a.longitude) * DEG;
   const haversine = Math.sin(latitudeDelta / 2) ** 2
     + Math.cos(latitudeA) * Math.cos(latitudeB) * Math.sin(longitudeDelta / 2) ** 2;
   return 6371000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
@@ -162,11 +170,12 @@ export function cockpitWeatherEnabledFromStoredValue(value) {
 
 /**
  * Weather-backed volumetric cloud pass that exists only while cockpit mode is
- * active. It owns no Cesium fog/post-process stages and cannot affect map mode.
+ * active. It owns no map fog/post-process stages and cannot affect map mode.
  */
 export class CockpitCloudEffectsController {
-  constructor(viewer) {
-    this.viewer = viewer;
+  /** @param {object} engine Motor MapLibre (src/maplibre/engine.js). */
+  constructor(engine) {
+    this.engine = engine;
     this.canvas = document.createElement('canvas');
     this.canvas.id = 'cockpit-cloud-effects';
     this.canvas.setAttribute('aria-hidden', 'true');
@@ -298,16 +307,7 @@ export class CockpitCloudEffectsController {
   }
 
   cameraPoint() {
-    const cartographic = this.viewer?.camera?.positionCartographic;
-    if (!cartographic) return null;
-    const latitude = Cesium.Math.toDegrees(cartographic.latitude);
-    const longitude = Cesium.Math.toDegrees(cartographic.longitude);
-    if (![latitude, longitude].every(Number.isFinite)) return null;
-    return {
-      latitude,
-      longitude,
-      altitudeM: Math.max(0, Number(cartographic.height) || 0),
-    };
+    return cockpitCameraPoint(this.engine);
   }
 
   start() {
@@ -467,7 +467,7 @@ export class CockpitCloudEffectsController {
   render(timeSec) {
     const gl = this.gl;
     if (!gl || !this.program || !this.locations) return;
-    const windRadians = Cesium.Math.toRadians(this.windDirectionDeg);
+    const windRadians = this.windDirectionDeg * DEG;
     const windScale = 0.008 + this.windStrength * 0.022;
     gl.useProgram(this.program);
     gl.uniform2f(this.locations.resolution, this.canvas.width, this.canvas.height);
@@ -525,6 +525,25 @@ export class CockpitCloudEffectsController {
   }
 }
 
-export function initCockpitCloudEffects(viewer) {
-  return new CockpitCloudEffectsController(viewer);
+/** Posição da câmera do motor como ponto de tempo {latitude, longitude, altitudeM}, ou null. */
+export function cockpitCameraPoint(engine) {
+  let view = null;
+  try {
+    view = engine?.getCameraView?.() ?? null;
+  } catch {
+    view = null;
+  }
+  if (!view) return null;
+  const latitude = Number(view.lat);
+  const longitude = Number(view.lon);
+  if (![latitude, longitude].every(Number.isFinite)) return null;
+  return {
+    latitude,
+    longitude,
+    altitudeM: Math.max(0, Number(view.alt) || 0),
+  };
+}
+
+export function initCockpitCloudEffects(engine) {
+  return new CockpitCloudEffectsController(engine);
 }

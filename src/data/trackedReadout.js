@@ -10,6 +10,17 @@ import { WORLD_OVERLAY_STYLE } from '../overlays/worldOverlayTokens.js';
  * @description Presentation-model bridge for the protected tracked-target
  * entry in the shared world-overlay host. This module owns no canvas,
  * projection, frame listener, layout, fade, or paint path.
+ *
+ * MOTOR: MapLibre. O alvo ativo é `engine.trackedTarget` (o objeto passado a
+ * `engine.track(target)`), acompanhado pelo evento `'trackedchange'` do motor
+ * — o antigo `viewer.trackedEntity`/`trackedEntityChanged`. Um alvo rastreado
+ * ganha o card quando traz:
+ *   gevLabelModel      {title, details[], accent}
+ *   gevDisplayPosition() -> WorldPosition ({lon,lat,height} ou ECEF legado)
+ *                      (ou, na falta dele, o `getPosition()` que o motor segue)
+ *   gevTrackedId       id estável do card (opcional)
+ * Seleções de contexto (instalações militares) continuam chegando pelos
+ * eventos de janela `gev:entity-selected` / `gev:entity-selection-cleared`.
  */
 
 export const TRACKED_OVERLAY_SOURCE_ID = 'tracked';
@@ -33,7 +44,7 @@ const DEFAULT_TRACKED_OVERLAY_HOST = Object.freeze({
   clearSource: clearOverlaySource,
 });
 
-let _viewer = null;
+let _engine = null;
 let _trackedEntityChangedRemove = null;
 let _selectedContext = null;
 let _contextSelectedHandler = null;
@@ -72,9 +83,13 @@ export function trackedLabelModelFromText(text, accent = WORLD_OVERLAY_STYLE.acc
  * @returns {Object|null}
  */
 export function cachedTrackedDisplayPosition(entity) {
-  if (!entity || typeof entity.gevDisplayPosition !== 'function') return null;
+  if (!entity) return null;
+  const read = typeof entity.gevDisplayPosition === 'function'
+    ? entity.gevDisplayPosition
+    : (typeof entity.getPosition === 'function' ? entity.getPosition : null);
+  if (!read) return null;
   try {
-    return entity.gevDisplayPosition() || null;
+    return read.call(entity) || null;
   } catch {
     return null;
   }
@@ -113,8 +128,13 @@ function entryIdFor(entity) {
   return fallback ? `entity:${fallback}` : null;
 }
 
+/** Alvo acompanhado pelo motor (engine.trackedTarget). */
+function trackedTarget() {
+  return _engine?.trackedTarget || null;
+}
+
 function activeEntity() {
-  return _viewer?.trackedEntity || _selectedContext?.entity || null;
+  return trackedTarget() || _selectedContext?.entity || null;
 }
 
 /**
@@ -125,7 +145,8 @@ function activeEntity() {
 export function createTrackedOverlayEntry(entity) {
   const model = entity?.gevLabelModel;
   const id = entryIdFor(entity);
-  if (!id || !model || typeof entity.gevDisplayPosition !== 'function') {
+  if (!id || !model
+    || (typeof entity.gevDisplayPosition !== 'function' && typeof entity.getPosition !== 'function')) {
     return null;
   }
   const title = String(model.title || '').trim();
@@ -156,7 +177,9 @@ export function createTrackedOverlayEntry(entity) {
 }
 
 function publishEntity(entity) {
-  const entry = createTrackedOverlayEntry(entity);
+  // Alvo com `mapLabel: true` (voos) desenha o próprio cartão no mapa: publicar
+  // aqui mostraria o cartão em dobro.
+  const entry = entity?.mapLabel ? null : createTrackedOverlayEntry(entity);
   if (!entry) {
     clearTrackedSource();
     return;
@@ -197,17 +220,18 @@ export function getActiveTrackedReadoutId() {
 /**
  * Initialize the model bridge and selection listeners. No render listener is
  * installed; the already-initialized world-overlay host owns the frame lane.
- * @param {Object} viewer Active Cesium viewer.
+ * @param {Object} engine Motor MapLibre (engine.trackedTarget + evento 'trackedchange').
  */
-export function initTrackedReadout(viewer) {
-  if (!viewer || _viewer === viewer) return;
-  if (_viewer) destroyTrackedReadout();
-  _viewer = viewer;
+export function initTrackedReadout(engine) {
+  if (!engine || _engine === engine) return;
+  if (_engine) destroyTrackedReadout();
+  _engine = engine;
   _overlayHost.setVisible(TRACKED_OVERLAY_SOURCE_ID, true);
-  _trackedEntityChangedRemove = viewer.trackedEntityChanged?.addEventListener?.(() => {
-    if (viewer.trackedEntity) _selectedContext = null;
+  const off = engine.on?.('trackedchange', () => {
+    if (trackedTarget()) _selectedContext = null;
     syncActiveEntity();
-  }) || null;
+  });
+  _trackedEntityChangedRemove = typeof off === 'function' ? off : null;
   _contextSelectedHandler = (event) => {
     const record = event.detail;
     if (record?.layerId === 'military-installations') {
@@ -228,7 +252,7 @@ export function initTrackedReadout(viewer) {
   };
   _aircraftSelectedHandler = () => {
     _selectedContext = null;
-    if (!_viewer?.trackedEntity) clearTrackedSource();
+    if (!trackedTarget()) clearTrackedSource();
   };
   window.addEventListener('gev:entity-selected', _contextSelectedHandler);
   window.addEventListener('gev:entity-selection-cleared', _contextClearedHandler);
@@ -252,7 +276,7 @@ export function destroyTrackedReadout() {
   _selectedContext = null;
   clearTrackedSource();
   _overlayHost.setVisible(TRACKED_OVERLAY_SOURCE_ID, false);
-  _viewer = null;
+  _engine = null;
 }
 
 /** Inject a host recorder for focused lifecycle tests; null restores production. */

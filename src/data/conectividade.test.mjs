@@ -81,7 +81,7 @@ test('a camada esta registrada com token proprio e o registro segue valido', () 
 test('a escala de cor das torres nao invade o ciano nem o violeta de outras camadas', async () => {
   // Ciano e dos municipios e do vento; violeta/fucsia e da precipitacao. A
   // familia verde/lima existe para esta camada poder ser lida sobre as outras.
-  const src = fs.readFileSync(path.join(ROOT, 'src', 'data', 'datageoConectividade.js'), 'utf8');
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'maplibre', 'layers', 'conectividadeRadios.js'), 'utf8');
   const cores = [...src.matchAll(/color: '(#[0-9a-f]{6})'/gi)].map((m) => m[1].toLowerCase());
   assert.ok(cores.length >= 5, 'a escala precisa ter as quatro geracoes mais o indefinido');
   for (const hex of cores) {

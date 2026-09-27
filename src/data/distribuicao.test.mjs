@@ -5,13 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  cellKey,
-  datageoDistribuicaoLayer,
-  decodeCell,
-  nearestCells,
-} from './datageoDistribuicao.js';
-import { DATAGEO_ENERGIA_LAYERS } from './datageoEnergia.js';
+import { cellKey, decodeCell, nearestCells } from './slicedCells.js';
+import DATAGEO_ENERGIA_LAYERS from '../maplibre/layers/energiaLogistica.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -89,6 +84,8 @@ test('cellKey e nearestCells priorizam a célula do centro e respeitam o index',
 });
 
 test('camada registrada na classe Infraestrutura e no share link', () => {
+  const datageoDistribuicaoLayer = DATAGEO_ENERGIA_LAYERS.find((l) => l.id === 'datageo-distribuicao');
+  assert.ok(datageoDistribuicaoLayer, 'camada ausente do módulo MapLibre de energia/logística');
   assert.equal(datageoDistribuicaoLayer.category, 'Infraestrutura');
   assert.ok(DATAGEO_ENERGIA_LAYERS.includes(datageoDistribuicaoLayer));
   const entry = LAYER_STATE_REGISTRY.find((e) => e.id === 'datageo-distribuicao');

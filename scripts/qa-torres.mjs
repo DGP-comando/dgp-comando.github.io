@@ -6,44 +6,37 @@
  *   3. tirar o mouse apaga os anéis e o tooltip.
  *
  * Uso: node scripts/qa-torres.mjs [--url http://localhost:5173] [--shot out.png]
+ * Requer dev server rodando.
  */
-import puppeteer from 'puppeteer';
+import {
+  argValue, createReport, interactiveFeature, launchQaBrowser, openApp, setCamera, sleep, waitMapIdle,
+} from './lib/qaBrowser.mjs';
 
-const argv = process.argv;
-const arg = (name, def) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : def);
-const url = arg('--url', 'http://localhost:5173');
-const shot = arg('--shot', 'qa-torres.png');
+const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
+const shot = argValue('--shot', 'qa-torres.png');
 const LAYER_ID = 'datageo-conectividade';
 
-const results = [];
-function check(name, pass, detail) {
-  results.push({ name, pass });
-  console.log(`  [${pass ? 'PASS' : 'FAIL'}] ${name}${detail !== undefined ? ` — ${JSON.stringify(detail)}` : ''}`);
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const { check, finish } = createReport('qa-torres');
+const { browser, page, errors } = await launchQaBrowser({ viewport: { width: 1440, height: 860 } });
 
-const browser = await puppeteer.launch({ headless: 'new', protocolTimeout: 300_000, args: ['--no-sandbox'] });
+// Anéis de alcance: feições da fonte GeoJSON `dg-conect-aneis` (um anel por geração).
+const aneis = () => page.evaluate(async () => {
+  const src = window.__godsEyeView.engine.map.getSource('dg-conect-aneis');
+  if (!src) return -1;
+  const data = await src.getData();
+  return data?.features?.length ?? 0;
+});
+const tooltip = () => page.evaluate(() => {
+  const el = document.getElementById('dg-tooltip');
+  return el && !el.hidden ? el.textContent : '';
+});
+
 try {
-  const page = await browser.newPage();
-  const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message));
-  await page.setViewport({ width: 1440, height: 860 });
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => !!window.__godsEyeView?.viewer, { timeout: 90_000 });
-  await sleep(10_000);
+  await openApp(page, url);
   await page.keyboard.press('Escape');
 
   // Guarapuava, visão de ~60 km: torres rurais separadas o bastante para o pick.
-  await page.evaluate(() => {
-    const v = window.__godsEyeView.viewer;
-    v.camera.cancelFlight();
-    v.camera.setView({
-      destination: v.scene.globe.ellipsoid.cartographicToCartesian({
-        longitude: -51.46 * Math.PI / 180, latitude: -25.39 * Math.PI / 180, height: 60_000,
-      }),
-      orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-    });
-  });
+  await setCamera(page, { lon: -51.46, lat: -25.39, alt: 60_000 });
   await page.evaluate((id) => window.__godsEyeView.dataManager.setEnabled(id, true, { origin: 'user' }), LAYER_ID);
   const count = await page.evaluate(async (id) => {
     const mod = window.__godsEyeView.dataManager.layers.get(id)?.module;
@@ -54,56 +47,40 @@ try {
     return 0;
   }, LAYER_ID);
   check('torres carregam', count > 1000, { count });
-  await sleep(2_000);
+  await waitMapIdle(page);
 
   // Torre mais perto do centro da tela.
-  const xy = await page.evaluate(() => {
-    const v = window.__godsEyeView.viewer;
-    const ds = v.dataSources.getByName('datageo-conectividade-torres')[0];
-    v.scene.render();
-    const r = v.scene.canvas.getBoundingClientRect();
-    let best = null;
-    for (const e of ds.entities.values) {
-      const p = v.scene.cartesianToCanvasCoordinates(e.position.getValue(v.clock.currentTime));
-      if (!p) continue;
-      const d = Math.hypot(p.x - r.width / 2, p.y - r.height / 2);
-      if (!best || d < best.d) best = { d, x: r.left + p.x, y: r.top + p.y };
-    }
-    return best;
-  });
+  const torre = await interactiveFeature(page, LAYER_ID);
+  const xy = torre ? await page.evaluate((lo, la) => {
+    const { engine } = window.__godsEyeView;
+    const p = engine.project(lo, la);
+    const r = engine.container.getBoundingClientRect();
+    return { x: r.left + p.x, y: r.top + p.y };
+  }, torre.lon, torre.lat) : null;
   check('há torre na tela', !!xy, xy);
-  await page.mouse.move(xy.x - 30, xy.y - 30);
-  await sleep(200);
-  await page.mouse.move(xy.x, xy.y, { steps: 5 });
-  await sleep(1_500);
+  if (xy) {
+    await page.mouse.move(xy.x - 30, xy.y - 30);
+    await sleep(200);
+    await page.mouse.move(xy.x, xy.y, { steps: 5 });
+    await sleep(1_500);
 
-  const hover = await page.evaluate(() => {
-    const tip = [...document.querySelectorAll('.datageo-entity-tooltip')].find((el) => el.style.display === 'block');
-    const ds = window.__godsEyeView.viewer.dataSources.getByName('datageo-conectividade-destaque')[0];
-    return { tip: tip?.textContent ?? '', aneis: ds?.entities.values.length ?? 0 };
-  });
-  check('tooltip com operadora e aviso de estimativa', /📡/.test(hover.tip) && /ESTIMADO/.test(hover.tip), hover.tip.slice(0, 120));
-  check('anéis de alcance desenhados', hover.aneis >= 2, { entidades: hover.aneis });
-  await page.mouse.move(xy.x, xy.y - 150, { steps: 3 });
-  await sleep(300);
-  await page.mouse.move(xy.x - 200, xy.y + 80, { steps: 3 });
-  await sleep(1_500);
-  // screenshot com o destaque: volta à torre
-  await page.mouse.move(xy.x, xy.y, { steps: 5 });
-  await sleep(1_500);
-  await page.screenshot({ path: shot });
-  console.log('   screenshot:', shot);
-  await page.mouse.move(xy.x + 250, xy.y + 120, { steps: 4 });
-  await sleep(1_500);
-  const out = await page.evaluate(() => ({
-    aneis: window.__godsEyeView.viewer.dataSources.getByName('datageo-conectividade-destaque')[0]?.entities.values.length ?? -1,
-    tip: [...document.querySelectorAll('.datageo-entity-tooltip')].some((el) => el.style.display === 'block'),
-  }));
-  check('sair da torre apaga anéis e tooltip', out.aneis === 0 && !out.tip, out);
+    const hover = { tip: await tooltip(), aneis: await aneis() };
+    check('tooltip com operadora e aviso de estimativa', /📡/.test(hover.tip) && /ESTIMADO/.test(hover.tip), hover.tip.slice(0, 120));
+    // Um anel por geração da torre (a de 2G só tem um).
+    check('anéis de alcance desenhados', hover.aneis >= 1, { feicoes: hover.aneis });
+    await page.screenshot({ path: shot });
+    console.log('   screenshot:', shot);
+    await page.mouse.move(xy.x + 250, xy.y + 120, { steps: 4 });
+    await sleep(1_500);
+    // O tooltip é do anfitrião (um só para todas as camadas): fora da torre
+    // pode aparecer o do município por baixo, mas não mais o da torre.
+    const tipFora = await tooltip();
+    const out = { aneis: await aneis(), tipDaTorre: /📡|ESTIMADO/.test(tipFora) };
+    check('sair da torre apaga anéis e tooltip', out.aneis === 0 && !out.tipDaTorre, out);
+  }
   check('sem erros de página', errors.length === 0, errors.slice(0, 3));
 } finally {
   await browser.close();
 }
-const passed = results.filter((r) => r.pass).length;
-console.log(`\nqa-torres: ${passed}/${results.length} passed`);
-process.exit(passed === results.length ? 0 : 1);
+
+finish();

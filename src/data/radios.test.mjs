@@ -1,15 +1,23 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import { centroidByIbge } from './prCentroids.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
-import { datageoRadiosLayer, dotSize, flattenStations, nextLiveIndex } from './datageoRadios.js';
+import { dotSize, flattenStations, nextLiveIndex } from './radioPlayer.js';
+import conectividadeRadios from '../maplibre/layers/conectividadeRadios.js';
+
+const datageoRadiosLayer = conectividadeRadios.find((l) => l.id === 'datageo-radios');
 import { contactLines, isLive, placeTooltipHtml, whatsappNumber } from './radioContact.js';
 
-const data = JSON.parse(readFileSync(new URL('../../data/privado/radios-pr.json', import.meta.url), 'utf8'));
+// O arquivo mora em data/privado/ (fora do git, vai para o bucket privado):
+// sem ele na máquina, os testes que leem os dados são pulados, não falham.
+const DATA_URL = new URL('../../data/privado/radios-pr.json', import.meta.url);
+const hasData = existsSync(DATA_URL);
+const dataTest = hasData ? test : (name, fn) => test(name, { skip: 'sem data/privado/radios-pr.json' }, fn);
+const data = hasData ? JSON.parse(readFileSync(DATA_URL, 'utf8')) : { places: [] };
 const stations = flattenStations(data.places).map((e) => e.station);
 
-test('todo lugar é um município do PR com ao menos uma estação', () => {
+dataTest('todo lugar é um município do PR com ao menos uma estação', () => {
   assert.ok(data.places.length > 0);
   for (const place of data.places) {
     assert.ok(centroidByIbge(place.ibge), `${place.ibge} não é município do PR`);
@@ -17,7 +25,7 @@ test('todo lugar é um município do PR com ao menos uma estação', () => {
   }
 });
 
-test('estação ou toca em HTTPS ou tem frequência para ser achada no dial', () => {
+dataTest('estação ou toca em HTTPS ou tem frequência para ser achada no dial', () => {
   for (const s of stations) {
     if (s.url) assert.match(s.url, /^https:\/\//, `${s.name} tem stream que o Pages não toca`);
     else assert.ok(s.freq, `${s.name} não toca nem tem frequência`);
@@ -27,7 +35,7 @@ test('estação ou toca em HTTPS ou tem frequência para ser achada no dial', ()
   assert.equal(new Set(urls).size, urls.length, 'stream duplicado');
 });
 
-test('toda comunitária outorgada tem entidade e frequência', () => {
+dataTest('toda comunitária outorgada tem entidade e frequência', () => {
   const radcom = stations.filter((s) => s.comunitaria);
   assert.ok(radcom.length >= 280, `só ${radcom.length} comunitárias`);
   for (const s of radcom) assert.ok(s.entidade && s.freq, s.id);
@@ -50,7 +58,7 @@ test('contato: WhatsApp normalizado, link de mapa e nada de protocolo estranho',
   assert.match(lines[0].href, /^https:\/\/www\.google\.com\/maps\/search\/.*Abati/);
 });
 
-test('tooltip escapa texto externo e mostra a entidade quando falta contato', () => {
+dataTest('tooltip escapa texto externo e mostra a entidade quando falta contato', () => {
   const html = placeTooltipHtml({ nome: 'X', stations: [{ name: '<b>R</b>', freq: '87,9 FM', entidade: 'Assoc. Y' }] });
   assert.ok(!html.includes('<b>R</b>'));
   assert.match(html, /Assoc\. Y/);

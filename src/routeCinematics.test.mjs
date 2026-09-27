@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import * as Cesium from 'cesium';
+import { Cartesian3 as C3, Cartographic, GeoMath, WGS84 } from './voice/geo3d.js';
 
 import {
   ROUTE_CINEMA,
@@ -30,7 +30,13 @@ import {
   probeMeshFloorM,
   routeSpeedProfile,
   signedTurnRad,
+  stepCameraMotion,
 } from './cameraVerbs.js';
+
+// Geometria WGS84 sem Cesium (src/voice/geo3d.js), com a mesma forma de API.
+function Cartesian3(x = 0, y = 0, z = 0) { return { x, y, z }; }
+Object.assign(Cartesian3, C3, { negate: (a, r) => C3.multiplyByScalar(a, -1, r) });
+const Cesium = { Cartesian3, Cartographic, Math: GeoMath, Ellipsoid: { WGS84 } };
 
 const FRAME_S = 1 / 60;
 const CRUISE_M_S = { slow: 20, normal: 40, fast: 90 };
@@ -55,68 +61,51 @@ function rollDegOf(eye, direction, up) {
 }
 
 /**
- * A viewer whose camera actually MODELS orientation: setView with a
- * direction/up pair updates heading/pitch/roll the way Cesium's own
- * decomposition does, and setView with an explicit roll writes it back. Without
- * that, a pin can only prove the code called setView — not that the horizon
- * the user is left holding is level.
+ * Um motor MapLibre falso cuja câmera guarda a pose aplicada (lat/lon/alt,
+ * heading, pitch, roll): setCameraView grava a pose do dolly, map.jumpTo({roll})
+ * grava o nivelamento. Assim um pino pode provar que o horizonte que o usuário
+ * recebe está nivelado, não só que alguém chamou a câmera.
  */
 function createTickableViewer({ heightM = 700 } = {}) {
-  const listeners = [];
   const setViews = [];
+  const jumps = [];
   // The tick derives dt from the wall clock, so a synchronous test loop would
   // advance the flight by ~0 no matter how many times it ticked. Stub the
   // clock and step it explicitly.
   const realPerformance = globalThis.performance;
   let nowMs = 0;
   globalThis.performance = { now: () => nowMs };
-  const position = Cesium.Cartesian3.fromDegrees(-97.76, 30.26, heightM);
-  const camera = {
-    positionWC: position,
-    positionCartographic: Cesium.Cartographic.fromCartesian(position),
-    heading: 0,
-    pitch: Cesium.Math.toRadians(-45),
-    roll: 0,
-    cancelFlight() {},
-    lookAtTransform() {},
-    setView(options) {
-      setViews.push(options);
-      const orientation = options?.orientation;
-      // A destination ALWAYS moves the camera, whatever orientation form came
-      // with it. Branching on the orientation shape instead would let a
-      // levelling call that also passed a destination slip past the pose pin.
-      if (options?.destination) camera.positionWC = options.destination;
-      if (orientation?.direction) {
-        camera.roll = Cesium.Math.toRadians(rollDegOf(
-          options?.destination || camera.positionWC, orientation.direction, orientation.up,
-        ));
-      }
-      if (orientation && Number.isFinite(orientation.roll)) camera.roll = orientation.roll;
-      if (orientation && Number.isFinite(orientation.heading)) camera.heading = orientation.heading;
-      if (orientation && Number.isFinite(orientation.pitch)) camera.pitch = orientation.pitch;
+  const cam = { lat: 30.26, lon: -97.76, alt: heightM, heading: 0, pitch: -45, roll: 0 };
+  const engine = {
+    trackedTarget: null,
+    isMoving: () => false,
+    hasTerrain: () => false,
+    getCameraView: () => ({ ...cam }),
+    setCameraView(view) {
+      setViews.push({ ...view });
+      Object.assign(cam, {
+        lat: view.lat, lon: view.lon, alt: view.alt, heading: view.heading, pitch: view.pitch, roll: view.roll ?? 0,
+      });
     },
-  };
-  const viewer = {
-    trackedEntity: undefined,
-    clock: { onTick: { addEventListener: (fn) => { listeners.push(fn); return () => {}; } } },
-    scene: {
-      canvas: { addEventListener() {}, removeEventListener() {} },
-      tweens: [],
-      requestRender() {},
-      // A live app has a rendered surface under the route; the mesh probe reads
-      // it, so these flights start immediately rather than arming.
-      sampleHeight: () => 0,
+    map: {
+      getRoll: () => cam.roll,
+      jumpTo(options) {
+        jumps.push({ ...options });
+        if (Number.isFinite(options.roll)) cam.roll = options.roll;
+      },
+      getCanvasContainer: () => ({ addEventListener() {}, removeEventListener() {} }),
     },
-    camera,
   };
   return {
-    viewer,
+    viewer: engine,
+    cam,
     setViews,
+    jumps,
     tick: (dtS = FRAME_S) => {
       nowMs += dtS * 1000;
-      for (const fn of listeners) fn();
+      stepCameraMotion();
     },
-    rollDeg: () => Cesium.Math.toDegrees(camera.roll),
+    rollDeg: () => cam.roll,
     restore: () => { globalThis.performance = realPerformance; },
   };
 }
@@ -905,11 +894,7 @@ test('an interrupt MID-BANK stops the dolly and puts the horizon back level', ()
   for (let i = 0; i < 20000 && Math.abs(viewer.rollDeg()) < 3; i += 1) viewer.tick(FRAME_S);
   const rollAtCut = viewer.rollDeg();
   assert.ok(Math.abs(rollAtCut) >= 3, `the camera must be banked before the cut (${rollAtCut.toFixed(2)}°)`);
-  const poseAtCut = {
-    position: Cesium.Cartesian3.clone(viewer.viewer.camera.positionWC),
-    heading: viewer.viewer.camera.heading,
-    pitch: viewer.viewer.camera.pitch,
-  };
+  const poseAtCut = { ...viewer.cam };
 
   const { wasActive, leveled } = interruptCameraMotion('manual-input');
   assert.equal(wasActive, true);
@@ -922,15 +907,13 @@ test('an interrupt MID-BANK stops the dolly and puts the horizon back level', ()
   // Levelling preserves where the camera was looking — it is not a re-frame.
   // Asserted NUMERICALLY, not just by the omitted destination: position,
   // heading and pitch must come out the far side unchanged.
-  const levelling = viewer.setViews.at(-1);
-  assert.equal(levelling.orientation.roll, 0);
-  assert.equal(levelling.destination, undefined, 'levelling must not move the camera');
-  assert.equal(
-    Cesium.Cartesian3.distance(viewer.viewer.camera.positionWC, poseAtCut.position), 0,
-    'the camera moved while being levelled',
-  );
-  assert.equal(viewer.viewer.camera.heading, poseAtCut.heading, 'heading changed while levelling');
-  assert.equal(viewer.viewer.camera.pitch, poseAtCut.pitch, 'pitch changed while levelling');
+  const levelling = viewer.jumps.at(-1);
+  assert.deepEqual(levelling, { roll: 0 }, 'levelling must only take the roll out');
+  for (const key of ['lat', 'lon', 'alt']) {
+    assert.equal(viewer.cam[key], poseAtCut[key], `the camera moved (${key}) while being levelled`);
+  }
+  assert.equal(viewer.cam.heading, poseAtCut.heading, 'heading changed while levelling');
+  assert.equal(viewer.cam.pitch, poseAtCut.pitch, 'pitch changed while levelling');
 
   const writesAtCut = viewer.setViews.length;
   viewer.tick();
@@ -969,9 +952,7 @@ test('a completed dolly lands wings level and releases the slot', () => {
     `the flight ended holding ${viewer.rollDeg().toFixed(5)}° of roll`,
   );
   // The roll came out through the ease-out, not as a snap on the last frame.
-  const rolls = viewer.setViews
-    .filter((v) => v.orientation?.direction)
-    .map((v) => rollDegOf(v.destination, v.orientation.direction, v.orientation.up));
+  const rolls = viewer.setViews.map((v) => v.roll);
   assert.ok(maxStep(rolls) < 0.5, `the unwind stepped ${maxStep(rolls).toFixed(3)}° in one frame`);
   assert.ok(Math.abs(rolls.at(-1)) < 1e-3, 'the last APPLIED frame is level on its own');
 });
@@ -999,4 +980,31 @@ test('the 0.5 s duration floor is the one place the speed word is not the mean',
   // Anything long enough to see keeps the contract exactly.
   const normal = flightFrom(TWO_TURN_ROUTE);
   assert.ok(Math.abs((normal.totalM / normal.durationS) - CRUISE_M_S.normal) < 1e-9);
+});
+
+test('the pose handed to the MapLibre engine matches the vector frame', () => {
+  const flight = flightFrom(TWO_TURN_ROUTE, { floorFn: () => 0 });
+  let sawBank = false;
+  for (let i = 0; i < 20000; i += 1) {
+    const frame = advanceRouteFlight(flight, FRAME_S);
+    if (frame.arming) continue;
+    // Pitch locked at the designed look-down angle; heading is a compass bearing.
+    assert.ok(Math.abs(frame.pitchDeg - ROUTE_CINEMA.pitchDeg) < 0.5, `pitch ${frame.pitchDeg}`);
+    assert.ok(frame.headingDeg >= 0 && frame.headingDeg < 360);
+    // The roll the engine receives (bankDeg) is the roll the vectors encode.
+    const r = rollDegOf(frame.eye, frame.direction, frame.up);
+    assert.ok(Math.abs(r - frame.bankDeg) < 1e-3, `roll ${r} vs bank ${frame.bankDeg}`);
+    if (Math.abs(frame.bankDeg) > 3) sawBank = true;
+    // The eye sits over the reported lon/lat.
+    const carto = Cesium.Cartographic.fromCartesian(frame.eye);
+    assert.ok(Math.abs(Cesium.Math.toDegrees(carto.longitude) - frame.lon) < 1e-9);
+    assert.ok(Math.abs(carto.height - frame.heightM) < 1e-3);
+    if (frame.finished) break;
+  }
+  assert.ok(sawBank);
+  // The first leg runs due east.
+  const first = flightFrom(STRAIGHT_ROUTE, { floorFn: () => 0 });
+  let frame = advanceRouteFlight(first, FRAME_S);
+  while (frame.arming) frame = advanceRouteFlight(first, FRAME_S);
+  assert.ok(Math.abs(frame.headingDeg - 90) < 1, `heading ${frame.headingDeg}`);
 });

@@ -1,15 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import * as Cesium from 'cesium';
 import flightsLayer, {
-  _setCockpitDetectionSubjectForTest as setFlightsCockpitSubject,
   _setTrackedFlightRefreshStateForTest,
 } from './flights.js';
 import militaryFlightsLayer, {
   _setCockpitDetectionSubjectForTest as setMilitaryCockpitSubject,
   _setTrackedMilitaryRefreshStateForTest,
 } from './militaryFlights.js';
+
+// MIGRAÇÃO MAPLIBRE (2026-09): as camadas recebem o sujeito do cockpit pelo
+// MESMO evento que ui.js despacha (`gev:cockpit-mode-changed`), ouvido desde o
+// init(); os contatos são semeados como posições neutras {lon, lat, alt}.
+if (typeof globalThis.window === 'undefined') globalThis.window = new EventTarget();
+flightsLayer.init(null);
+militaryFlightsLayer.init(null);
+
+function setFlightsCockpitSubject(active, subjectId = null) {
+  globalThis.window.dispatchEvent(new CustomEvent('gev:cockpit-mode-changed', {
+    detail: { active, subjectId, layerId: 'flights' },
+  }));
+}
 
 const SUBJECT = 'abc123';
 const NEXT_SUBJECT = 'def456';
@@ -26,10 +37,7 @@ const LAYERS = [
     seed(icao24) {
       _setTrackedFlightRefreshStateForTest({
         icao24,
-        entity: null,
-        billboard: candidateBillboard(icao24),
-        billboardCollection: { show: true, remove() {} },
-        viewer: candidateViewer(),
+        position: candidatePosition(icao24),
         tracked: false,
         meta: {
           callsign: `${icao24.toUpperCase()} `,
@@ -47,10 +55,7 @@ const LAYERS = [
     seed(icao24) {
       _setTrackedMilitaryRefreshStateForTest({
         icao24,
-        entity: null,
-        billboard: candidateBillboard(icao24),
-        billboardCollection: { show: true, remove() {} },
-        viewer: candidateViewer(),
+        position: candidatePosition(icao24),
         tracked: false,
         meta: {
           callsign: `${icao24.toUpperCase()} `,
@@ -63,20 +68,9 @@ const LAYERS = [
   },
 ];
 
-function candidateBillboard(icao24) {
+function candidatePosition(icao24) {
   const offset = Number.parseInt(icao24.slice(-2), 16) || 1;
-  return {
-    position: Cesium.Cartesian3.fromDegrees(-97.7 + offset * 0.001, 30.2, 10_668),
-    color: Cesium.Color.WHITE,
-    show: true,
-  };
-}
-
-function candidateViewer() {
-  return {
-    camera: { positionCartographic: null },
-    scene: {},
-  };
+  return { lon: -97.7 + offset * 0.001, lat: 30.2, alt: 10_668 };
 }
 
 function candidateIds(layer) {

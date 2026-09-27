@@ -9,9 +9,10 @@
  * tracked card, and the row legend all read the same table, so a palette edit
  * can never leave one surface disagreeing with another.
  *
- * Deliberately Cesium-free: colors are CSS hex strings that satellites.js
- * converts once at module load. That keeps this file unit-testable and lets the
- * legend swatches reuse the exact same strings the points are drawn with.
+ * Deliberately renderer-free: colors are CSS hex strings that satellites.js
+ * hands straight to the MapLibre circle layer. That keeps this file
+ * unit-testable and lets the legend swatches reuse the exact same strings the
+ * points are drawn with.
  *
  * Class order below is the legend order: crewed first (the objects people look
  * for), then the constellations users can actually name, then the grab-bag.

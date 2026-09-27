@@ -2,7 +2,7 @@
   "name": "gods-eye-view",
   "private": true,
   "version": "0.1.0",
-  "description": "A real-time intelligence console for planet Earth — photorealistic 3D globe, live aircraft/ships/satellites/earthquakes/CCTV, and hands-free voice control. Runs in a browser.",
+  "description": "A real-time intelligence console for planet Earth — MapLibre globe and 2D map with keyless satellite/OSM base maps, live aircraft/ships/satellites/earthquakes/CCTV, and hands-free voice control. Runs in a browser.",
   "type": "module",
   "license": "MIT",
   "author": "Bilawal Sidhu",
@@ -18,12 +18,12 @@
     "node": ">=24.14.0 <25 || >=26 <27"
   },
   "keywords": [
-    "cesium",
-    "3d-globe",
+    "maplibre",
+    "maplibre-gl",
+    "globe",
     "geospatial",
     "osint",
     "spatial-intelligence",
-    "photorealistic-3d-tiles",
     "adsb",
     "ais",
     "satellites",
@@ -32,9 +32,11 @@
     "visualization"
   ],
   "scripts": {
+    "predev": "node scripts/prepare-maplibre-worker.mjs",
     "dev": "vite",
     "dev:secure": "./scripts/dev-secure.sh",
     "opensky:import": "./scripts/opensky-import-client.sh",
+    "prebuild": "node scripts/prepare-maplibre-worker.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node scripts/run-unit-tests.mjs",
@@ -44,9 +46,8 @@
   "dependencies": {
     "@mapbox/vector-tile": "^3.0.0",
     "@supabase/auth-js": "^2.117.1",
-    "cesium": "^1.124.0",
-    "cesium-wind-layer": "^0.10.1",
     "egm96-universal": "^1.1.1",
+    "maplibre-gl": "6.7.0",
     "mgrs": "^2.1.0",
     "pbf": "^5.1.2",
     "satellite.js": "^6.0.2"
@@ -55,7 +56,6 @@
     "puppeteer": "^24.37.5",
     "sharp": "^0.34.5",
     "vite": "^6.0.0",
-    "vite-plugin-cesium": "^1.2.23",
     "ws": "^8.21.0"
   }
 }

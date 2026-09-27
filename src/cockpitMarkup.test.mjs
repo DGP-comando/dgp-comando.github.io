@@ -120,7 +120,7 @@ test('Cockpit shortcut failures do not leak and open Radio owns the first Escape
   assert.match(keydown[1], /#cockpit-utility-controls \[aria-expanded="true"\]/);
   assert.match(
     keydown[1],
-    /const cockpitAttempt = !!\(this\.readAircraftInfo\(\) && this\.viewer\.trackedEntity\?\.position\);[\s\S]*?event\.preventDefault\(\);[\s\S]*?event\.stopImmediatePropagation\(\);[\s\S]*?!this\.isEntryAllowed\(\)/,
+    /const cockpitAttempt = !!\(this\.readAircraftInfo\(\) && this\._engineTrackedTarget\(\)\);[\s\S]*?event\.preventDefault\(\);[\s\S]*?event\.stopImmediatePropagation\(\);[\s\S]*?!this\.isEntryAllowed\(\)/,
   );
 });
 
@@ -169,14 +169,14 @@ test('the Contact panel never hides itself out from under its own NEXT button', 
   );
 });
 
-test('the cockpit reads its aircraft from the layer that owns Cesium tracking', () => {
+test('the cockpit reads its aircraft from the layer that owns engine tracking', () => {
   const read = ui.match(/\n  readAircraftInfo\(\) \{([\s\S]*?)\n  \}/);
   assert.ok(read, 'readAircraftInfo is missing');
   assert.match(read[1], /resolveTrackedAircraftInfo\(\{/);
   assert.match(read[1], /gevTrackedId/);
-  // In cockpit mode the controller moves the entity off viewer.trackedEntity,
+  // In cockpit mode the controller takes the target off engine.trackedTarget,
   // so its own handle is the tracked identity there.
-  assert.match(read[1], /this\.viewer\?\.trackedEntity \|\| this\.trackedEntity/);
+  assert.match(read[1], /this\._engineTrackedTarget\(\) \|\| this\.trackedEntity/);
 });
 
 test('programmatic Context layer changes cannot bypass explicit expansion policy', () => {
@@ -218,8 +218,8 @@ test('Cockpit owns a focused shared Display portal and compact Radio controls', 
   assert.match(html, /data-cockpit-display-slot="hud"/);
   assert.match(html, /data-cockpit-display-slot="detection"[\s\S]*?data-cockpit-display-slot="parameters"[\s\S]*?data-cockpit-display-slot="models3d"/);
   assert.doesNotMatch(html, /data-cockpit-display-slot="presets"/);
-  assert.match(html, /id="clear-selected-layers"[^>]*aria-label="Clear selected data layers"/);
-  assert.match(html, /id="reset-globe-view"[^>]*aria-label="Reset to full globe view"/);
+  assert.match(html, /id="clear-selected-layers"[^>]*aria-label="Desligar todas as camadas"/);
+  assert.match(html, /id="reset-globe-view"[^>]*aria-label="Voltar à visão geral"/);
   assert.match(css, /#top-center-actions\s*\{[\s\S]*?left:\s*50%;[\s\S]*?display:\s*flex;[\s\S]*?transform:\s*translateX\(-50%\)/);
   assert.match(css, /body\.ui-clean-view #top-center-actions/);
   assert.match(css, /body\.recording-mode #top-center-actions/);
@@ -699,7 +699,11 @@ test('cockpit aircraft handoff invalidates the prior world-position anchor', () 
     /_adoptTrackedEntity\(nowMs, suppliedInfo = null\) \{([\s\S]*?)\n  \}\n\n  setVisionMode/,
   );
   assert.ok(match, 'cockpit tracked-entity handoff block is missing');
-  assert.match(match[1], /this\.viewer\.trackedEntity = undefined;/);
+  // The target stays on engine.track (the flight layer reads a trackedchange
+  // to anything else as a release); the cockpit only re-points its handle.
+  assert.doesNotMatch(match[1], /track\?\.\(null\)/);
+  assert.match(match[1], /this\.dispatchCockpitModeChanged\(true, info\);/);
+  assert.match(match[1], /this\.cockpitAnchor = null;/);
   assert.match(match[1], /this\.cockpitAnchorValid = false;/);
   assert.match(match[1], /this\.heading = normalizeHeading\(info\.track \?\? 0\);/);
   assert.match(match[1], /this\.lastFrameMs = nowMs;/);
@@ -856,4 +860,20 @@ test('cockpit state cannot report entryAllowed while already active', () => {
   assert.match(state, /'contacts-starting'/);
   assert.match(state, /'contacts-inactive'/);
   assert.match(state, /'no-tracked-aircraft'/);
+});
+
+test('the cockpit class drives the MapLibre engine, never Cesium', () => {
+  const cockpit = ui.slice(ui.indexOf('class CockpitViewController {'), ui.indexOf('export class StyleManager'));
+  assert.ok(cockpit.length > 1000, 'CockpitViewController is missing');
+  assert.doesNotMatch(cockpit, /Cesium\./);
+  assert.doesNotMatch(cockpit, /this\.viewer\b/);
+  // Chase camera centered on the tracked target, relief on while active, inputs restored.
+  assert.match(cockpit, /cockpitChaseMapView\(\{/);
+  assert.match(cockpit, /map\.jumpTo\(\{ center: view\.center/);
+  assert.match(cockpit, /setTerrain\?\.\(true, \{ exaggeration: 1 \}\)/);
+  assert.match(cockpit, /_releaseMap\(\)/);
+  const enter = cockpit.match(/\n  enter\(\) \{([\s\S]*?)\n  \}\n\n  exit\(/);
+  assert.ok(enter, 'enter() is missing');
+  assert.match(enter[1], /this\.dispatchCockpitModeChanged\(true, info\);/);
+  assert.doesNotMatch(cockpit, /engine\?\.track\?\.\(/, 'the cockpit never releases or re-points engine tracking');
 });

@@ -1,11 +1,48 @@
-import * as Cesium from 'cesium';
+// src/data/aisLiveVessels.js
+//
+// NAVIOS AIS AO VIVO (camada GEV 'ais-live-vessels') — desenhada no MapLibre
+// ==========================================================================
+//
+// Posições ao vivo do AISStream via proxy do dev-server (`/api/ais-live`,
+// trilha em `/api/ais-live/track`). Desligada no build de produção
+// (PROXY_DEPENDENT_LAYER_IDS em main.js); no dev liga e desenha no MapLibre.
+//
+// O que mudou na migração do Cesium (comportamento preservado):
+// - chevron por tipo (vesselLabels.vesselTypeCss) girado pelo rumo verdadeiro:
+//   era BillboardCollection + rotação projetada na tela; agora é um layer
+//   symbol com `icon-rotate` = rumo e `icon-rotation-alignment: map` (o
+//   MapLibre gira com o mapa, sem a passada de rotação por quadro);
+// - cartões de rótulo (título + tipo/velocidade/rumo) eram entradas do
+//   worldOverlay com declutter em grade de 118 px; agora são rótulos symbol
+//   do MapLibre, com colisão nativa, prioridade (`symbol-sort-key`) e o mesmo
+//   teto de linhas (labelRowLimit). O navio selecionado ganha o cartão
+//   completo, sempre visível (texto dos MESMOS builders buildVesselCard /
+//   buildSelectedVesselCard);
+// - oclusão pelo horizonte (EllipsoidalOccluder) é feita pelo próprio globo
+//   do MapLibre; o datum vertical (geoide) deixou de importar no mapa 2D —
+//   vesselDatumHeightM continua exportado para quem mede altura;
+// - clique: seleciona, pede a transferência de câmera à UI (requestWorldFocus,
+//   enquadramento WORLD_FOCUS_FRAMING.vessel) e acompanha o navio com
+//   engine.track; outro alvo acompanhado (trackedchange) solta a seleção, como
+//   o trackedEntityChanged do Cesium;
+// - esmaecimento de foco (focusDeemphasis.js): a mesma passada de 80 ms e o
+//   mesmo applyVesselFocusDeemphasis, escrevendo o alfa em feature-state
+//   (`icon-opacity`) em vez de billboard.color;
+// - tooltip de hover pelo anfitrião de camadas (vesselTooltip.js);
+// - trilha do navio selecionado: trailRenderer.createTrail(engine).
+//
+// API PÚBLICA (mesmos nomes; tipos Cesium trocados por neutros):
+//   `position` agora é o ponto neutro de geoPoint.js
+//   ({lon, lat, height, x, y, z} — graus + ECEF WGS84), em findByQuery,
+//   getNearby, getAllPositions e getDetectableObjects. getNearby aceita o
+//   centro em qualquer formato de toGeoPoint (inclusive Cartesian3 antigo).
+//   init/enable/update/destroy recebem o `engine` (src/maplibre/engine.js).
+
 import {
   registerEntityContext,
   selectEntityContext,
   clearSelectedEntityContextForLayer,
 } from './contextStore.js';
-import { createTrail } from './trailRenderer.js';
-import { screenProjectedRotation, cameraPoseSignature } from './iconOrientation.js';
 import { formatKnots } from './detectionDraw.js';
 import {
   isOwnedByOtherLayer,
@@ -14,27 +51,13 @@ import {
   resolvePickId,
 } from './pickRegistry.js';
 import {
-  applyVesselOverlayPolicy,
   accentForVesselType,
   VESSEL_CARD_FADE_DISTANCE_M,
-  VESSEL_LABEL_GRID_PX,
-  VESSEL_OVERLAY_SOURCE_ID,
   vesselTypeCss,
-  vesselOverlayCohortLimit,
   normalizeVesselType,
 } from './vesselLabels.js';
-import {
-  clearOverlaySource,
-  hitTestWorldOverlay,
-  setOverlayEntries,
-  setOverlaySourceVisible,
-} from '../overlays/worldOverlay.js';
-import { ensureGeoidReady, geoidHeight } from './geoid.js';
-import {
-  registerSpriteCollection,
-  restoreSpriteOrder,
-  restoreSpriteOrderOnEnable,
-} from './spriteOrder.js';
+import { vesselTooltipHtml } from './vesselTooltip.js';
+import { createTrail } from './trailRenderer.js';
 import {
   advanceSpriteFocus,
   focusNowMs,
@@ -44,13 +67,12 @@ import {
   getFocusTarget,
 } from './focusDeemphasis.js';
 import { requestWorldFocus } from '../worldFocus.js';
-import { holdContinuousRender, releaseContinuousRender } from '../renderGovernor.js';
+import { geoPoint, geoDistanceM, toGeoPoint } from './geoPoint.js';
+import { defineLayer, EMPTY_FC, TEXT_FONT, TEXT_FONT_BOLD, zoomForHeight } from '../maplibre/kit.js';
+import { getActiveLayerHost } from '../maplibre/layerHost.js';
 
 const FOCUS_EVIDENCE_DEV = import.meta.env?.DEV === true;
-
-/** Camera pose signature at the last vessel rotation pass. */
-let _lastCamPoseSig = '';
-const _scratchFocusScreen = new Cesium.Cartesian2();
+const LAYER_ID = 'ais-live-vessels';
 
 const DEFAULT_API_URL = '/api/ais-live';
 const DEFAULT_RENDER_ROWS = 12000;
@@ -59,16 +81,6 @@ const REFRESH_MS = 60000;
 /** Bounded wait for the first accepted vessel position in one enabled session. */
 export const AIS_FIRST_CONNECT_GRACE_MS = 30000;
 const AIS_FIRST_CONNECT_LABEL = 'awaiting first AIS position…';
-const VISIBILITY_UPDATE_MS = 800;
-/** Focus alpha alone samples faster inside the existing preRender pass. */
-const FOCUS_UPDATE_MS = 80;
-const LABEL_GRID_PX = VESSEL_LABEL_GRID_PX;
-/**
- * Minimum screen-space separation between accepted vessel cards (matches the
- * FIRMS card declutter). The 118px grid alone under-spaces the wider canvas
- * cards; the greedy pass below enforces true card-scale spacing.
- */
-const CARD_MIN_SEP_PX = 150;
 /** Number of consecutive refreshes a selected-but-vanished vessel is retained. */
 const SELECTED_PIN_REFRESHES = 3;
 /** Trail hue for the selected vessel (PRD F4, pinned to the AIS teal-green family). */
@@ -85,14 +97,6 @@ const VESSEL_LIFT_M = 3;
 const TRAIL_MAX_POINTS = 400;
 /** Minimum movement (m) before a reconcile refresh appends a new trail point. */
 const TRAIL_MIN_MOVE_M = 25;
-
-const DEFAULT_VESSEL_OVERLAY_HOST = Object.freeze({
-  setEntries: setOverlayEntries,
-  setVisible: setOverlaySourceVisible,
-  clearSource: clearOverlaySource,
-  hitTest: hitTestWorldOverlay,
-});
-let _vesselOverlayHost = DEFAULT_VESSEL_OVERLAY_HOST;
 
 const DEFAULT_AIS_RUNTIME = Object.freeze({
   now: () => Date.now(),
@@ -231,7 +235,7 @@ export function classifyAisFeedSnapshot(payload) {
 
 /**
  * Map one internal vessel record to a plain JSON-safe analyst record
- * (analyst query engine seam). Pure — no Cesium types. Missing/unknown
+ * (analyst query engine seam). Pure, no map-engine types. Missing/unknown
  * fields are null, never NaN/undefined. navStatus is always null: the
  * /api/ais-live proxy does not surface AIS NavigationalStatus, so it
  * cannot be derived client-side.
@@ -259,14 +263,6 @@ export function mapAnalystRecord(record) {
     navStatus: null,
   };
 }
-
-/**
- * True once the EGM96 geoid grid has loaded (fire-and-forget warm at
- * enable(), aircraft idiom — see militaryFlights.js). Gates all synchronous
- * geoidHeight() reads so a poll can never throw pre-load.
- * @type {boolean}
- */
-let _geoidReady = false;
 
 /**
  * Ellipsoidal render height (m) for a sea-surface object: the local geoid
@@ -322,74 +318,220 @@ function normalizeSelectionMmsi(value) {
   return text || null;
 }
 
-/**
- * Geoid undulation N at (lat, lon), or null until the grid has loaded.
- * @param {number} lat
- * @param {number} lon
- * @returns {number|null}
- */
-function currentGeoidN(lat, lon) {
-  return _geoidReady ? geoidHeight(lat, lon) : null;
+// ---------------------------------------------------------------- MapLibre
+
+const SRC_VESSELS = 'dg-ais-live';
+const SRC_SELECTED = 'dg-ais-live-sel';
+// Cards live in their own sources: a tile whose symbol layer waits on glyphs
+// (font server slow/offline) must never hold back the chevrons.
+const SRC_CARDS = 'dg-ais-live-cards';
+const SRC_SELECTED_CARD = 'dg-ais-live-sel-card';
+const LAYER_ICON = 'dg-ais-live-icon';
+const LAYER_LABEL = 'dg-ais-live-label';
+const LAYER_SEL_ICON = 'dg-ais-live-sel-icon';
+const LAYER_SEL_LABEL = 'dg-ais-live-sel-label';
+/** Layers whose features resolve to a vessel record on click (icons + cards). */
+const VESSEL_PICK_LAYERS = [LAYER_SEL_ICON, LAYER_SEL_LABEL, LAYER_ICON, LAYER_LABEL];
+const OWN_LAYERS = new Set(VESSEL_PICK_LAYERS);
+/** Click tolerance around a chevron (px), like the old billboard pick box. */
+const VESSEL_PICK_RADIUS_PX = 6;
+const TRAIL_PICK_RADIUS_PX = 3;
+/** Ambient cards fade out toward the old 5000 km camera-distance endpoint. */
+const LABEL_FADE_END_ZOOM = zoomForHeight(VESSEL_CARD_FADE_DISTANCE_M);
+/** Focus alpha samples every 80 ms (the old preRender FOCUS_UPDATE_MS). */
+const FOCUS_UPDATE_MS = 80;
+/** Chevron artwork size (px) before the per-vessel scale. */
+const CHEVRON_PX = 32;
+const CHEVRON_PREFIX = 'dg-ais-chev-';
+const CHEVRON_PIXEL_RATIO = 2;
+const CHEVRON_PATH = 'M0,-14 L11,10 L4,7 L0,14 L-4,7 L-11,10 Z';
+
+/** Map image name for a vessel chevron (tinted per AIS type, white when selected). */
+function chevronImageName(record, selected) {
+  return selected
+    ? `${CHEVRON_PREFIX}sel`
+    : `${CHEVRON_PREFIX}${vesselTypeCss(record?.type).replace('#', '')}`;
 }
 
-/** @type {Map<string, string>} `${cssColor}:${variant}` -> chevron SVG data URL */
-const shipIconCache = new Map();
+/**
+ * Rasterize the chevron synchronously (Path2D), so a missing image can be
+ * re-added inside 'styleimagemissing' after a basemap switch.
+ * Same artwork as the old SVG billboard: 32 px, pointing north.
+ */
+function rasterizeChevron(name) {
+  if (typeof document === 'undefined' || typeof Path2D === 'undefined') return null;
+  const selected = name === `${CHEVRON_PREFIX}sel`;
+  const fill = selected ? '#ffffff' : `#${name.slice(CHEVRON_PREFIX.length)}`;
+  if (!/^#[0-9a-f]{6}$/i.test(fill)) return null;
+  const size = 32 * CHEVRON_PIXEL_RATIO;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext('2d', { willReadFrequently: true });
+  g.scale(CHEVRON_PIXEL_RATIO, CHEVRON_PIXEL_RATIO);
+  g.translate(16, 16);
+  const path = new Path2D(CHEVRON_PATH);
+  g.fillStyle = fill;
+  g.fill(path);
+  g.lineJoin = 'round';
+  g.lineWidth = selected ? 1.1 : 0.7;
+  g.strokeStyle = selected ? 'rgba(6,26,32,0.95)' : 'rgba(4,18,24,0.9)';
+  g.stroke(path);
+  const { data } = g.getImageData(0, 0, size, size);
+  return { width: size, height: size, data };
+}
+
+function ensureChevronImage(map, name) {
+  if (!map || !name || map.hasImage?.(name)) return;
+  const image = rasterizeChevron(name);
+  if (image) map.addImage(name, image, { pixelRatio: CHEVRON_PIXEL_RATIO });
+}
+
+const _hookedMaps = new WeakSet();
+function hookChevronImages(map) {
+  if (!map?.on || _hookedMaps.has(map)) return;
+  _hookedMaps.add(map);
+  map.on('styleimagemissing', (event) => {
+    if (event?.id?.startsWith(CHEVRON_PREFIX)) ensureChevronImage(map, event.id);
+  });
+}
+
+const CHEVRON_LAYOUT = Object.freeze({
+  'icon-image': ['get', 'icon'],
+  'icon-size': ['get', 'size'],
+  'icon-rotate': ['get', 'rotate'],
+  'icon-rotation-alignment': 'map',
+  'icon-pitch-alignment': 'map',
+  'icon-allow-overlap': true,
+  'icon-ignore-placement': true,
+});
+
+const CARD_TEXT = ['format',
+  ['get', 'label'], { 'text-font': ['literal', TEXT_FONT_BOLD] },
+  '\n', {},
+  ['get', 'detail'], { 'font-scale': 0.86 },
+];
+
+const CARD_PAINT = Object.freeze({
+  'text-color': ['get', 'color'],
+  'text-halo-color': 'rgba(3,10,14,0.92)',
+  'text-halo-width': 1.4,
+});
+
+/** Style contract of the layer (kit.js), registered on the shared host at init. */
+const vesselLayerDef = defineLayer({
+  id: LAYER_ID,
+  name: 'Live AIS Vessels',
+  category: 'Contexto global',
+  icon: '◭',
+  source: 'AISStream',
+  sources: {
+    [SRC_VESSELS]: { type: 'geojson', data: EMPTY_FC },
+    [SRC_SELECTED]: { type: 'geojson', data: EMPTY_FC },
+    [SRC_CARDS]: { type: 'geojson', data: EMPTY_FC },
+    [SRC_SELECTED_CARD]: { type: 'geojson', data: EMPTY_FC },
+  },
+  layers: [
+    {
+      id: LAYER_ICON,
+      type: 'symbol',
+      source: SRC_VESSELS,
+      layout: { ...CHEVRON_LAYOUT },
+      // Focus de-emphasis writes per-vessel alpha into feature-state.
+      paint: { 'icon-opacity': ['coalesce', ['feature-state', 'focus'], 1] },
+    },
+    {
+      id: LAYER_LABEL,
+      type: 'symbol',
+      source: SRC_CARDS,
+      minzoom: Math.max(0, LABEL_FADE_END_ZOOM - 0.5),
+      layout: {
+        'text-field': CARD_TEXT,
+        'text-font': TEXT_FONT,
+        'text-size': 11,
+        'text-anchor': 'top',
+        'text-offset': [0, 1.3],
+        'text-max-width': 30,
+        'text-padding': 6,
+        'symbol-sort-key': ['-', 0, ['get', 'prio']],
+      },
+      paint: {
+        ...CARD_PAINT,
+        'text-opacity': ['interpolate', ['linear'], ['zoom'], LABEL_FADE_END_ZOOM - 0.5, 0, LABEL_FADE_END_ZOOM + 0.8, 1],
+      },
+    },
+    { id: LAYER_SEL_ICON, type: 'symbol', source: SRC_SELECTED, layout: { ...CHEVRON_LAYOUT } },
+    {
+      id: LAYER_SEL_LABEL,
+      type: 'symbol',
+      source: SRC_SELECTED_CARD,
+      layout: {
+        'text-field': CARD_TEXT,
+        'text-font': TEXT_FONT,
+        'text-size': 12,
+        'text-anchor': 'top',
+        'text-offset': [0, 1.4],
+        'text-max-width': 40,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+      },
+      paint: { ...CARD_PAINT, 'text-color': '#ffffff' },
+    },
+  ],
+  interactive: [LAYER_SEL_ICON, LAYER_ICON],
+  tooltip: (props) => {
+    const html = vesselTooltipHtml({
+      vesselName: props.name,
+      mmsi: props.mmsi || null,
+      shipType: props.typeText,
+      sog: props.speed === '' || props.speed === undefined ? null : props.speed,
+      destination: props.destination,
+      observedAt: props.observedAt,
+    });
+    return html ? `<div class="vt">${html}</div>` : '';
+  },
+});
 
 const aisLiveVesselsLayer = {
-  id: 'ais-live-vessels',
+  id: LAYER_ID,
   name: 'Live AIS Vessels',
   icon: '◭',
   source: 'AISStream',
   updateInterval: REFRESH_MS,
   statsRefreshInterval: 1000,
 
-  init(viewer) {
-    state.viewer = viewer;
-    ensureCollections(viewer);
-    _vesselOverlayHost.setVisible(VESSEL_OVERLAY_SOURCE_ID, false);
-    installInteraction(viewer);
-    installRuntime(viewer);
-    restoreSpriteOrder(viewer);
+  /** @param {object} engine Map engine (src/maplibre/engine.js). */
+  init(engine) {
+    state.engine = engine;
+    attachMap(engine);
+    setVisible(false);
+    installInteraction(engine);
   },
 
-  enable(viewer) {
+  enable(engine) {
     const wasEnabled = state.enabled;
     state.enabled = true;
     if (!wasEnabled) beginAisSession();
-    holdContinuousRender('ais-vessels'); // per-frame animator (perf wave 2)
-    const activeViewer = viewer || state.viewer;
-    ensureCollections(activeViewer);
-    installInteraction(activeViewer);
+    const activeEngine = engine || state.engine;
+    if (!state.engine && activeEngine) state.engine = activeEngine;
+    attachMap(activeEngine);
+    installInteraction(activeEngine);
     setVisible(true);
-    // Height-datum fix: warm the geoid grid once per layer-enable, never
-    // blocking a poll. The first refresh may land pre-resolve (N = 0), and
-    // the next is up to 60 s out — so re-floor in place on resolve. A load
-    // failure leaves N = 0 forever, which is safe: sprites are depth-test-
-    // free, so vessels stay visible either way.
-    if (!_geoidReady) {
-      ensureGeoidReady()
-        .then(() => {
-          _geoidReady = true;
-          refloorVesselRecords();
-        })
-        .catch(() => { /* grid failed to load — anchors stay at ellipsoid 0 */ });
-    }
-    // Pick-ownership (H2): vessel picks carry the record OBJECT as their id;
-    // the registry resolver reduces it to the record's mmsi (a string key).
-    registerPickOwner('ais-live-vessels', (pickedId) => state.vesselMap.has(pickedId));
-    restoreSpriteOrderOnEnable('ais', activeViewer);
-    return loadLivePositions(activeViewer);
+    // Pick-ownership (H2): sibling layers recognize vessel picks by MMSI.
+    registerPickOwner(LAYER_ID, (pickedId) => state.vesselMap.has(pickedId));
+    installFocusPass();
+    if (state.vesselRecords.length) renderVessels();
+    return loadLivePositions(activeEngine);
   },
 
   disable() {
     state.enabled = false;
     invalidateAisSession();
-    releaseContinuousRender('ais-vessels');
-    unregisterPickOwner('ais-live-vessels');
-    setVisible(false);
-    _vesselOverlayHost.clearSource(VESSEL_OVERLAY_SOURCE_ID);
+    removeFocusPass();
+    unregisterPickOwner(LAYER_ID);
     clearVesselInspection();
     destroySelectedVesselTrail();
+    setVisible(false);
     removeVesselInteraction();
     if (state.abort) {
       state.abort.abort();
@@ -399,34 +541,28 @@ const aisLiveVesselsLayer = {
     state.loadingLabel = '';
   },
 
-  update(viewer) {
+  update(engine) {
     if (!state.enabled) return Promise.resolve();
-    return loadLivePositions(viewer || state.viewer);
+    return loadLivePositions(engine || state.engine);
   },
 
-  destroy(viewer) {
+  destroy() {
     invalidateAisSession();
-    releaseContinuousRender('ais-vessels'); // direct-destroy path (perf wave 2 fix)
+    removeFocusPass();
     if (state.abort) state.abort.abort();
-    unregisterPickOwner('ais-live-vessels');
+    unregisterPickOwner(LAYER_ID);
     clearVesselInspection();
     destroySelectedVesselTrail();
-    if (state.billboardCollection && viewer) {
-      viewer.scene.primitives.remove(state.billboardCollection);
-    }
-    _vesselOverlayHost.clearSource(VESSEL_OVERLAY_SOURCE_ID);
-    _vesselOverlayHost.setVisible(VESSEL_OVERLAY_SOURCE_ID, false);
+    for (const id of [SRC_VESSELS, SRC_SELECTED, SRC_CARDS, SRC_SELECTED_CARD]) setSourceData(id, EMPTY_FC);
+    setVisible(false);
     removeVesselInteraction();
-    if (state.preRenderRemover) {
-      state.preRenderRemover();
-    }
     resetState();
   },
 
   /**
    * Find a vessel by exact MMSI or case-insensitive name substring.
    * @param {string|number} query MMSI or partial vessel name.
-   * @returns {{ mmsi: string, name: string, position: Cesium.Cartesian3, latitude: number, longitude: number, speedKt: number|null, course: number|null, type: string }|null}
+   * @returns {{ mmsi: string, name: string, position: import('./geoPoint.js').GeoPoint, latitude: number, longitude: number, speedKt: number|null, course: number|null, type: string }|null}
    */
   findByQuery(query) {
     if (query === null || query === undefined) return null;
@@ -445,7 +581,7 @@ const aisLiveVesselsLayer = {
     }
     if (!record) return null;
 
-    const position = record.billboard?.position || record.position;
+    const position = record.position;
     if (!position) return null;
     return {
       mmsi: record.mmsi,
@@ -461,23 +597,24 @@ const aisLiveVesselsLayer = {
 
   /**
    * Get vessels within a range of a point, sorted nearest-first.
-   * @param {Cesium.Cartesian3} centerCartesian Center of the search.
-   * @param {number} rangeM Max distance in meters (non-finite = unbounded).
+   * @param {object} center Search center: neutral point, {lon, lat} or ECEF {x, y, z}.
+   * @param {number} rangeM Max straight-line distance in meters (non-finite = unbounded).
    * @param {number} [maxCount=25] Maximum entries to return.
-   * @returns {Array<{ mmsi: string, name: string, position: Cesium.Cartesian3, distanceM: number }>}
+   * @returns {Array<{ mmsi: string, name: string, position: object, distanceM: number }>}
    */
-  getNearby(centerCartesian, rangeM, maxCount = 25) {
+  getNearby(center, rangeM, maxCount = 25) {
     const records = state.vesselRecords;
-    if (!centerCartesian || !Array.isArray(records) || !records.length) return [];
+    const origin = toGeoPoint(center);
+    if (!origin || !Array.isArray(records) || !records.length) return [];
     const range = Number.isFinite(rangeM) && rangeM > 0 ? rangeM : Infinity;
     const cap = Number.isFinite(maxCount) && maxCount > 0 ? Math.floor(maxCount) : 25;
 
     const entries = [];
     for (const record of records) {
       if (!Number.isFinite(record.lat) || !Number.isFinite(record.lon)) continue;
-      const position = record.billboard?.position || record.position;
+      const position = record.position;
       if (!position) continue;
-      const distanceM = Cesium.Cartesian3.distance(centerCartesian, position);
+      const distanceM = geoDistanceM(origin, position);
       if (!Number.isFinite(distanceM) || distanceM > range) continue;
       entries.push({ mmsi: record.mmsi, name: record.name, position, distanceM });
     }
@@ -485,11 +622,6 @@ const aisLiveVesselsLayer = {
     return entries.slice(0, cap);
   },
 
-  /**
-   * Get positions of all currently loaded vessels.
-   * @param {number} [maxCount=800] Maximum entries to return.
-   * @returns {Array<{ id: string, label: string, position: Cesium.Cartesian3, latitude: number, longitude: number }>}
-   */
   /**
    * Whether this layer still carries a vessel, in O(1).
    *
@@ -507,6 +639,11 @@ const aisLiveVesselsLayer = {
     return state.vesselMap.has(String(mmsi).trim());
   },
 
+  /**
+   * Get positions of all currently loaded vessels.
+   * @param {number} [maxCount=800] Maximum entries to return.
+   * @returns {Array<{ id: string, label: string, position: object, latitude: number, longitude: number }>}
+   */
   getAllPositions(maxCount = 800) {
     const result = [];
     const records = state.vesselRecords;
@@ -515,7 +652,7 @@ const aisLiveVesselsLayer = {
 
     for (const record of records) {
       if (result.length >= cap) break;
-      const position = record.billboard?.position || record.position;
+      const position = record.position;
       if (!position) continue;
       result.push({
         id: record.mmsi,
@@ -551,7 +688,7 @@ const aisLiveVesselsLayer = {
 
   /**
    * Select a vessel by MMSI via the same path as a map click
-   * (highlight + HUD update).
+   * (highlight + HUD update), without moving the camera.
    * @param {string|number} mmsi Vessel MMSI.
    * @returns {boolean} True if a matching vessel was selected.
    */
@@ -599,10 +736,10 @@ const aisLiveVesselsLayer = {
    * @param {Object} [options={}] - Options from the detection system.
    * @param {number} [options.maxCount] - Maximum objects to return (defaults to all).
    * @param {number} [options.seed] - Seed offset for stride sampling.
-   * @returns {Array<{position: Cesium.Cartesian3, id: string, type: string, skipLabel: boolean}>}
+   * @returns {Array<{position: object, id: string, type: string, skipLabel: boolean}>}
    */
   getDetectableObjects(options = {}) {
-    if (!state.enabled || !state.billboardCollection || !state.billboardCollection.show) return [];
+    if (!state.enabled || !state.visible) return [];
     const records = state.vesselRecords;
     if (!Array.isArray(records) || !records.length) return [];
 
@@ -619,8 +756,7 @@ const aisLiveVesselsLayer = {
     for (let idx = 0; idx < records.length; idx += 1) {
       if (((idx - start) % stride) !== 0) continue;
       const record = records[idx];
-      if (record.billboard && !record.billboard.show) continue;
-      const position = record.billboard?.position || record.position;
+      const position = record.position;
       if (!position) continue;
       result.push({
         position,
@@ -668,7 +804,12 @@ const aisLiveVesselsLayer = {
 };
 
 const state = {
-  viewer: null,
+  /** Map engine (src/maplibre/engine.js) — the old Cesium viewer slot. */
+  engine: null,
+  /** maplibregl.Map once the layer is attached to the shared host. */
+  map: null,
+  host: null,
+  visible: false,
   enabled: false,
   loading: false,
   loaded: false,
@@ -692,48 +833,48 @@ const state = {
   firstConnectDeadline: null,
   firstConnectTimer: null,
   abort: null,
-  billboardCollection: null,
   /** @type {Array<Object>} Flat render list: keyed records + unkeyed records */
   vesselRecords: [],
   /** @type {Map<string, Object>} MMSI -> vessel record (identity across refreshes) */
   vesselMap: new Map(),
   /** @type {Array<Object>} Records with no MMSI — rebuilt fresh each refresh */
   unkeyedRecords: [],
+  /** {destroy()} for the engine click subscription. */
   clickHandler: null,
   /** Exact EventTarget currently holding the Escape listener. */
   keyTarget: null,
   /** Exact callback registered on keyTarget. */
   keydownHandler: null,
-  /** Cesium trackedEntityChanged listener disposer. */
-  trackedEntityRemover: null,
-  /** Test-only factory used to exercise enable-time interaction installation. */
-  interactionHandlerFactory: null,
-  /** Test-only key target paired with interactionHandlerFactory. */
+  /** engine 'trackedchange' listener disposer. */
+  trackedChangeRemover: null,
+  /** Test-only key target for enable-time interaction installation. */
   interactionKeyTarget: null,
-  preRenderRemover: null,
-  lastVisibilityUpdate: 0,
-  lastFocusUpdate: 0,
-  /** Sprites whose animated emphasis remains outside the 1.0 deadband. */
-  activeFocusCount: 0,
   activeLabelCount: 0,
   selectedRecord: null,
   /** @type {{setPositions: Function, clear: Function, destroy: Function}|null} Selected-vessel fading trail */
   trail: null,
-  /** @type {Cesium.Cartesian3[]} Chronological trail vertices (oldest first) */
+  /** @type {Array<object>} Chronological trail vertices (neutral points, oldest first) */
   trailPositions: [],
   /** @type {string|null} MMSI that owns the active selected-vessel trail. */
   trailMmsi: null,
   /** @type {number} Monotonic token — invalidates in-flight backfill responses */
   trailBackfillToken: 0,
+  /** Tracking target handed to engine.track for the selected vessel. */
+  trackTarget: null,
+  /** 80 ms focus de-emphasis timer while enabled. */
+  focusTimer: null,
+  lastFocusUpdate: 0,
+  /** Sprites whose animated emphasis remains outside the 1.0 deadband. */
+  activeFocusCount: 0,
 };
 
 /** Replace live AIS rows through the production reconciliation path (DEV only). */
 function _setFocusEvidenceVessels(rows = []) {
-  if (!FOCUS_EVIDENCE_DEV || !state.viewer || !state.billboardCollection) {
+  if (!FOCUS_EVIDENCE_DEV || !state.engine) {
     return { ok: false, count: 0 };
   }
   clearVesselInspection();
-  reconcileVessels(state.viewer, Array.isArray(rows) ? rows : []);
+  reconcileVessels(state.engine, Array.isArray(rows) ? rows : []);
   state.count = state.vesselRecords.length;
   state.loaded = true;
   state.error = null;
@@ -743,21 +884,19 @@ function _setFocusEvidenceVessels(rows = []) {
   state.lastMessageAt = null;
   state.rawRowCount = Array.isArray(rows) ? rows.length : 0;
   state.acceptedRowCount = state.count;
+  settleFirstConnectPhase('ready');
   return { ok: true, count: state.count };
 }
 
-/** JSON-safe vessel alpha/position snapshot for the evidence report. */
+/** JSON-safe vessel opacity/position snapshot for the evidence report. */
 function _focusEvidenceVesselSnapshot() {
-  if (!FOCUS_EVIDENCE_DEV || !state.viewer) return [];
+  if (!FOCUS_EVIDENCE_DEV || !state.engine) return [];
   return state.vesselRecords.map((record) => {
-    const bb = record.billboard;
-    const screen = bb?.position
-      ? Cesium.SceneTransforms.worldToWindowCoordinates(state.viewer.scene, bb.position)
-      : null;
+    const screen = state.engine.project?.(record.lon, record.lat) || null;
     return {
       id: record.mmsi,
-      show: bb?.show === true,
-      alpha: bb?.color?.alpha ?? null,
+      show: state.visible && screen?.visible !== false,
+      alpha: record.billboard?.color?.alpha ?? 1,
       x: screen?.x ?? null,
       y: screen?.y ?? null,
     };
@@ -835,8 +974,8 @@ function markAisUnavailable(reason) {
   state.stale = state.count > 0;
 }
 
-async function loadLivePositions(viewer) {
-  if (!viewer || state.loading) return;
+async function loadLivePositions(engine) {
+  if (!engine || state.loading) return;
   state.loading = true;
   state.loadingLabel = state.loaded ? 'refreshing...' : 'loading...';
   const requestController = new AbortController();
@@ -870,7 +1009,7 @@ async function loadLivePositions(viewer) {
 
     const payload = await response.json();
     if (!ownsAisRequest(requestController, requestSessionId)) return;
-    applyAisFeedSnapshot(viewer, payload);
+    applyAisFeedSnapshot(engine, payload);
   } catch (error) {
     if (ownsAisRequest(requestController, requestSessionId) && error?.name !== 'AbortError') {
       markAisUnavailable(error?.message || 'AIS live load failed');
@@ -896,7 +1035,7 @@ function ownsAisRequest(controller, sessionId) {
 }
 
 /** Apply a classified snapshot while preserving warm state on zero accepted rows. */
-function applyAisFeedSnapshot(viewer, payload) {
+function applyAisFeedSnapshot(engine, payload) {
   const snapshot = classifyAisFeedSnapshot(payload);
   state.loaded = true;
   state.loadingLabel = '';
@@ -930,7 +1069,7 @@ function applyAisFeedSnapshot(viewer, payload) {
   }
 
   settleFirstConnectPhase('ready');
-  reconcileVessels(viewer, snapshot.acceptedRows);
+  reconcileVessels(engine, snapshot.acceptedRows);
   state.count = state.vesselRecords.length;
   state.stale = Boolean(payload?.refreshing);
   state.newestPositionAt = payload?.newestPositionAt || null;
@@ -965,208 +1104,39 @@ function labelRowLimit() {
   return Math.min(DEFAULT_ACTIVE_LABELS, renderRowLimit());
 }
 
-function ensureCollections(viewer) {
-  if (!viewer || state.billboardCollection) return;
-  state.billboardCollection = new Cesium.BillboardCollection({
-    blendOption: Cesium.BlendOption.TRANSLUCENT,
-  });
-  state.billboardCollection.show = state.enabled;
-  viewer.scene.primitives.add(state.billboardCollection);
-  registerSpriteCollection('ais', state.billboardCollection);
-}
-
 /**
- * Reconcile the incoming AIS rows against the MMSI-keyed record map.
- * Existing records are updated in place (position/heading/label) so identity
- * and selection survive refreshes; new vessels are added; vanished vessels are
- * removed — except the selected vessel, which is pinned for up to
- * SELECTED_PIN_REFRESHES consecutive misses with a stale HUD readout.
- * Rows without an MMSI are rendered unkeyed and rebuilt fresh each refresh.
- * @param {Cesium.Viewer} viewer - The Cesium viewer instance.
- * @param {Array<Object>} rows - Raw AIS rows from the live API.
+ * Attach the style contract to the shared layer host (created at boot by
+ * main.js / the dev harness). Without a host or a real map (unit tests,
+ * fakes) the layer keeps its full data/selection lifecycle and draws nothing.
+ * @param {object} engine
  */
-function reconcileVessels(viewer, rows) {
-  ensureCollections(viewer);
-
-  // Unkeyed (no-MMSI) records cannot be diffed — drop and rebuild them.
-  for (const record of state.unkeyedRecords) {
-    removeRecordPrimitives(record);
+function attachMap(engine) {
+  if (state.map || !engine?.map) return;
+  const host = getActiveLayerHost();
+  if (!host) return;
+  host.register(vesselLayerDef);
+  hookChevronImages(engine.map);
+  try {
+    host.ensureAdded(vesselLayerDef);
+  } catch (error) {
+    console.warn('[Data:ais-live-vessels] style not ready', error);
+    return;
   }
-  state.unkeyedRecords = [];
-
-  const occluder = makeOccluder();
-  const seen = new Set();
-  for (let index = 0; index < rows.length; index += 1) {
-    const next = normalizeVessel(rows[index]);
-    if (!next) continue;
-
-    if (!next.mmsi) {
-      addRecordPrimitives(next, occluder);
-      state.unkeyedRecords.push(next);
-      continue;
-    }
-    if (seen.has(next.mmsi)) continue; // defensive: dedupe payload rows
-    seen.add(next.mmsi);
-
-    const existing = state.vesselMap.get(next.mmsi);
-    if (existing) {
-      updateRecordInPlace(existing, next);
-    } else {
-      addRecordPrimitives(next, occluder);
-      state.vesselMap.set(next.mmsi, next);
-    }
-  }
-
-  // Remove vanished vessels, pinning the selected one for a few refreshes.
-  for (const [mmsi, record] of state.vesselMap) {
-    if (seen.has(mmsi)) continue;
-    if (record === state.selectedRecord) {
-      record.missedRefreshes = (record.missedRefreshes || 0) + 1;
-      if (record.missedRefreshes <= SELECTED_PIN_REFRESHES) {
-        updateSelectedVesselHud(record); // re-render with STALE marker
-        continue;
-      }
-      // Aged out of the feed after exhausting its pin — not a deselect.
-      clearVesselInspection({ evicted: true });
-    }
-    removeRecordPrimitives(record);
-    state.vesselMap.delete(mmsi);
-    // Defensive lifecycle closure: a trail may outlive selection state during
-    // asynchronous handoff/refresh ordering, but never its owning record.
-    if (state.trailMmsi === mmsi) clearSelectedVesselTrail();
-  }
-
-  state.vesselRecords = [...state.vesselMap.values(), ...state.unkeyedRecords];
-  state.lastVisibilityUpdate = 0;
-  updateVisibility(true);
+  state.map = engine.map;
+  state.host = host;
 }
 
-/**
- * Create the billboard primitive for a freshly added vessel record. Map labels
- * are canvas cards (vesselLabels.js) rebuilt by the declutter pass — no
- * per-record label primitive exists anymore.
- * @param {Object} record - Normalized vessel record.
- * @param {Cesium.EllipsoidalOccluder|null} occluder - Horizon occluder for initial visibility.
- */
-function addRecordPrimitives(record, occluder) {
-  const visible = state.enabled && isVisible(record.surfacePosition, occluder);
-  record.billboard = state.billboardCollection.add({
-    position: record.position,
-    show: visible,
-    image: shipIcon(record, false),
-    scale: shipScale(record),
-    // Screen-projected rotation lands on the next visibility/rotation pass.
-    rotation: 0,
-    alignedAxis: Cesium.Cartesian3.ZERO,
-    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-    verticalOrigin: Cesium.VerticalOrigin.CENTER,
-    // Locked height-datum principle #2: contacts are ALWAYS visible —
-    // depth-test-free sprites; the EllipsoidalOccluder handles the far side.
-    // (The tile sea mesh ≠ the geoid exactly, so a depth-tested chevron at
-    // the geoid still clips out behind local tide/mesh noise.)
-    disableDepthTestDistance: Number.POSITIVE_INFINITY,
-    id: record,
-  });
-}
-
-/**
- * Update an existing record (and its primitives) from a freshly normalized row,
- * preserving object identity so selection and the click-pick id stay valid.
- * Billboard image is only reassigned when the resolved icon actually changes
- * (type recolor) to avoid thousands of redundant texture lookups per refresh.
- * @param {Object} record - Existing vessel record in state.vesselMap.
- * @param {Object} next - Freshly normalized record for the same MMSI.
- */
-function updateRecordInPlace(record, next) {
-  const selected = record === state.selectedRecord;
-  const prevIcon = shipIcon(record, selected);
-
-  record.lat = next.lat;
-  record.lon = next.lon;
-  record.name = next.name;
-  record.imo = next.imo;
-  record.type = next.type;
-  record.destination = next.destination;
-  record.speed = next.speed;
-  record.course = next.course;
-  record.heading = next.heading;
-  record.lastPositionUtc = next.lastPositionUtc;
-  record.lastPositionEpoch = next.lastPositionEpoch;
-  record.position = next.position;
-  record.surfacePosition = next.surfacePosition;
-  record.normal = next.normal;
-  record.missedRefreshes = 0;
-
-  if (record.billboard) {
-    record.billboard.position = record.position;
-    // Rotation is owned by the projected-rotation pass (updateVisibility).
-    record.billboard.scale = shipScale(record) * (selected ? 1.2 : 1);
-    const nextIcon = shipIcon(record, selected);
-    if (nextIcon !== prevIcon) {
-      record.billboard.image = nextIcon;
-    }
-  }
-  if (record.mmsi === state.trailMmsi) {
-    appendSelectedVesselTrailFix(record);
-  }
-  if (selected) {
-    updateSelectedVesselHud(record);
-    registerSelectedContext(record);
+function setSourceData(sourceId, data) {
+  try {
+    state.map?.getSource?.(sourceId)?.setData(data);
+  } catch (error) {
+    console.warn('[Data:ais-live-vessels] setData', sourceId, error);
   }
 }
 
-/**
- * Remove a record's billboard primitive from its collection.
- * @param {Object} record - Vessel record to tear down.
- */
-function removeRecordPrimitives(record) {
-  if (!record) return;
-  if (record.billboard && state.billboardCollection) {
-    forgetSpriteFocus(record.billboard);
-    state.billboardCollection.remove(record.billboard);
-  }
-  record.billboard = null;
-}
-
-function normalizeVessel(row) {
-  const lat = Number(row.lat);
-  const lon = Number(row.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  // Vertical datum: anchor at the SEA SURFACE (geoid, h = N + lift), not the
-  // ellipsoid — at height 0 everything that projects record.position (clicks,
-  // detection brackets, cards, getNearby) points up to ~45 m under the water.
-  const heightM = vesselDatumHeightM(currentGeoidN(lat, lon), VESSEL_LIFT_M);
-  const position = Cesium.Cartesian3.fromDegrees(lon, lat, heightM);
-  // Surface normal at this position — used as alignedAxis so billboard
-  // rotation operates in the local tangent plane (true world heading)
-  const normal = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(position, new Cesium.Cartesian3());
-  return {
-    lat,
-    lon,
-    name: String(row.name || row.input_name || row.mmsi || row.input_identifier || 'VESSEL'),
-    mmsi: String(row.mmsi || row.input_identifier || '').trim(),
-    imo: String(row.imo || ''),
-    type: String(row.type_specific || row.type || ''),
-    destination: String(row.destination || ''),
-    speed: finiteNumber(row.speed),
-    course: finiteNumber(row.course),
-    heading: finiteNumber(row.heading),
-    lastPositionUtc: String(row.last_position_UTC || ''),
-    lastPositionEpoch: finiteNumber(row.last_position_epoch),
-    position,
-    // Ellipsoid-surface point (height 0) — feeds ONLY the horizon occluder,
-    // which tests against the WGS84 ellipsoid; keep it off the sea datum.
-    surfacePosition: Cesium.Cartesian3.fromDegrees(lon, lat, 0),
-    normal,
-    missedRefreshes: 0,
-    billboard: null,
-  };
-}
-
-function finiteNumber(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+function setVisible(show) {
+  state.visible = Boolean(show);
+  if (state.host) state.host.setVisible(LAYER_ID, state.visible);
 }
 
 function shipScale(record) {
@@ -1179,8 +1149,7 @@ function shipScale(record) {
 /**
  * Best available real-world direction of travel for a vessel, degrees
  * clockwise from north (true heading preferred, course-over-ground fallback).
- * Screen rotation is computed from this by the shared projected-rotation
- * pass in updateVisibility — never directly from the compass value.
+ * With `icon-rotation-alignment: map` this IS the icon rotation.
  * @param {Object} record - Vessel record.
  * @returns {number} Course in degrees (0 when unknown).
  */
@@ -1189,98 +1158,170 @@ function vesselCourseDeg(record) {
   return Number.isFinite(direction) ? direction : 0;
 }
 
+/** GeoJSON feature for one vessel; `card` supplies the label text (or none). */
+function vesselFeature(record, { selected = false, card = null, id } = {}) {
+  const icon = chevronImageName(record, selected);
+  ensureChevronImage(state.map, icon);
+  return {
+    type: 'Feature',
+    ...(id !== undefined ? { id } : {}),
+    geometry: { type: 'Point', coordinates: [record.lon, record.lat] },
+    properties: {
+      mmsi: record.mmsi || '',
+      pickId: record.mmsi || '',
+      name: displayVesselName(record),
+      typeText: normalizeVesselType(record.type) || '',
+      speed: record.speed ?? '',
+      destination: record.destination || '',
+      observedAt: record.lastPositionUtc || '',
+      icon,
+      size: shipScale(record) * (selected ? 1.2 : 1),
+      rotate: vesselCourseDeg(record),
+      label: card?.title || '',
+      detail: card ? card.details.join('\n') : '',
+      color: card ? `rgb(${card.accent})` : '#ffffff',
+      prio: card?.priority ?? 0,
+    },
+  };
+}
+
 /**
- * Build (and cache) a chevron/delta-wing SVG data URL tinted for the vessel.
- * The shape points north (up) so billboard rotation maps directly to heading.
- * One icon is generated per color+variant and reused across all billboards.
- * @param {Object} record - Vessel record (drives per-type tint).
- * @param {boolean} selected - True for the white/brighter selected variant.
- * @returns {string} SVG data URL.
+ * GeoJSON for the two vessel sources: every record gets a chevron; the best
+ * `maxLabels` records by labelPriority get an ambient card (MapLibre collision
+ * then declutters them on screen, highest `prio` first); the selected vessel
+ * leaves the ambient source and is drawn on top with its full-detail card.
+ * Exported for tests (no map needed).
+ * @param {Array<Object>} records
+ * @param {Object|null} selected
+ * @param {number} maxLabels
+ * @returns {{vessels: object, selected: object, labelCount: number}}
  */
-function shipIcon(record, selected) {
-  const cssColor = selected ? '#ffffff' : vesselTypeCss(record.type);
-  const key = `${cssColor}:${selected ? 'selected' : 'normal'}`;
-  if (shipIconCache.has(key)) return shipIconCache.get(key);
-
-  const stroke = selected ? 'rgba(6,26,32,0.95)' : 'rgba(4,18,24,0.9)';
-  const strokeWidth = selected ? 1.1 : 0.7;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-    <g transform="translate(16,16)">
-      <path d="M0,-14 L11,10 L4,7 L0,14 L-4,7 L-11,10 Z" fill="${cssColor}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round"/>
-    </g>
-  </svg>`;
-  const icon = 'data:image/svg+xml;base64,' + btoa(svg);
-  shipIconCache.set(key, icon);
-  return icon;
+export function buildVesselSourceData(records, selected, maxLabels) {
+  const labeled = new Set();
+  if (maxLabels > 0) {
+    const ranked = (records || [])
+      .filter((record) => record !== selected)
+      .map((record) => ({ record, score: labelPriority(record, selected) }))
+      .sort((a, b) => b.score - a.score);
+    for (let i = 0; i < ranked.length && i < maxLabels; i += 1) labeled.add(ranked[i].record);
+  }
+  const features = [];
+  for (const record of records || []) {
+    if (record === selected) continue;
+    // Numeric feature id = feature-state handle for the focus alpha.
+    const id = features.length;
+    record.featureId = id;
+    features.push(vesselFeature(record, { id, card: labeled.has(record) ? buildVesselCard(record) : null }));
+  }
+  return {
+    vessels: { type: 'FeatureCollection', features },
+    selected: selected
+      ? { type: 'FeatureCollection', features: [vesselFeature(selected, { selected: true, card: buildSelectedVesselCard(selected) })] }
+      : EMPTY_FC,
+    labelCount: labeled.size + (selected ? 1 : 0),
+  };
 }
 
-function installRuntime(viewer) {
-  if (state.preRenderRemover || !viewer) return;
-  state.preRenderRemover = viewer.scene.preRender.addEventListener(() => updateVisibility());
-}
-
-function updateVisibility(force = false) {
-  if (!state.enabled) return;
-  const now = focusNowMs(performance.now());
-  const focusTarget = getFocusTarget();
-  const regularPass = force || now - state.lastVisibilityUpdate >= VISIBILITY_UPDATE_MS;
-  const focusPass = focusPassIsNeeded(focusTarget, state.activeFocusCount)
-    && (force || now - state.lastFocusUpdate >= FOCUS_UPDATE_MS);
-  if (!regularPass && !focusPass) return;
-  if (regularPass) state.lastVisibilityUpdate = now;
-  if (focusPass) state.lastFocusUpdate = now;
-  if (!state.vesselRecords.length) {
-    // No records — flush any lingering card entries (vanished-feed case).
-    if (regularPass) updateClusteredLabels([]);
-    if (focusPass) state.activeFocusCount = 0;
+/** Push the current records/selection into the map sources. */
+function renderVessels() {
+  if (!state.map) {
+    state.activeLabelCount = state.selectedRecord ? 1 : 0;
     return;
   }
-
-  const scene = state.viewer?.scene;
-  const camera = state.viewer?.camera;
-  if (regularPass) {
-    // Candidate construction stays on the original 800 ms selector cadence.
-    // The 80 ms focus-only pass below never allocates label candidates.
-    const poseSig = camera ? cameraPoseSignature(camera) : '';
-    const doRotations = force || poseSig !== _lastCamPoseSig;
-    if (doRotations) _lastCamPoseSig = poseSig;
-    const occluder = makeOccluder();
-    const labelCandidates = [];
-    for (const record of state.vesselRecords) {
-      const visible = isVisible(record.surfacePosition, occluder);
-      if (record.billboard) {
-        record.billboard.show = visible;
-        if (visible && doRotations && scene) {
-          const rot = screenProjectedRotation(
-            scene, record.position, vesselCourseDeg(record), record.billboard.rotation
-          );
-          if (rot !== null && Math.abs(rot - record.billboard.rotation) > 0.002) {
-            record.billboard.rotation = rot;
-          }
-        }
-      }
-      if (visible) labelCandidates.push(record);
+  const data = buildVesselSourceData(state.vesselRecords, state.selectedRecord, labelRowLimit());
+  setSourceData(SRC_VESSELS, data.vessels);
+  // Feature ids were reassigned: re-apply the current focus alpha.
+  for (const record of state.vesselRecords) {
+    const alpha = record.billboard?.color?.alpha;
+    if (record.featureId != null && Number.isFinite(alpha) && alpha < 1) {
+      try {
+        state.map.setFeatureState({ source: SRC_VESSELS, id: record.featureId }, { focus: alpha });
+      } catch { /* style swapping */ }
     }
-    updateClusteredLabels(labelCandidates);
   }
-  if (focusPass && scene && camera) {
-    const result = applyVesselFocusDeemphasis({
-      records: state.vesselRecords,
-      target: focusTarget,
-      previousActiveCount: state.activeFocusCount,
-      nowMs: now,
-      screenPositionFor: (position) => (
-        Cesium.SceneTransforms.worldToWindowCoordinates(scene, position, _scratchFocusScreen)
-      ),
-      cameraDistanceFor: (position) => Cesium.Cartesian3.distance(camera.positionWC, position),
-    });
-    state.activeFocusCount = result.activeCount;
+  setSourceData(SRC_SELECTED, data.selected);
+  setSourceData(SRC_CARDS, {
+    type: 'FeatureCollection',
+    features: data.vessels.features.filter((f) => f.properties.label !== ''),
+  });
+  setSourceData(SRC_SELECTED_CARD, data.selected);
+  state.activeLabelCount = data.labelCount;
+}
+
+// ------------------------------------------------------- focus de-emphasis
+
+/** Minimal billboard-shaped sprite: focusDeemphasis keys its state on it. */
+function alphaColor(alpha) {
+  return { alpha, withAlpha: (next) => alphaColor(next) };
+}
+
+function vesselSprite(record) {
+  return {
+    position: record.position,
+    show: true,
+    width: CHEVRON_PX,
+    height: CHEVRON_PX,
+    scale: shipScale(record),
+    color: alphaColor(1),
+  };
+}
+
+function installFocusPass() {
+  if (state.focusTimer) return;
+  state.focusTimer = setInterval(() => runFocusPass(), FOCUS_UPDATE_MS);
+}
+
+function removeFocusPass() {
+  if (state.focusTimer) clearInterval(state.focusTimer);
+  state.focusTimer = null;
+}
+
+/** Camera position for focus distances ({lon, lat, alt} from the engine). */
+function cameraGeo(engine) {
+  const view = engine?.getCameraView?.();
+  if (!view) return null;
+  const alt = Number.isFinite(view.alt) && view.alt > 0
+    ? view.alt
+    : (Number.isFinite(view.zoom) ? 1.0e8 / 2 ** view.zoom : Number.NaN);
+  return geoPoint(view.lon, view.lat, alt);
+}
+
+/** One 80 ms focus pass; alpha writes land in feature-state. */
+function runFocusPass() {
+  if (!state.enabled || !state.engine) return;
+  const target = getFocusTarget();
+  if (!focusPassIsNeeded(target, state.activeFocusCount)) {
+    state.activeFocusCount = 0;
+    return;
   }
+  const nowMs = focusNowMs(performance.now());
+  state.lastFocusUpdate = nowMs;
+  const engine = state.engine;
+  const camera = cameraGeo(engine);
+  const result = applyVesselFocusDeemphasis({
+    records: state.vesselRecords.filter((record) => record !== state.selectedRecord),
+    target,
+    previousActiveCount: state.activeFocusCount,
+    nowMs,
+    screenPositionFor: (position) => {
+      const p = engine.project?.(position.lon, position.lat);
+      return p?.visible ? { x: p.x, y: p.y } : null;
+    },
+    cameraDistanceFor: (position) => (camera ? geoDistanceM(camera, position) : Number.NaN),
+    onWrite: (record, alpha) => {
+      if (record.featureId == null || !state.map) return;
+      try {
+        state.map.setFeatureState({ source: SRC_VESSELS, id: record.featureId }, { focus: alpha });
+      } catch { /* style swapping */ }
+    },
+  });
+  state.activeFocusCount = result.activeCount;
 }
 
 /**
  * Apply focus alpha to vessel sprites. Kept as a production wire seam so the
- * animation/deadband contract can be tested without constructing WebGL.
+ * animation/deadband contract can be tested without a map. On MapLibre the
+ * write also goes to `onWrite(record, alpha)` (feature-state `focus`).
  * @param {object} input
  * @returns {{writes:number,transitioning:boolean,activeCount:number,ran:boolean}}
  */
@@ -1292,6 +1333,7 @@ export function applyVesselFocusDeemphasis({
   screenPositionFor,
   cameraDistanceFor,
   params,
+  onWrite,
 }) {
   if (!focusPassIsNeeded(target, previousActiveCount)) {
     return { writes: 0, transitioning: false, activeCount: 0, ran: false };
@@ -1311,129 +1353,152 @@ export function applyVesselFocusDeemphasis({
       nowMs,
       target,
       params,
-      // Vessel artwork is 32 px before billboard scale. Including the
+      // Vessel artwork is 32 px before the chevron scale. Including the
       // ambient chevron's own rendered extent prevents edge-overlap misses.
-      spriteHalfWidthPx: (bb.width || 32) * (bb.scale || 1) * 0.5,
-      spriteHalfHeightPx: (bb.height || 32) * (bb.scale || 1) * 0.5,
+      spriteHalfWidthPx: (bb.width || CHEVRON_PX) * (bb.scale || 1) * 0.5,
+      spriteHalfHeightPx: (bb.height || CHEVRON_PX) * (bb.scale || 1) * 0.5,
     });
     transitioning ||= focus.transitioning;
     if (focus.active) activeCount += 1;
     if (focusAlphaNeedsWrite(bb.color?.alpha, focus.factor, params)) {
-      // Narrow always-visible amendment: the ship chevron remains present at
-      // the non-zero floor while it competes with the tracked target. Preserve
-      // the billboard's existing base RGB, matching the other layer patterns,
-      // rather than repainting every chevron from a hard-coded WHITE base.
-      const baseColor = bb.color || Cesium.Color.WHITE;
+      // Narrow always-visible amendment: the chevron remains present at the
+      // non-zero floor while it competes with the tracked target, keeping the
+      // sprite's existing base color.
+      const baseColor = bb.color || alphaColor(1);
       bb.color = baseColor.withAlpha(focus.factor);
+      onWrite?.(record, focus.factor);
       writes += 1;
     }
   }
   return { writes, transitioning, activeCount, ran: true };
 }
 
-function makeOccluder() {
-  const cameraPosition = state.viewer?.camera?.positionWC;
-  if (!cameraPosition) return null;
-  return new Cesium.EllipsoidalOccluder(Cesium.Ellipsoid.WGS84, cameraPosition);
-}
-
-function isVisible(surfacePosition, occluder) {
-  if (!surfacePosition || !occluder) return true;
-  return occluder.isPointVisible(surfacePosition);
-}
-
 /**
- * Source selector for the shared world-overlay pipeline: the
- * grid declutter picks which vessels get cards — one winner per screen-space
- * grid cell, priority-ranked, capped — and publishes presentation entries to
- * the host, which owns projection, final placement, fade and paint. Runs on the
- * throttled visibility pass and forced refreshes, never per frame. The
- * selected vessel always gets its full-detail card, even when horizon-culled
- * from the ambient candidates; its protected entry bypasses ambient quotas.
- * @param {Array<Object>} records - Horizon-visible vessel records.
+ * Reconcile the incoming AIS rows against the MMSI-keyed record map.
+ * Existing records are updated in place (position/heading/label) so identity
+ * and selection survive refreshes; new vessels are added; vanished vessels are
+ * removed — except the selected vessel, which is pinned for up to
+ * SELECTED_PIN_REFRESHES consecutive misses with a stale HUD readout.
+ * Rows without an MMSI are rendered unkeyed and rebuilt fresh each refresh.
+ * @param {object} engine - Map engine (unused beyond attachment).
+ * @param {Array<Object>} rows - Raw AIS rows from the live API.
  */
-function updateClusteredLabels(records) {
-  const viewer = state.viewer;
-  const scene = viewer?.scene;
-  const selected = state.selectedRecord;
-  const entries = selected ? [buildSelectedVesselCard(selected)] : [];
-  const maxLabels = labelRowLimit();
+function reconcileVessels(engine, rows) {
+  attachMap(engine || state.engine);
 
-  if (!scene || !records.length || maxLabels <= 0) {
-    state.activeLabelCount = entries.length;
-    publishVesselOverlayEntries(entries);
-    return;
-  }
+  // Unkeyed (no-MMSI) records cannot be diffed — drop and rebuild them.
+  state.unkeyedRecords = [];
 
-  const cells = new Map();
-  for (const record of records) {
-    if (record === selected) continue;
-    const screen = Cesium.SceneTransforms.worldToWindowCoordinates(scene, record.position);
-    if (!screen) continue;
-    const key = `${Math.floor(screen.x / LABEL_GRID_PX)}:${Math.floor(screen.y / LABEL_GRID_PX)}`;
-    const candidate = { record, score: labelPriority(record, selected), x: screen.x, y: screen.y };
-    const existing = cells.get(key);
-    if (!existing || candidate.score > existing.score) {
-      cells.set(key, candidate);
+  const seen = new Set();
+  for (let index = 0; index < rows.length; index += 1) {
+    const next = normalizeVessel(rows[index]);
+    if (!next) continue;
+
+    if (!next.mmsi) {
+      next.billboard = vesselSprite(next);
+      state.unkeyedRecords.push(next);
+      continue;
+    }
+    if (seen.has(next.mmsi)) continue; // defensive: dedupe payload rows
+    seen.add(next.mmsi);
+
+    const existing = state.vesselMap.get(next.mmsi);
+    if (existing) {
+      updateRecordInPlace(existing, next);
+    } else {
+      next.billboard = vesselSprite(next);
+      state.vesselMap.set(next.mmsi, next);
     }
   }
 
-  // Greedy min-separation pass over the priority-ranked cell winners: the
-  // selected card's anchor seeds the accepted set so ambient cards keep clear.
-  const accepted = [];
-  if (selected) {
-    const screen = Cesium.SceneTransforms.worldToWindowCoordinates(
-      scene, selected.billboard?.position || selected.position
-    );
-    if (screen) accepted.push({ x: screen.x, y: screen.y });
+  // Remove vanished vessels, pinning the selected one for a few refreshes.
+  for (const [mmsi, record] of state.vesselMap) {
+    if (seen.has(mmsi)) continue;
+    if (record === state.selectedRecord) {
+      record.missedRefreshes = (record.missedRefreshes || 0) + 1;
+      if (record.missedRefreshes <= SELECTED_PIN_REFRESHES) {
+        updateSelectedVesselHud(record); // re-render with STALE marker
+        continue;
+      }
+      // Aged out of the feed after exhausting its pin — not a deselect.
+      clearVesselInspection({ evicted: true });
+    }
+    if (record.billboard) forgetSpriteFocus(record.billboard);
+    state.vesselMap.delete(mmsi);
+    // Defensive lifecycle closure: a trail may outlive selection state during
+    // asynchronous handoff/refresh ordering, but never its owning record.
+    if (state.trailMmsi === mmsi) clearSelectedVesselTrail();
   }
-  const ranked = [...cells.values()].sort((a, b) => b.score - a.score);
-  for (const candidate of ranked) {
-    if (entries.length >= maxLabels) break;
-    if (!cardScreenSeparated(accepted, candidate, CARD_MIN_SEP_PX)) continue;
-    accepted.push({ x: candidate.x, y: candidate.y });
-    entries.push(buildVesselCard(candidate.record));
-  }
-  state.activeLabelCount = entries.length;
-  publishVesselOverlayEntries(entries);
+
+  state.vesselRecords = [...state.vesselMap.values(), ...state.unkeyedRecords];
+  renderVessels();
 }
 
 /**
- * Publish a complete, bounded source snapshot to the shared host. The source
- * selector remains authoritative for the 118 px grid and 150 px separation;
- * the host then composes this demand with sibling ambient-card sources.
- * @param {Object[]} entries Formatted vessel card entries.
+ * Update an existing record from a freshly normalized row, preserving object
+ * identity so selection and the MMSI pick key stay valid.
+ * @param {Object} record - Existing vessel record in state.vesselMap.
+ * @param {Object} next - Freshly normalized record for the same MMSI.
  */
-function publishVesselOverlayEntries(entries) {
-  const canvas = state.viewer?.scene?.canvas || state.viewer?.canvas;
-  const width = Number(canvas?.clientWidth) || 0;
-  const height = Number(canvas?.clientHeight) || 0;
-  const ambientLimit = vesselOverlayCohortLimit(width, height, labelRowLimit());
-  _vesselOverlayHost.setEntries(
-    VESSEL_OVERLAY_SOURCE_ID,
-    entries.map((entry) => {
-      const card = applyVesselOverlayPolicy(entry, VESSEL_CARD_FADE_DISTANCE_M);
-      if (!card.interactive) return card;
-      const mmsi = String(card.id || '').startsWith('vessel:')
-        ? card.id.slice('vessel:'.length)
-        : '';
-      return {
-        ...card,
-        accessibilityLabel: `Focus vessel ${card.title}, MMSI ${mmsi}`,
-        activate: () => {
-          const record = state.vesselMap.get(mmsi);
-          if (!record) return false;
-          selectAndFocusVessel(record);
-          return true;
-        },
-      };
-    }),
-    {
-      cohortLimit: Math.max(1, ambientLimit),
-      collisionCapacity: ambientLimit,
-      moving: false,
-    },
-  );
+function updateRecordInPlace(record, next) {
+  const selected = record === state.selectedRecord;
+  record.lat = next.lat;
+  record.lon = next.lon;
+  record.name = next.name;
+  record.imo = next.imo;
+  record.type = next.type;
+  record.destination = next.destination;
+  record.speed = next.speed;
+  record.course = next.course;
+  record.heading = next.heading;
+  record.lastPositionUtc = next.lastPositionUtc;
+  record.lastPositionEpoch = next.lastPositionEpoch;
+  record.position = next.position;
+  record.missedRefreshes = 0;
+  if (record.billboard) {
+    record.billboard.position = record.position;
+    record.billboard.scale = shipScale(record);
+  }
+
+  if (record.mmsi === state.trailMmsi) {
+    appendSelectedVesselTrailFix(record);
+  }
+  if (selected) {
+    updateSelectedVesselHud(record);
+    registerSelectedContext(record);
+  }
+}
+
+function normalizeVessel(row) {
+  const lat = Number(row.lat);
+  const lon = Number(row.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return {
+    lat,
+    lon,
+    name: String(row.name || row.input_name || row.mmsi || row.input_identifier || 'VESSEL'),
+    mmsi: String(row.mmsi || row.input_identifier || '').trim(),
+    imo: String(row.imo || ''),
+    type: String(row.type_specific || row.type || ''),
+    destination: String(row.destination || ''),
+    speed: finiteNumber(row.speed),
+    course: finiteNumber(row.course),
+    heading: finiteNumber(row.heading),
+    lastPositionUtc: String(row.last_position_UTC || ''),
+    lastPositionEpoch: finiteNumber(row.last_position_epoch),
+    // Neutral point (degrees + ECEF). A small lift above the sea surface keeps
+    // the old contract (never below the visible surface) for height readers.
+    position: geoPoint(lon, lat, VESSEL_LIFT_M),
+    missedRefreshes: 0,
+    /** Focus-state sprite (alpha); see vesselSprite. */
+    billboard: null,
+  };
+}
+
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function labelPriority(record, selected) {
@@ -1451,77 +1516,133 @@ function hasUsefulName(record) {
   return Boolean(text && text !== 'VESSEL' && !/^MMSI\s*\d+$/i.test(text) && text !== record.mmsi);
 }
 
-function installInteraction(viewer) {
-  if (state.clickHandler || !viewer) return;
-  const handler = state.interactionHandlerFactory
-    ? state.interactionHandlerFactory(viewer)
-    : new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  bindVesselInteraction(viewer, handler, state.interactionKeyTarget || document);
+// ------------------------------------------------------------- interaction
+
+function installInteraction(engine) {
+  if (state.clickHandler || !engine?.on) return;
+  const keyTarget = state.interactionKeyTarget
+    || (typeof document !== 'undefined' ? document : null);
+  bindVesselInteraction(engine, keyTarget);
 }
 
-function bindVesselInteraction(viewer, handler, keyTarget) {
-  state.clickHandler = handler;
-  handler.setInputAction((click) => {
-    if (!state.enabled) return;
-    const picked = viewer.scene.pick(click.position);
-    const pickedId = resolvePickId(picked);
-    let record = pickedId ? state.vesselMap.get(pickedId) : null;
-    const rawId = picked?.id ?? picked?.primitive?.id;
-    const ownRecordPick = rawId && typeof rawId === 'object' && Object.hasOwn(rawId, 'mmsi');
+/** Canonical pick ids a rendered MapLibre feature may carry. */
+function featurePickIds(feature) {
+  const props = feature?.properties || {};
+  return [props.pickId, props.id, feature?.id]
+    .map((id) => resolvePickId({ id }))
+    .filter(Boolean);
+}
 
-    // An own-layer record without a live map key is a strict no-op (FB-1
-    // residual). Trails carry no layer identity and hug their contacts, so any
-    // `gev-trail:*` pick is also a no-op. Every other non-vessel pick — sibling
-    // unowned scene picks dismiss the current vessel inspection.
-    if (ownRecordPick && (!pickedId || !record)) return;
-    if (pickedId && !record && String(pickedId).startsWith('gev-trail:')) return;
+function bindVesselInteraction(engine, keyTarget) {
+  const removeClick = engine.on('click', (click) => handleVesselClick(engine, click));
+  state.clickHandler = { destroy: () => removeClick?.() };
+  if (keyTarget?.addEventListener) {
+    state.keyTarget = keyTarget;
+    state.keydownHandler = onVesselKeyDown;
+    keyTarget.addEventListener('keydown', state.keydownHandler);
+  }
+  // Vessels only track their own selected record, so any other tracked
+  // target belongs to another layer and takes interaction ownership.
+  state.trackedChangeRemover = engine.on('trackedchange', (target) => {
+    if (target && target.layerId !== LAYER_ID && state.selectedRecord) clearVesselInspection();
+  }) || null;
+}
 
-    // A sibling layer already owns this click. Preserve the current vessel
-    // selection and do not compete with its camera command.
-    if (pickedId && isOwnedByOtherLayer('ais-live-vessels', pickedId)) return;
+function handleVesselClick(engine, click) {
+  if (!state.enabled) return;
+  const x = Number(click?.x);
+  const y = Number(click?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
-    // Cards are painted on a pointer-events:none canvas, so the scene pick is
-    // usually terrain behind the card. Resolve against the host's current
-    // actionable hit rectangles before treating the click as empty space.
-    const cardHit = !record
-      ? _vesselOverlayHost.hitTest?.(click.position?.x, click.position?.y, {
-        sourceId: VESSEL_OVERLAY_SOURCE_ID,
-      })
-      : null;
-    if (!record && cardHit) {
-      const mmsi = String(cardHit.entryId || '').startsWith('vessel:')
-        ? cardHit.entryId.slice('vessel:'.length)
-        : null;
-      record = mmsi ? state.vesselMap.get(mmsi) || null : null;
-      // A stale card id is not empty terrain and must not clear a newer
-      // selection. The next paint will evict its hit rectangle.
-      if (!record) return;
-    }
+  const hits = engine.pick?.(x, y, { layers: VESSEL_PICK_LAYERS, radius: VESSEL_PICK_RADIUS_PX }) || [];
+  const hit = hits.find((feature) => feature?.properties && 'mmsi' in feature.properties)
+    || nearestVesselFeatureOnScreen(engine, x, y);
+  const pickedMmsi = hit ? String(hit.properties.mmsi || '').trim() : null;
+  const record = pickedMmsi ? state.vesselMap.get(pickedMmsi) || null : null;
 
-    if (record) {
-      // A valid sprite or card click always transfers the camera exactly once,
-      // including a second click on the already-selected vessel.
-      selectAndFocusVessel(record);
-    } else {
-      const transition = reduceVesselSelection({
-        selectedMmsi: state.selectedRecord?.mmsi,
-        pickedMmsi: null,
-        gesture: 'click',
-      });
-      if (transition.action === 'deselect') clearVesselInspection();
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-  state.keyTarget = keyTarget;
-  state.keydownHandler = onVesselKeyDown;
-  keyTarget.addEventListener('keydown', state.keydownHandler);
-  // Vessels never set viewer.trackedEntity, so any new tracked entity belongs
-  // to another layer and takes interaction ownership of the scene.
-  state.trackedEntityRemover = viewer.trackedEntityChanged.addEventListener(() => {
-    if (viewer.trackedEntity && state.selectedRecord) clearVesselInspection();
+  // An own-layer feature without a live map key (unkeyed row or a vessel
+  // evicted since the last paint) is a strict no-op (FB-1 residual).
+  if (hit && !record) return;
+  // The selected vessel's trail hugs its contact: clicking it is a no-op.
+  const trailLayer = state.trail?.id;
+  if (!record && trailLayer
+    && (engine.pick?.(x, y, { layers: [trailLayer], radius: TRAIL_PICK_RADIUS_PX }) || []).length) return;
+
+  if (record) {
+    // A valid chevron or card click always transfers the camera exactly once,
+    // including a second click on the already-selected vessel.
+    selectAndFocusVessel(record);
+    return;
+  }
+
+  // A sibling layer already owns this click. Preserve the current vessel
+  // selection and do not compete with its camera command.
+  const others = engine.pick?.(x, y, { radius: TRAIL_PICK_RADIUS_PX }) || [];
+  for (const feature of others) {
+    if (OWN_LAYERS.has(feature?.layer?.id) || feature?.layer?.id === trailLayer) continue;
+    if (featurePickIds(feature).some((id) => isOwnedByOtherLayer(LAYER_ID, id))) return;
+  }
+
+  const transition = reduceVesselSelection({
+    selectedMmsi: state.selectedRecord?.mmsi,
+    pickedMmsi: null,
+    gesture: 'click',
   });
+  if (transition.action === 'deselect') clearVesselInspection();
 }
 
-/** Select one live vessel and request one UI-owned camera transfer. */
+/**
+ * Screen-space fallback for chevrons the rendered-feature query misses (the
+ * MapLibre globe query is unreliable away from the view center): the nearest
+ * record within the pick radius, shaped like a picked feature.
+ */
+function nearestVesselFeatureOnScreen(engine, x, y) {
+  if (typeof engine?.project !== 'function') return null;
+  const limit = VESSEL_PICK_RADIUS_PX + 6;
+  let best = null;
+  let bestDistance = limit * limit;
+  const consider = (record) => {
+    const p = engine.project(record.lon, record.lat);
+    if (!p?.visible) return;
+    const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+    if (d <= bestDistance) {
+      bestDistance = d;
+      best = record;
+    }
+  };
+  if (state.selectedRecord) consider(state.selectedRecord);
+  if (!best) for (const record of state.vesselRecords) consider(record);
+  return best ? { layer: { id: LAYER_ICON }, properties: { mmsi: best.mmsi || '' } } : null;
+}
+
+/** Target handed to engine.track while the selected vessel is followed. */
+function vesselTrackTarget(record) {
+  const mmsi = record.mmsi;
+  return {
+    kind: 'vessel',
+    layerId: LAYER_ID,
+    id: mmsi,
+    label: displayVesselName(record),
+    getPosition: () => {
+      const live = state.vesselMap.get(mmsi);
+      return live ? { lon: live.lon, lat: live.lat, alt: 0 } : null;
+    },
+  };
+}
+
+function releaseVesselTracking() {
+  const engine = state.engine;
+  const tracked = engine?.trackedTarget;
+  if (tracked && tracked === state.trackTarget) engine.track?.(null);
+  state.trackTarget = null;
+}
+
+/**
+ * Select one live vessel, request one UI-owned camera transfer
+ * (requestWorldFocus -> ui.js -> flyToWorldTarget) and follow it with
+ * engine.track (the follow waits for the flight: engine.track only recenters
+ * while the camera is not moving).
+ */
 function selectAndFocusVessel(record) {
   if (!record?.mmsi) return false;
   const transition = reduceVesselSelection({
@@ -1534,9 +1655,18 @@ function selectAndFocusVessel(record) {
     kind: 'vessel',
     id: record.mmsi,
     label: record.name || record.mmsi,
-    position: record.billboard?.position || record.position,
+    position: record.position,
   });
+  trackSelectedVessel(record);
   return true;
+}
+
+function trackSelectedVessel(record) {
+  const engine = state.engine;
+  if (!engine?.track || state.selectedRecord !== record) return;
+  if (state.trackTarget && engine.trackedTarget === state.trackTarget) return;
+  state.trackTarget = vesselTrackTarget(record);
+  engine.track(state.trackTarget);
 }
 
 function removeVesselInteraction() {
@@ -1549,9 +1679,9 @@ function removeVesselInteraction() {
   }
   state.keyTarget = null;
   state.keydownHandler = null;
-  if (state.trackedEntityRemover) {
-    state.trackedEntityRemover();
-    state.trackedEntityRemover = null;
+  if (state.trackedChangeRemover) {
+    state.trackedChangeRemover();
+    state.trackedChangeRemover = null;
   }
 }
 
@@ -1572,13 +1702,8 @@ function selectVessel(record) {
   clearSelection({ preserveTrail: reuseTrail });
   state.selectedRecord = record;
   record.missedRefreshes = 0;
-  if (record.billboard) {
-    record.billboard.image = shipIcon(record, true);
-    record.billboard.scale = shipScale(record) * 1.2;
-  }
-  // Rebuild the card set immediately so the full-detail card appears on the
-  // click, not up to VISIBILITY_UPDATE_MS later.
-  updateVisibility(true);
+  // Rebuild the sources immediately so the full-detail card appears on the click.
+  renderVessels();
   updateSelectedVesselHud(record);
   if (registerSelectedContext(record)) {
     selectEntityContext(record);
@@ -1592,35 +1717,17 @@ function selectVessel(record) {
   }
 }
 
+// ------------------------------------------------------------------- trail
+
 /**
- * Build a slightly lifted trail vertex for a vessel record — raised
- * TRAIL_HEIGHT_M above the sea surface (geoid, same datum as the anchor)
- * to avoid z-fighting.
+ * Trail vertex for a vessel record — a neutral point TRAIL_HEIGHT_M above the
+ * sea surface (the old z-fighting lift; ignored by the 2D line).
  * @param {Object} record - Vessel record with lat/lon.
- * @returns {Cesium.Cartesian3|null} Lifted position, or null without a fix.
+ * @returns {object|null} Neutral point, or null without a fix.
  */
 function vesselTrailPosition(record) {
   if (!Number.isFinite(record?.lat) || !Number.isFinite(record?.lon)) return null;
-  const heightM = vesselDatumHeightM(currentGeoidN(record.lat, record.lon), TRAIL_HEIGHT_M);
-  return Cesium.Cartesian3.fromDegrees(record.lon, record.lat, heightM);
-}
-
-/**
- * One-shot datum re-lift when the geoid grid warms mid-session: the first
- * refresh can land before ensureGeoidReady() resolves (anchors at N = 0) and
- * the next refresh is up to REFRESH_MS out — re-derive every record's
- * position in place so chevrons/labels snap to the sea surface as soon as N
- * is known. (A selected-vessel trail cannot exist that early — selection
- * needs a rendered pick — so trail vertices are not revisited.)
- */
-function refloorVesselRecords() {
-  if (!state.vesselRecords.length) return;
-  for (const record of state.vesselRecords) {
-    if (!Number.isFinite(record.lat) || !Number.isFinite(record.lon)) continue;
-    const heightM = vesselDatumHeightM(currentGeoidN(record.lat, record.lon), VESSEL_LIFT_M);
-    record.position = Cesium.Cartesian3.fromDegrees(record.lon, record.lat, heightM);
-    if (record.billboard) record.billboard.position = record.position;
-  }
+  return geoPoint(record.lon, record.lat, TRAIL_HEIGHT_M);
 }
 
 /**
@@ -1634,9 +1741,7 @@ function startSelectedVesselTrail(record) {
   state.trailPositions = [];
   const current = vesselTrailPosition(record);
   if (current) state.trailPositions.push(current);
-  if (!state.trail && state.viewer) {
-    state.trail = createTrail(state.viewer, { color: TRAIL_COLOR, width: 2.5 });
-  }
+  if (!state.trail && state.map) state.trail = createTrail(state.engine, { color: TRAIL_COLOR, width: 2.5 });
   if (state.trail) state.trail.setPositions(state.trailPositions);
   backfillVesselTrail(record.mmsi, state.trailBackfillToken);
 }
@@ -1668,13 +1773,8 @@ async function backfillVesselTrail(mmsi, token) {
 
   const older = [];
   for (const sample of samples) {
-    const lat = Number(sample?.lat);
-    const lon = Number(sample?.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-    // Per-sample N (≤ TRAIL_MAX_POINTS lookups) — same sea-surface datum as
-    // the live vertices so the spliced trail is height-continuous.
-    const heightM = vesselDatumHeightM(currentGeoidN(lat, lon), TRAIL_HEIGHT_M);
-    older.push(Cesium.Cartesian3.fromDegrees(lon, lat, heightM));
+    const point = geoPoint(sample?.lon, sample?.lat, TRAIL_HEIGHT_M);
+    if (point) older.push(point);
   }
   if (!older.length) return;
 
@@ -1695,7 +1795,7 @@ function appendSelectedVesselTrailFix(record) {
   const next = vesselTrailPosition(record);
   if (!next) return;
   const last = state.trailPositions[state.trailPositions.length - 1];
-  if (last && Cesium.Cartesian3.distance(last, next) <= TRAIL_MIN_MOVE_M) return;
+  if (last && geoDistanceM(last, next) <= TRAIL_MIN_MOVE_M) return;
   state.trailPositions.push(next);
   if (state.trailPositions.length > TRAIL_MAX_POINTS) state.trailPositions.shift();
   state.trail.setPositions(state.trailPositions);
@@ -1712,7 +1812,7 @@ function clearSelectedVesselTrail() {
 }
 
 /**
- * Destroy the trail primitive entirely (layer disable/teardown).
+ * Destroy the trail entirely (layer disable/teardown).
  */
 function destroySelectedVesselTrail() {
   clearSelectedVesselTrail();
@@ -1755,14 +1855,13 @@ function registerSelectedContext(record) {
 
 function clearSelection({ preserveTrail = false, evicted = false } = {}) {
   const record = state.selectedRecord;
-  if (record?.billboard) {
-    record.billboard.image = shipIcon(record, false);
-    record.billboard.scale = shipScale(record);
-  }
   state.selectedRecord = null;
+  // The camera follow belongs to the selection: releasing the vessel releases
+  // engine.track (never a camera move — the view stays where it is).
+  releaseVesselTracking();
   // Drop the full-detail card right away (no-op when the layer is disabled —
-  // disable() clears the entry set itself).
-  if (record && state.enabled) updateVisibility(true);
+  // disable() clears the sources itself).
+  if (record && state.enabled) renderVessels();
   if (!preserveTrail) clearSelectedVesselTrail();
   try {
     clearSelectedEntityContextForLayer('ais-live-vessels', { evicted });
@@ -1825,7 +1924,7 @@ export function buildVesselCard(record) {
   return {
     id: vesselOverlayEntryId(record),
     actionable: Boolean(record?.mmsi),
-    position: record.billboard?.position || record.position,
+    position: record.position,
     gapPx: 10,
     accent: accentForVesselType(record.type),
     title: trimHudValue(displayVesselName(record), 26),
@@ -1857,7 +1956,7 @@ export function buildSelectedVesselCard(record) {
   return {
     id: vesselOverlayEntryId(record),
     actionable: Boolean(record?.mmsi),
-    position: record.billboard?.position || record.position,
+    position: record.position,
     gapPx: 12,
     accent: accentForVesselType(record.type),
     title: trimHudValue(displayVesselName(record), 32),
@@ -1922,16 +2021,12 @@ function formatPositionTime(record) {
   return `POS: ${date.toISOString().slice(11, 19)}Z`;
 }
 
-function setVisible(show) {
-  if (state.billboardCollection) {
-    state.billboardCollection.show = show;
-  }
-  _vesselOverlayHost.setVisible(VESSEL_OVERLAY_SOURCE_ID, show);
-}
-
 function resetState() {
   clearFirstConnectTimer();
-  state.viewer = null;
+  state.engine = null;
+  state.map = null;
+  state.host = null;
+  state.visible = false;
   state.enabled = false;
   state.loading = false;
   state.loaded = false;
@@ -1952,38 +2047,36 @@ function resetState() {
   state.firstConnectDeadline = null;
   state.firstConnectTimer = null;
   state.abort = null;
-  state.billboardCollection = null;
   state.vesselRecords = [];
   state.vesselMap = new Map();
   state.unkeyedRecords = [];
   state.clickHandler = null;
   state.keyTarget = null;
   state.keydownHandler = null;
-  state.trackedEntityRemover = null;
-  state.interactionHandlerFactory = null;
+  state.trackedChangeRemover = null;
   state.interactionKeyTarget = null;
-  state.preRenderRemover = null;
-  state.lastVisibilityUpdate = 0;
-  state.lastFocusUpdate = 0;
-  state.activeFocusCount = 0;
   state.activeLabelCount = 0;
   state.selectedRecord = null;
   state.trail = null;
   state.trailPositions = [];
   state.trailMmsi = null;
   state.trailBackfillToken = 0;
+  state.trackTarget = null;
+  removeFocusPass();
+  state.lastFocusUpdate = 0;
+  state.activeFocusCount = 0;
 }
 
 /**
- * Bind the production interaction callbacks to mockable viewer/handler
- * surfaces. Test-only seam; behavior is shared with installInteraction().
- * @param {Object} viewer - Viewer-like object with scene.pick().
- * @param {Object} handler - Handler-like object with setInputAction().
+ * Bind the production interaction callbacks to a mockable engine surface.
+ * Test-only seam; behavior is shared with installInteraction().
+ * @param {Object} engine - Engine-like object with on(type, fn) -> remover and
+ *   pick(x, y, {layers?, radius?}) -> MapLibre-like features.
  * @param {Object} keyTarget - EventTarget-like object with add/removeEventListener().
  * @returns {void}
  */
-export function _bindVesselInteractionForTest(viewer, handler, keyTarget) {
-  bindVesselInteraction(viewer, handler, keyTarget);
+export function _bindVesselInteractionForTest(engine, keyTarget) {
+  bindVesselInteraction(engine, keyTarget);
 }
 
 /**
@@ -1994,8 +2087,9 @@ export function _bindVesselInteractionForTest(viewer, handler, keyTarget) {
 export function _setVesselStateForTest(options = {}) {
   resetState();
   const records = Array.isArray(options.records) ? options.records : [];
-  state.viewer = options.viewer || null;
+  state.engine = options.engine || options.viewer || null;
   state.enabled = options.enabled !== false;
+  state.visible = state.enabled;
   state.loaded = options.loaded === true;
   state.loading = options.loading === true;
   state.stale = options.stale === true;
@@ -2007,7 +2101,6 @@ export function _setVesselStateForTest(options = {}) {
     records.filter((record) => record?.mmsi).map((record) => [record.mmsi, record])
   );
   state.selectedRecord = options.selectedRecord || null;
-  state.billboardCollection = options.billboardCollection || { remove() {} };
   state.trail = options.trail || null;
   state.trailMmsi = options.trailMmsi || null;
   state.trailPositions = Array.isArray(options.trailPositions) ? [...options.trailPositions] : [];
@@ -2018,38 +2111,27 @@ export function _setVesselStateForTest(options = {}) {
   state.firstConnectPhase = options.firstConnectPhase || 'idle';
   state.firstConnectStartedAt = options.firstConnectStartedAt ?? null;
   state.firstConnectDeadline = options.firstConnectDeadline ?? null;
-  state.interactionHandlerFactory = options.interactionHandlerFactory || null;
   state.interactionKeyTarget = options.interactionKeyTarget || null;
-}
-
-/** Inject a host recorder for lifecycle/contract tests; null restores production. */
-export function _setVesselOverlayHostForTest(host = null) {
-  _vesselOverlayHost = host || DEFAULT_VESSEL_OVERLAY_HOST;
-}
-
-/** Exercise the production selector/publisher through a test-owned state. */
-export function _updateVesselCardsForTest(records = []) {
-  updateClusteredLabels(records);
 }
 
 /**
  * Reconcile AIS rows through the production lifecycle. Test-only seam.
- * @param {Object} viewer - Viewer-like object.
+ * @param {Object} engine - Engine-like object.
  * @param {Array<Object>} rows - Raw AIS rows.
  * @returns {void}
  */
-export function _reconcileVesselsForTest(viewer, rows) {
-  reconcileVessels(viewer, rows);
+export function _reconcileVesselsForTest(engine, rows) {
+  reconcileVessels(engine, rows);
 }
 
 /** Apply one server snapshot through the production pre-reconcile health gate. */
-export function _applyAisFeedSnapshotForTest(viewer, payload) {
-  return applyAisFeedSnapshot(viewer, payload);
+export function _applyAisFeedSnapshotForTest(engine, payload) {
+  return applyAisFeedSnapshot(engine, payload);
 }
 
 /** Exercise the request-owned live loader with a test-controlled fetch. */
-export function _loadLivePositionsForTest(viewer) {
-  return loadLivePositions(viewer);
+export function _loadLivePositionsForTest(engine) {
+  return loadLivePositions(engine);
 }
 
 /** Start the production first-connect grace state without installing UI. */
@@ -2106,4 +2188,9 @@ export function _getVesselStateForTest() {
     trailPositionCount: state.trailPositions.length,
     vesselCount: state.vesselMap.size,
   };
+}
+
+/** Engine follow target currently owned by this layer (test-only). */
+export function _getVesselTrackTargetForTest() {
+  return state.trackTarget;
 }

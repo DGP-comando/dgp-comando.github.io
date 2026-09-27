@@ -10,11 +10,30 @@
  * while recording telemetry events for post-run metadata export.
  *
  * State is persisted to localStorage and can be exported/imported as JSON.
+ *
+ * MOTOR: MapLibre (src/maplibre/engine.js). A câmera dos shots continua em
+ * SEMÂNTICA CESIUM ({lat, lon, alt, heading, pitch, roll} — posição da câmera,
+ * pitch -90 = nadir), então projetos gravados no Cesium tocam sem migração e o
+ * formato em localStorage (`godsEyeView.sceneProject.v2`) não muda.
+ * Conversão câmera de shot <-> MapLibre em sceneCamera.js, SOBRE A ESFERA:
+ * as receitas ficam a milhares de km de altura, onde a conversão plana do
+ * MapLibre (calculateCameraOptionsFromCameraLngLatAltRotation) manda o centro
+ * para o polo. Captura: câmera do mapa (centro/zoom/pitch/bearing) convertida
+ * para posição de câmera; na falta do mapa, `engine.getCameraView()`. Voo:
+ * `map.flyTo` com as opções convertidas, duração do shot e cubic ease-in-out;
+ * sem mapa (dublês), `engine.flyToCamera(view, {duration, easing})`.
+ * Degradações: o MapLibre limita o pitch a 85° (pitch Cesium acima de -5 vira
+ * -5), então shots quase horizontais ficam ligeiramente inclinados para baixo;
+ * shots cuja visada passa acima do horizonte (globo na parte de baixo da tela
+ * no Cesium) são recentrados no globo; o voo é o flyTo do MapLibre (arco de
+ * zoom) em vez da trajetória do Cesium.
+ * Receitas que dependem de camadas registradas só no dev (GEV) tocam sem elas,
+ * com aviso no console, no status e no registro (`shot_layers_unavailable`).
  */
 
-import * as Cesium from 'cesium';
 import { SCENE_RECIPES } from './recipes.js';
 import { sceneLayerPlan, sceneRequiresContextModeExit } from './scenePolicy.js';
+import { mapViewForSceneCamera, sceneCameraFromMap } from './sceneCamera.js';
 import {
   BLOOM_INTENSITY_DEFAULT,
   BLOOM_SCALE_VERSION,
@@ -31,6 +50,55 @@ const PROJECT_VERSION = 3;
 const DEFAULT_SHOT_DURATION_SEC = 4;
 /** @constant {number} Default hold/pause after a shot completes (seconds) */
 const DEFAULT_HOLD_SEC = 0.9;
+
+/** Cubic ease-in-out (o mesmo EasingFunction.CUBIC_IN_OUT do Cesium). */
+export function cubicInOut(t) {
+  const x = Math.max(0, Math.min(1, Number(t) || 0));
+  return x < 0.5 ? 4 * x * x * x : 1 - ((-2 * x + 2) ** 3) / 2;
+}
+
+/**
+ * Câmera do motor como estado de shot serializável (semântica Cesium), ou null.
+ * @param {object} engine
+ * @returns {{lat:number, lon:number, alt:number, heading:number, pitch:number, roll:number}|null}
+ */
+export function cameraStateFromEngine(engine) {
+  let view = null;
+  try {
+    view = engine?.getCameraView?.() ?? null;
+  } catch {
+    view = null;
+  }
+  return roundCameraState(view);
+}
+
+/**
+ * Câmera atual como estado de shot: a do mapa convertida sobre a esfera
+ * (mesma conversão do voo, então capturar e tocar é ida e volta), senão a do
+ * motor.
+ * @param {object} engine
+ * @returns {Object|null}
+ */
+export function captureSceneCamera(engine) {
+  return roundCameraState(sceneCameraFromMap(engine?.map)) || cameraStateFromEngine(engine);
+}
+
+function roundCameraState(view) {
+  if (!view) return null;
+  const lat = Number(view.lat);
+  const lon = Number(view.lon);
+  const alt = Number(view.alt);
+  if (![lat, lon, alt].every(Number.isFinite)) return null;
+  const round = (value, digits) => Number((Number(value) || 0).toFixed(digits));
+  return {
+    lat: round(lat, 6),
+    lon: round(lon, 6),
+    alt: round(alt, 1),
+    heading: round(view.heading, 2),
+    pitch: round(view.pitch, 2),
+    roll: round(view.roll, 2),
+  };
+}
 
 /**
  * Clamp a numeric value to the [0, 1] range.
@@ -285,18 +353,18 @@ function normalizeProject(rawProject) {
  * Orchestrates deterministic cinematic scene playback.
  *
  * The director owns a mutable project (persisted in localStorage) containing
- * scenes and shots. It drives camera flights via Cesium, applies visual/style
+ * scenes and shots. It drives camera flights via the map engine, applies visual/style
  * state through the styleManager, toggles data layers via the dataManager, and
  * records timestamped telemetry events during each run for later export.
  */
 export class SceneDirector {
   /**
-   * @param {Cesium.Viewer} viewer - The Cesium viewer instance
+   * @param {Object} engine - Motor MapLibre (src/maplibre/engine.js)
    * @param {Object} styleManager - Controls visual state (bloom, sharpen, HUD, detection, style presets)
    * @param {Object} dataManager - Manages data layer enable/disable and per-layer params
    */
-  constructor(viewer, styleManager, dataManager) {
-    this.viewer = viewer;
+  constructor(engine, styleManager, dataManager) {
+    this.engine = engine;
     this.styleManager = styleManager;
     this.dataManager = dataManager;
 
@@ -637,7 +705,7 @@ export class SceneDirector {
     const scene = this._getSelectedScene();
     if (!scene) return;
 
-    const camera = this.styleManager.getCameraState();
+    const camera = this._captureCamera();
     if (!camera) {
       this._updateStatus('Cannot capture shot: camera not ready');
       return;
@@ -661,6 +729,15 @@ export class SceneDirector {
   }
 
   /**
+   * Current camera as a shot camera state: the engine first, the style
+   * manager's legacy facade as a fallback (headless doubles, older wiring).
+   * @returns {Object|null}
+   */
+  _captureCamera() {
+    return captureSceneCamera(this.engine) || this.styleManager?.getCameraState?.() || null;
+  }
+
+  /**
    * Overwrite the currently selected shot's camera, visual, and layer states
    * with the live viewport state. Useful for fine-tuning a shot in-place.
    */
@@ -674,8 +751,11 @@ export class SceneDirector {
       return;
     }
 
-    const camera = this.styleManager.getCameraState();
-    if (!camera) return;
+    const camera = this._captureCamera();
+    if (!camera) {
+      this._updateStatus('Cannot update shot: camera not ready');
+      return;
+    }
 
     shot.camera = camera;
     shot.visual = this.styleManager.getVisualState();
@@ -1024,7 +1104,7 @@ export class SceneDirector {
 
   /**
    * Cancel the active scene run. Sets the cancellation token, aborts the
-   * run's in-flight layer transitions and Cesium camera flight, and logs a
+   * run's in-flight layer transitions and camera flight, and logs a
    * stop event.
    *
    * The abort is the part that stops work already under way: a layer
@@ -1039,7 +1119,8 @@ export class SceneDirector {
     if (!this._running || !this._runToken) return;
     this._runToken.cancelled = true;
     this._runAbort?.abort();
-    this.viewer.camera.cancelFlight();
+    this.engine?.cancelFlight?.();
+    this.engine?.map?.stop?.();
     this._updateStatus(reason);
     this._logEvent('scene_stopped', { reason });
   }
@@ -1142,6 +1223,15 @@ export class SceneDirector {
 
     const signal = token?.signal;
     const registered = new Set(this.dataManager.getAll().map((layer) => layer.id));
+    // Receitas GEV declaram camadas registradas só no dev (layerAvailableInBuild
+    // em main.js). Em produção elas não existem: o shot toca sem elas e avisa.
+    const unavailable = Object.entries(targetStates || {})
+      .filter(([id, target]) => target?.enabled && !registered.has(id))
+      .map(([id]) => id);
+    if (unavailable.length) {
+      console.warn(`[Scenes] Layers not available in this build: ${unavailable.join(', ')}`);
+      this._logEvent('shot_layers_unavailable', { layerIds: [...unavailable] });
+    }
     for (const { id, enabled, params } of sceneLayerPlan(targetStates, registered)) {
       const settled = await this.dataManager.setEnabled(id, enabled, signal ? { signal } : undefined);
       if (token?.cancelled) return abort();
@@ -1159,8 +1249,10 @@ export class SceneDirector {
     if (refused.length) {
       this._updateStatus(`Layers refused: ${refused.join(', ')}`);
       this._logEvent('shot_layers_refused', { layerIds: [...refused] });
+    } else if (unavailable.length) {
+      this._updateStatus(`Layers unavailable: ${unavailable.join(', ')}`);
     }
-    return { applied, refused, cancelled: false };
+    return { applied, refused, unavailable, cancelled: false };
   }
 
   /**
@@ -1202,9 +1294,9 @@ export class SceneDirector {
   }
 
   /**
-   * Fly the Cesium camera to the given position over the specified duration
-   * using cubic ease-in-out. Resolves when the flight completes, is cancelled,
-   * or a safety timeout fires (duration + 0.6s).
+   * Fly the camera to the given position over the specified duration using
+   * cubic ease-in-out. Resolves when the flight completes, is cancelled, or a
+   * safety timeout fires (duration + 0.6s).
    * @param {Object} cameraState - Target { lat, lon, alt, heading, pitch, roll }
    * @param {number} durationSec - Flight duration in seconds
    * @param {{ cancelled: boolean }} token - Cancellation token checked before starting
@@ -1218,11 +1310,15 @@ export class SceneDirector {
     this.styleManager?.clearSearchedLocation?.();
 
     const duration = Math.max(0.2, Number(durationSec) || DEFAULT_SHOT_DURATION_SEC);
-    const destination = Cesium.Cartesian3.fromDegrees(
-      cameraState.lon,
-      cameraState.lat,
-      cameraState.alt
-    );
+    const view = {
+      lat: Number(cameraState.lat),
+      lon: Number(cameraState.lon),
+      alt: Number(cameraState.alt),
+      heading: Number(cameraState.heading) || 0,
+      pitch: Number(cameraState.pitch) || -35,
+      roll: Number(cameraState.roll) || 0,
+    };
+    if (![view.lat, view.lon, view.alt].every(Number.isFinite)) return;
 
     await new Promise((resolve) => {
       // Guard against double-resolve from both callback and timeout
@@ -1233,20 +1329,30 @@ export class SceneDirector {
         resolve();
       };
 
-      this.viewer.camera.flyTo({
-        destination,
-        orientation: {
-          heading: Cesium.Math.toRadians(cameraState.heading || 0),
-          pitch: Cesium.Math.toRadians(cameraState.pitch || -35),
-          roll: Cesium.Math.toRadians(cameraState.roll || 0),
-        },
-        duration,
-        easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
-        complete: finish,
-        cancel: finish,
-      });
+      try {
+        const map = this.engine?.map;
+        const mapView = map?.flyTo ? mapViewForSceneCamera(map, view) : null;
+        if (mapView) {
+          // Voo direto no mapa com a conversão esférica; termina no moveend
+          // (fim do voo, PARAR ou gesto do usuário, que param o flyTo).
+          this.engine.cancelFlight?.();
+          map.flyTo({ ...mapView, duration: duration * 1000, easing: cubicInOut, essential: true });
+          map.once('moveend', finish);
+        } else {
+          this.engine.flyToCamera(view, {
+            duration,
+            easing: cubicInOut,
+            complete: finish,
+            cancel: finish,
+          });
+        }
+      } catch (error) {
+        console.warn('[Scenes] Camera flight failed:', error);
+        finish();
+        return;
+      }
 
-      // Safety timeout in case Cesium callbacks fail to fire
+      // Safety timeout in case the engine callbacks fail to fire
       setTimeout(finish, (duration + 0.6) * 1000);
     });
   }

@@ -367,24 +367,26 @@ test('one quantum is the smallest step that can repaint', () => {
 // ~8 Hz through the altitude band and draw() performed the full backing-store
 // resize + clear BEFORE checking whether the scope was even enabled.
 
-/** A viewer stub with the two camera signals the terminus sampler listens on. */
-function stubScopeViewer(container, heightM) {
-  const preRenderListeners = new Set();
+/** An engine stub with the two camera signals the terminus sampler listens on. */
+function stubScopeEngine(container, heightM) {
+  const cameraChangeListeners = new Set();
   const moveEndListeners = new Set();
-  const positionCartographic = { height: heightM };
-  const addTo = (set) => (listener) => {
-    set.add(listener);
-    return () => set.delete(listener);
-  };
+  const view = { alt: heightM };
+  const listeners = { camerachange: cameraChangeListeners, moveend: moveEndListeners };
   return {
-    viewer: {
+    engine: {
       container,
-      scene: { preRender: { addEventListener: addTo(preRenderListeners) } },
-      camera: { positionCartographic, moveEnd: { addEventListener: addTo(moveEndListeners) } },
+      getCameraView: () => ({ ...view }),
+      on(type, listener) {
+        const set = listeners[type];
+        if (!set) return () => {};
+        set.add(listener);
+        return () => set.delete(listener);
+      },
     },
-    setHeight(next) { positionCartographic.height = next; },
+    setHeight(next) { view.alt = next; },
     raisePreRender(times = 1) {
-      for (let i = 0; i < times; i += 1) for (const fn of [...preRenderListeners]) fn();
+      for (let i = 0; i < times; i += 1) for (const fn of [...cameraChangeListeners]) fn();
     },
     raiseMoveEnd() { for (const fn of [...moveEndListeners]) fn(); },
   };
@@ -392,9 +394,9 @@ function stubScopeViewer(container, heightM) {
 
 test('a disabled scope does no canvas work and samples no camera heights', () => {
   const dom = stubScopeMaskDom({ width: 1000, height: 800, dpr: 1 });
-  const rig = stubScopeViewer(dom.container, 14_000_000); // true full-globe view
+  const rig = stubScopeEngine(dom.container, 14_000_000); // true full-globe view
   try {
-    installScopeMask(rig.viewer);
+    installScopeMask(rig.engine);
     assert.equal(getScopeTerminusAlpha(), SCOPE_OUTSIDE_ALPHA);
 
     // The transition must clear the painted mask EXACTLY once, and must not
@@ -436,9 +438,9 @@ test('a disabled scope does no canvas work and samples no camera heights', () =>
 
 test('a DPR change that also crosses a terminus step paints once, not twice', () => {
   const dom = stubScopeMaskDom({ width: 1000, height: 800, dpr: 1 });
-  const rig = stubScopeViewer(dom.container, SCOPE_TERMINUS_FAR_M);
+  const rig = stubScopeEngine(dom.container, SCOPE_TERMINUS_FAR_M);
   try {
-    installScopeMask(rig.viewer);
+    installScopeMask(rig.engine);
     assert.equal(getScopeTerminusAlpha(), SCOPE_OUTSIDE_ALPHA);
 
     // Descend into the band WITHOUT a frame, then drag the window to a 2x

@@ -1,4 +1,32 @@
-import * as Cesium from 'cesium';
+/**
+ * @module militaryAwareness
+ * @description CONTATOS / Global Context (id `military-awareness`) sobre o
+ * motor MapLibre (src/maplibre/engine.js). Só no dev: agrega as camadas
+ * `flights`, `military`, `ais-live-vessels` e `military-installations`.
+ *
+ * O QUE FAZ (inalterado): em volta do sujeito selecionado (voo rastreado,
+ * navio ou instalação), conta e lista os contatos num raio de 250 km por
+ * camada, com `?` quando a fonte ainda não respondeu (contrato
+ * `loading`/`lastUpdate` de docs/CURRENT-STATE.md); PREVIOUS/FOCUS/NEXT
+ * navegam pelo histórico e pela coorte; `attachDataManager` liga/solta as
+ * dependências; o cockpit (ui.js/CockpitViewController) lê
+ * `getContextSnapshot()` e navega por `navigateNext/Previous`.
+ *
+ * MIGRAÇÃO MAPLIBRE (2026-09)
+ *  - `init(engine)` recebe o motor no lugar do Cesium.Viewer. O alvo seguido
+ *    vem de `engine.trackedTarget` (gevTrackedId, gevDisplayPosition()).
+ *  - Posições são o ponto neutro de geoPoint.js `{lon, lat, height, x, y, z}`
+ *    (qualquer formato aceito por toGeoPoint entra); distâncias em linha reta
+ *    via geoDistanceM (a métrica do antigo Cartesian3.distance).
+ *  - O anel de 250 km é uma linha tracejada MapLibre (`dg-awareness-ring`)
+ *    no lugar da elipse Cesium; os voos até navio/instalação usam
+ *    `engine.flyToTarget` (vista de cima, enquadramento do antigo
+ *    flyToBoundingSphere de 3 km).
+ *  - Setas de direção da bússola: rumo sujeito→contato relativo ao heading da
+ *    câmera (mapa visto de cima) no lugar da projeção na base da câmera 3D.
+ *  - Cadência: cada 'render' do mapa + um relógio de 750 ms (o MapLibre não
+ *    redesenha parado), com a mesma histerese de movimento.
+ */
 import flightsLayer from './flights.js';
 import militaryFlightsLayer from './militaryFlights.js';
 import aisLiveVesselsLayer from './aisLiveVessels.js';
@@ -17,6 +45,7 @@ import { announceNavigationAuthority } from '../navigationPolicy.js';
 import { celestialScreenAngle, getKeyholeGeometry } from '../celestialRing.js';
 import { bearingBetweenCoordinates } from '../cockpitMath.js';
 import { cameraPoseSignature } from './iconOrientation.js';
+import { geoDistanceM, geoPoint, toGeoPoint } from './geoPoint.js';
 import {
   governorRequestRender,
   holdContinuousRender,
@@ -51,9 +80,13 @@ export const AWARENESS_QUERY_LIMIT = 20000;
 const AWARENESS_MAX_NAVIGATION_EXAMPLES = 10000;
 const CONTEXT_RIM_HEIGHT_M = 2500;
 const VESSEL_FOCUS_RADIUS_M = 3000;
-const DIRECTION_SCRATCH = Array.from({ length: 3 }, () => new Cesium.Cartesian3());
-const SUBJECT_CARTOGRAPHIC_SCRATCH = new Cesium.Cartographic();
-const TARGET_CARTOGRAPHIC_SCRATCH = Array.from({ length: 3 }, () => new Cesium.Cartographic());
+/** Anel de 250 km no mapa (fonte/layer MapLibre com prefixo dg-, transplantados na troca de mapa base). */
+const RING_SOURCE_ID = 'dg-awareness-ring';
+const RING_LAYER_ID = 'dg-awareness-ring-line';
+const RING_COLOR = 'rgba(98,181,255,0.72)';
+const RING_SEGMENTS = 128;
+const EARTH_RADIUS_M = 6_371_008.8;
+const DEG = Math.PI / 180;
 const SOURCE_LABEL = {
   flights: 'OpenSky',
   military: 'adsb.lol',
@@ -176,7 +209,7 @@ const SUBJECT_PRESENCE = Object.freeze({
 });
 
 const state = {
-  viewer: null,
+  engine: null,
   dataManager: null,
   enabled: false,
   // Set once a refresh observes the subject gone from a still-reporting source.
@@ -451,7 +484,7 @@ export function buildAwarenessContextSnapshot(results, navigation = {}, { subjec
  *
  * The subject is excluded from its own window, which is why the panel reads
  * "contacts around X" rather than "including X".
- * @param {Cesium.Cartesian3} position Window centre.
+ * @param {object} position Window centre.
  * @param {object} [options]
  * @param {number} [options.radiusM=AWARENESS_RADIUS_M] Window radius.
  * @param {object|null} [options.subject=null] Contact at the centre, excluded.
@@ -546,12 +579,9 @@ function focusNearbyTarget(layerId, id, { origin = 'programmatic' } = {}) {
   if (layerId !== 'ais-live-vessels' || !aisLiveVesselsLayer.selectById(id)) return false;
 
   const vessel = aisLiveVesselsLayer.getAllPositions(12000).find((item) => String(item.id) === String(id));
-  if (!contextTargetFlyToAllowed(layerId) || !vessel?.position || !state.viewer) return true;
+  if (!contextTargetFlyToAllowed(layerId) || !vessel?.position || !state.engine) return true;
   announceNavigationAuthority('context-vessel-focus');
-  state.viewer.camera.flyToBoundingSphere(
-    new Cesium.BoundingSphere(vessel.position, VESSEL_FOCUS_RADIUS_M),
-    { duration: 1.4 },
-  );
+  flyToFocusRadius(vessel.position, VESSEL_FOCUS_RADIUS_M, { duration: 1.4 });
   return true;
 }
 
@@ -602,7 +632,7 @@ function selectKnownContextTarget(layerId, id) {
     layerId,
     id: String(known.id || known.mmsi),
     label: known.label || known.name || known.callsign || String(id),
-    position: Cesium.Cartesian3.clone(known.position),
+    position: toGeoPoint(known.position),
   });
   return true;
 }
@@ -669,14 +699,14 @@ function selectNavigationTargets(sourceCohorts, subject, visitedKeys, {
 }
 
 /**
- * Resolve the source-owned aircraft that currently owns Cesium tracking.
+ * Resolve the source-owned aircraft that currently owns the engine's follow camera.
  * Both flight layers may briefly retain local state during a cross-layer
- * handoff, so the viewer's normalized tracked identity is the tie-breaker.
- * @returns {{layerId: string, id: string, label: string, position: Cesium.Cartesian3}|null}
+ * handoff, so the engine's normalized tracked identity is the tie-breaker.
+ * @returns {{layerId: string, id: string, label: string, position: object}|null}
  *   Detached awareness subject, or null when no flight owns the follow camera.
  */
 function currentTrackedFlightSubject() {
-  const trackedKey = normalizeContextId(state.viewer?.trackedEntity?.gevTrackedId);
+  const trackedKey = normalizeContextId(state.engine?.trackedTarget?.gevTrackedId);
   if (!trackedKey) return null;
   const subjects = [
     flightsLayer.getTrackedSubject?.(),
@@ -1022,7 +1052,7 @@ function stopAwarenessPageRotation() {
 }
 
 function ensureDirectionOverlay() {
-  if (state.directionRoot || !state.viewer) return state.directionRoot;
+  if (state.directionRoot || !state.engine) return state.directionRoot;
   const root = document.createElement('div');
   root.id = 'military-awareness-direction-overlay';
   root.hidden = true;
@@ -1063,7 +1093,7 @@ function ensureDirectionOverlay() {
 
   state.compassRing = compass;
   state.compassHeading = heading;
-  state.viewer.container.appendChild(root);
+  state.engine.container?.appendChild?.(root);
   state.directionRoot = root;
   return root;
 }
@@ -1092,9 +1122,9 @@ function updateDirectionOverlay() {
     return;
   }
 
-  const canvas = state.viewer.scene.canvas;
-  const width = canvas.clientWidth || canvas.width;
-  const height = canvas.clientHeight || canvas.height;
+  const canvas = state.engine.canvas || state.engine.container;
+  const width = canvas?.clientWidth || canvas?.width || 0;
+  const height = canvas?.clientHeight || canvas?.height || 0;
   const geometry = getKeyholeGeometry(width, height);
   if (!(geometry.radius > 0)) {
     root.hidden = true;
@@ -1110,15 +1140,16 @@ function updateDirectionOverlay() {
   state.compassRing.style.width = `${compassRadius * 2}px`;
   state.compassRing.style.height = `${compassRadius * 2}px`;
 
-  const cameraHeading = state.viewer.camera.heading || 0;
-  const headingDeg = (Math.round(Cesium.Math.toDegrees(cameraHeading)) + 360) % 360;
+  const cameraHeadingDeg = cameraHeadingDegrees();
+  const cameraHeading = cameraHeadingDeg * DEG;
+  const headingDeg = (Math.round(cameraHeadingDeg) + 360) % 360;
   state.compassRing.style.setProperty('--compass-rotation', `${-headingDeg}deg`);
   state.compassHeading.textContent = `HDG ${String(headingDeg).padStart(3, '0')}°`;
   state.compassHeading.style.left = `${geometry.centerX}px`;
   state.compassHeading.style.top = `${geometry.centerY - compassRadius + 39}px`;
   for (const label of state.compassLabels) {
-    const bearing = Cesium.Math.toRadians(Number(label.dataset.bearing));
-    const angle = bearing - cameraHeading - Cesium.Math.PI_OVER_TWO;
+    const bearing = Number(label.dataset.bearing) * DEG;
+    const angle = bearing - cameraHeading - Math.PI / 2;
     const labelRadius = compassRadius - 17;
     label.style.left = `${geometry.centerX + Math.cos(angle) * labelRadius}px`;
     label.style.top = `${geometry.centerY + Math.sin(angle) * labelRadius}px`;
@@ -1135,17 +1166,16 @@ function updateDirectionOverlay() {
       marker.hidden = true;
       continue;
     }
-    const direction = Cesium.Cartesian3.subtract(item.position, state.subject.position, DIRECTION_SCRATCH[index]);
-    if (Cesium.Cartesian3.magnitudeSquared(direction) < 1) {
+    const subjectPoint = toGeoPoint(state.subject.position);
+    const targetPoint = toGeoPoint(item.position);
+    if (!subjectPoint || !targetPoint || !(geoDistanceM(subjectPoint, targetPoint) >= 1)) {
       marker.hidden = true;
       continue;
     }
-    Cesium.Cartesian3.normalize(direction, direction);
-    const projection = celestialScreenAngle(
-      Cesium.Cartesian3.dot(direction, state.viewer.camera.rightWC),
-      Cesium.Cartesian3.dot(direction, state.viewer.camera.upWC),
-      marker._lastAngle,
-    );
+    const bearing = bearingBetweenCoordinates(subjectPoint.lat, subjectPoint.lon, targetPoint.lat, targetPoint.lon);
+    // Mapa visto de cima: a direção na tela é o rumo relativo ao heading da câmera.
+    const relative = (Number(bearing) - cameraHeadingDeg) * DEG;
+    const projection = celestialScreenAngle(Math.sin(relative), Math.cos(relative), marker._lastAngle);
     if (projection.stable) marker._lastAngle = projection.angle;
     // Every detected contact shares the compass rim. Keeping the bearing
     // markers on one radius makes them read as compass contacts rather than
@@ -1157,16 +1187,6 @@ function updateDirectionOverlay() {
     marker._arrow.style.transform = `translate(-50%, -50%) rotate(${projection.angle}rad)`;
     marker._label.style.transform = `translate(-50%, -50%) translate(${-Math.cos(projection.angle) * 56}px, ${-Math.sin(projection.angle) * 56}px)`;
     const label = formatAwarenessLabel(item);
-    const subjectCartographic = Cesium.Cartographic.fromCartesian(state.subject.position, undefined, SUBJECT_CARTOGRAPHIC_SCRATCH);
-    const targetCartographic = Cesium.Cartographic.fromCartesian(item.position, undefined, TARGET_CARTOGRAPHIC_SCRATCH[index]);
-    const bearing = subjectCartographic && targetCartographic
-      ? bearingBetweenCoordinates(
-        Cesium.Math.toDegrees(subjectCartographic.latitude),
-        Cesium.Math.toDegrees(subjectCartographic.longitude),
-        Cesium.Math.toDegrees(targetCartographic.latitude),
-        Cesium.Math.toDegrees(targetCartographic.longitude),
-      )
-      : null;
     const bearingText = Number.isFinite(bearing) ? `BRG ${String(Math.round(bearing)).padStart(3, '0')}°` : 'BRG —';
     const courseText = Number.isFinite(item.track) ? ` · CRS ${String(Math.round(item.track)).padStart(3, '0')}°` : '';
     marker._label.textContent = `${label} · ${formatAwarenessDistance(item.distanceM)}\n${bearingText}${courseText}`;
@@ -1174,51 +1194,108 @@ function updateDirectionOverlay() {
   }
 }
 
+/** Anel de raio `radiusM` em volta de (lon, lat), fechado, na esfera. */
+export function awarenessRingCoordinates(lon, lat, radiusM = AWARENESS_RADIUS_M, segments = RING_SEGMENTS) {
+  const d = radiusM / EARTH_RADIUS_M;
+  const p1 = lat * DEG;
+  const l1 = lon * DEG;
+  const coords = [];
+  for (let i = 0; i <= segments; i++) {
+    const b = (i / segments) * 2 * Math.PI;
+    const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
+    const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+    coords.push([((l2 / DEG + 540) % 360) - 180, p2 / DEG]);
+  }
+  return coords;
+}
+
+function ringMap() {
+  const map = state.engine?.map;
+  return map && typeof map.getSource === 'function' ? map : null;
+}
+
+function setRingData(data) {
+  const map = ringMap();
+  if (!map) return false;
+  try {
+    if (!map.getSource(RING_SOURCE_ID)) map.addSource(RING_SOURCE_ID, { type: 'geojson', data });
+    else map.getSource(RING_SOURCE_ID).setData(data);
+    if (!map.getLayer(RING_LAYER_ID)) {
+      map.addLayer({
+        id: RING_LAYER_ID,
+        type: 'line',
+        source: RING_SOURCE_ID,
+        paint: { 'line-color': RING_COLOR, 'line-width': 1.6, 'line-dasharray': [4, 3] },
+      });
+    }
+    return true;
+  } catch {
+    return false; // estilo trocando: o próximo refresh redesenha
+  }
+}
+
 function clearVisual() {
-  if (state.visual?.entities && state.viewer) {
-    for (const entity of state.visual.entities) state.viewer.entities.remove(entity);
-    // Idle mode renders only on request; a removed ring must not linger.
+  if (state.visual) {
+    setRingData({ type: 'FeatureCollection', features: [] });
+    // Sem hold contínuo, um anel removido não pode ficar na tela.
     governorRequestRender('awareness-visual');
   }
   state.visual = null;
 }
 
 function renderVisual(subject) {
-  if (!state.viewer || !subject?.position) return;
-  const cartographic = Cesium.Cartographic.fromCartesian(subject.position);
-  if (!cartographic) return;
-  const groundCenter = Cesium.Cartesian3.fromRadians(cartographic.longitude, cartographic.latitude, 0);
+  const center = toGeoPoint(subject?.position);
+  if (!state.engine || !center) return;
+  const groundCenter = geoPoint(center.lon, center.lat, 0);
   const key = `${subject.layerId}:${subject.id}`;
   if (state.visual?.key === key) {
-    // Large ellipse geometry is more reliable as a ConstantPositionProperty.
-    // Move it only after a meaningful displacement so live tracking does not
-    // churn ten large geometries for sub-pixel motion every 750 ms.
-    if (Cesium.Cartesian3.distance(state.visual.center, groundCenter) >= 250) {
-      for (const entity of state.visual.entities) entity.position.setValue(groundCenter);
-      Cesium.Cartesian3.clone(groundCenter, state.visual.center);
-      // Content actually changed — buy exactly one frame instead of holding.
+    // Só move o anel depois de um deslocamento relevante (≥ 250 m).
+    if (geoDistanceM(state.visual.center, groundCenter) >= 250) {
+      setRingData(ringFeature(groundCenter));
+      state.visual.center = groundCenter;
       governorRequestRender('awareness-visual');
     }
     return;
   }
   clearVisual();
-
-  const entities = [];
-
-  entities.push(state.viewer.entities.add({
-    position: groundCenter,
-    ellipse: {
-      semiMajorAxis: AWARENESS_RADIUS_M,
-      semiMinorAxis: AWARENESS_RADIUS_M,
-      fill: false,
-      outline: true,
-      outlineColor: Cesium.Color.fromCssColorString('#62b5ff').withAlpha(0.72),
-      height: CONTEXT_RIM_HEIGHT_M,
-    },
-  }));
-
-  state.visual = { key, entities, center: Cesium.Cartesian3.clone(groundCenter) };
+  setRingData(ringFeature(groundCenter));
+  state.visual = { key, center: groundCenter };
   governorRequestRender('awareness-visual');
+}
+
+function ringFeature(center) {
+  return {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'LineString', coordinates: awarenessRingCoordinates(center.lon, center.lat) },
+    }],
+  };
+}
+
+/** Heading da câmera em graus (0 = norte). */
+function cameraHeadingDegrees() {
+  try {
+    const heading = Number(state.engine?.getCameraView?.()?.heading);
+    return Number.isFinite(heading) ? heading : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Voo até uma posição com o enquadramento do antigo flyToBoundingSphere de
+ * raio `radiusM` (vista de cima, heading atual).
+ */
+function flyToFocusRadius(position, radiusM, { duration = 1.4 } = {}) {
+  const target = toGeoPoint(position);
+  if (!target || typeof state.engine?.flyToTarget !== 'function') return false;
+  state.engine.flyToTarget(
+    { lat: target.lat, lon: target.lon, height: 0 },
+    { rangeM: radiusM * 3, heading: cameraHeadingDegrees(), pitch: -90, duration },
+  );
+  return true;
 }
 
 function selectSubject(subject) {
@@ -1235,7 +1312,7 @@ function selectSubject(subject) {
       state.navigationHistory.splice(state.navigationIndex + 1);
       state.navigationHistory.push({
         ...historySubjectSnapshot(subject, historySourceItem(subject)),
-        position: Cesium.Cartesian3.clone(subject.position),
+        position: toGeoPoint(subject.position),
       });
       state.navigationIndex = state.navigationHistory.length - 1;
     }
@@ -1250,21 +1327,21 @@ function selectSubject(subject) {
  * Resolve the currently displayed position for a selected live subject. Flight
  * tracking owns the motion callback, so awareness consumes its cached display
  * position instead of creating a second tracker or extrapolation path.
- * @param {{layerId: string, id: string, position: Cesium.Cartesian3}} subject Current subject.
+ * @param {{layerId: string, id: string, position: object}} subject Current subject.
  * @param {object} [options] Position materialization controls.
  * @param {boolean} [options.allowCollectionMaterialization=true] Whether a layer-wide fallback may run.
- * @returns {Cesium.Cartesian3|null} A cloned live position when one is available.
+ * @returns {object|null} A cloned live position when one is available.
  */
 function resolveSubjectPosition(subject, { allowCollectionMaterialization = true } = {}) {
   if (!subject?.position) return null;
   if (subject.layerId === 'flights' || subject.layerId === 'military') {
-    const trackedPosition = state.viewer?.trackedEntity?.gevDisplayPosition?.();
+    const trackedPosition = toGeoPoint(state.engine?.trackedTarget?.gevDisplayPosition?.());
     if (trackedPosition) {
       return {
-        position: Cesium.Cartesian3.clone(trackedPosition),
+        position: trackedPosition,
         // Only the follow camera's own contact proves presence this way; a
         // different tracked entity says nothing about this subject.
-        presence: String(state.viewer?.trackedEntity?.gevTrackedId || '') === subjectKey(subject)
+        presence: String(state.engine?.trackedTarget?.gevTrackedId || '') === subjectKey(subject)
           ? SUBJECT_PRESENCE.LIVE
           : SUBJECT_PRESENCE.UNCHECKED,
       };
@@ -1273,14 +1350,14 @@ function resolveSubjectPosition(subject, { allowCollectionMaterialization = true
     // If that frame-owned cache is temporarily unavailable, keep the last
     // awareness position instead of allocating/scanning up to 1,000 contacts.
     if (!allowCollectionMaterialization) {
-      return { position: Cesium.Cartesian3.clone(subject.position), presence: SUBJECT_PRESENCE.UNCHECKED };
+      return { position: toGeoPoint(subject.position), presence: SUBJECT_PRESENCE.UNCHECKED };
     }
     const layer = subject.layerId === 'flights' ? flightsLayer : militaryFlightsLayer;
     return collectionSubjectPosition(subject, layer.getAllPositions(1000), layer);
   }
   if (subject.layerId === 'ais-live-vessels') {
     if (!allowCollectionMaterialization) {
-      return { position: Cesium.Cartesian3.clone(subject.position), presence: SUBJECT_PRESENCE.UNCHECKED };
+      return { position: toGeoPoint(subject.position), presence: SUBJECT_PRESENCE.UNCHECKED };
     }
     return collectionSubjectPosition(
       subject,
@@ -1290,7 +1367,7 @@ function resolveSubjectPosition(subject, { allowCollectionMaterialization = true
   }
   // Mapped installations come from static geometry, not a live feed: there is
   // nothing to be culled from.
-  return { position: Cesium.Cartesian3.clone(subject.position), presence: SUBJECT_PRESENCE.LIVE };
+  return { position: toGeoPoint(subject.position), presence: SUBJECT_PRESENCE.LIVE };
 }
 
 /**
@@ -1302,8 +1379,8 @@ function resolveSubjectPosition(subject, { allowCollectionMaterialization = true
  * ~11k contacts against a 1,000-row cap, so "not in the rows" is not "gone".
  * The rows are only consulted for a fresher position — a contact past the cap
  * keeps its last known position while still reading as present.
- * @param {{id: string, position: Cesium.Cartesian3}} subject Current subject.
- * @param {Array<{id: string, position: Cesium.Cartesian3}>} rows Live collection rows.
+ * @param {{id: string, position: object}} subject Current subject.
+ * @param {Array<{id: string, position: object}>} rows Live collection rows.
  * @param {{hasContact?: function}} layer The owning source layer.
  * @returns {{position: Cesium.Cartesian3, presence: string}} Position plus presence verdict.
  */
@@ -1316,9 +1393,7 @@ function collectionSubjectPosition(subject, rows, layer) {
     ? SUBJECT_PRESENCE.LIVE
     : (known === false ? SUBJECT_PRESENCE.MISSING : SUBJECT_PRESENCE.UNCHECKED);
   return {
-    position: current?.position
-      ? Cesium.Cartesian3.clone(current.position)
-      : Cesium.Cartesian3.clone(subject.position),
+    position: toGeoPoint(current?.position) || toGeoPoint(subject.position),
     presence,
   };
 }
@@ -1365,7 +1440,7 @@ function refreshSelectedSubject(force = false) {
   const labelChanged = nextLabel !== state.subject.label;
   state.subject = { ...state.subject, position, label: nextLabel };
   const movementM = state.lastEvaluatedPosition
-    ? Cesium.Cartesian3.distance(state.lastEvaluatedPosition, position)
+    ? geoDistanceM(state.lastEvaluatedPosition, position)
     : Infinity;
   if (!awarenessRefreshRequired({
     force,
@@ -1387,7 +1462,7 @@ function refreshSelectedSubject(force = false) {
   }
   state.results = evaluateSubject(state.subject, sources);
   state.sourceRevision = nextSourceRevision;
-  state.lastEvaluatedPosition = Cesium.Cartesian3.clone(position, state.lastEvaluatedPosition);
+  state.lastEvaluatedPosition = toGeoPoint(position);
   for (const cohort of state.results.cohorts) {
     const maxPage = Math.max(0, Math.floor(Math.max(0, cohort.summary.nearest.length - 1) / AWARENESS_PAGE_SIZE) * AWARENESS_PAGE_SIZE);
     state.cohortPages.set(cohort.id, Math.min(state.cohortPages.get(cohort.id) || 0, maxPage));
@@ -1406,7 +1481,7 @@ function subjectFromContext(record) {
     layerId: record.layerId,
     id: record.properties?.mmsi || record.id,
     label: record.label || record.id,
-    position: Cesium.Cartesian3.fromDegrees(longitude, latitude, 0),
+    position: geoPoint(longitude, latitude, 0),
   };
 }
 
@@ -1445,12 +1520,15 @@ function clearAwarenessSubject() {
  * Quantized camera-pose signature, or '' when the camera cannot report a full
  * pose yet. An unknown pose reads as PARKED, so a camera that is still coming
  * up can never be mistaken for continuous movement.
- * @param {Cesium.Camera|null|undefined} camera
+ * @param {object|null|undefined} engine motor (getCameraView em semântica Cesium)
  * @returns {string}
  */
-function cameraMotionSignature(camera) {
-  if (!camera?.positionWC || !Number.isFinite(camera.heading)) return '';
-  return cameraPoseSignature(camera);
+function cameraMotionSignature(engine) {
+  if (typeof engine?.getCameraView !== 'function') return '';
+  let view = null;
+  try { view = engine.getCameraView(); } catch { view = null; }
+  if (!view || !Number.isFinite(view.lon) || !Number.isFinite(view.lat) || !Number.isFinite(view.heading)) return '';
+  return cameraPoseSignature(view);
 }
 
 /**
@@ -1499,19 +1577,19 @@ function syncAwarenessRenderHold() {
 }
 
 function attachRuntimeListeners() {
-  if (state.runtimeListenersAttached || !state.viewer) return;
+  if (state.runtimeListenersAttached || !state.engine) return;
   window.addEventListener('gev:awareness-subject-selected', state.subjectListener);
   window.addEventListener('gev:entity-selected', state.contextListener);
   window.addEventListener('gev:entity-selection-cleared', state.clearListener);
   window.addEventListener('gev:awareness-subject-cleared', state.subjectClearListener);
-  state.preRenderRemover = state.viewer.scene.preRender.addEventListener(() => {
+  const onFrame = () => {
     if (!state.enabled) return;
     const now = Date.now();
     // "Did the camera move" uses the SAME quantized pose signature the fleet
     // rotation pass gates on (iconOrientation.cameraPoseSignature) rather than
     // camera.changed, whose granularity is globally degraded by other layers
     // mutating camera.percentageChanged.
-    const poseSig = cameraMotionSignature(state.viewer.camera);
+    const poseSig = cameraMotionSignature(state.engine);
     if (poseSig !== state.lastCameraPoseSig) {
       state.lastCameraPoseSig = poseSig;
       state.lastCameraPoseChangeMs = now;
@@ -1534,7 +1612,16 @@ function attachRuntimeListeners() {
     } else {
       scheduleDirectionOverlayUpdate();
     }
-  });
+  };
+  // Cada quadro desenhado do mapa ('render'), mais um relógio na cadência
+  // parada: o MapLibre não redesenha com a vista parada e sem animação, e a
+  // leitura (contagens, CONTACT LOST) ainda precisa andar a 750 ms.
+  const removeRender = typeof state.engine.on === 'function' ? state.engine.on('render', onFrame) : null;
+  const intervalId = window.setInterval?.(onFrame, AWARENESS_REFRESH_MS);
+  state.preRenderRemover = () => {
+    removeRender?.();
+    if (intervalId != null) window.clearInterval?.(intervalId);
+  };
   state.runtimeListenersAttached = true;
 }
 
@@ -1560,7 +1647,7 @@ function detachRuntimeListeners() {
 /**
  * Release any aircraft-owned follow camera before a non-aircraft context
  * selection takes ownership. Both layers are safe no-ops when idle and release
- * Cesium tracking in place, so the subsequent vessel/site framing starts from
+ * engine tracking in place, so the subsequent vessel/site framing starts from
  * the current view without the previous aircraft continuing to drag it.
  */
 function releaseAircraftTracking() {
@@ -1653,19 +1740,23 @@ function activateOperationalContext() {
 /**
  * Pick the observed candidate closest to the current view. This is intentionally
  * a navigation preference, not a risk, capability, or affiliation calculation.
- * @param {Array<{position: Cesium.Cartesian3}>} candidates Observed candidates.
+ * @param {Array<{position: object}>} candidates Observed candidates.
  * @returns {Object|null} The best currently observable candidate.
  */
 function closestToCurrentView(candidates) {
   if (!Array.isArray(candidates) || !candidates.length) return null;
-  const cameraPosition = state.viewer?.camera?.positionWC;
+  let cameraPosition = null;
+  try {
+    const view = state.engine?.getCameraView?.();
+    cameraPosition = view ? geoPoint(view.lon, view.lat, view.alt) : null;
+  } catch { cameraPosition = null; }
   if (!cameraPosition) return candidates.find((candidate) => candidate?.position) || null;
 
   let closest = null;
   let closestDistance = Infinity;
   for (const candidate of candidates) {
     if (!candidate?.position) continue;
-    const distance = Cesium.Cartesian3.distance(cameraPosition, candidate.position);
+    const distance = geoDistanceM(cameraPosition, candidate.position);
     if (Number.isFinite(distance) && distance < closestDistance) {
       closest = candidate;
       closestDistance = distance;
@@ -1683,7 +1774,7 @@ function closestToCurrentView(candidates) {
  * @returns {boolean} Whether a target was selected and framed.
  */
 function focusAttentionTarget() {
-  if (!state.enabled || state.subject || !state.viewer || state.autoFocusAttempted) return false;
+  if (!state.enabled || state.subject || !state.engine || state.autoFocusAttempted) return false;
 
   const nearestFlight = closestToCurrentView([
     ...militaryFlightsLayer.getAllPositions(800)
@@ -1708,10 +1799,7 @@ function focusAttentionTarget() {
   announceNavigationAuthority('context-vessel-autofocus', {
     cancelPendingSelection: false,
   });
-  state.viewer.camera.flyToBoundingSphere(
-    new Cesium.BoundingSphere(vessel.position, VESSEL_FOCUS_RADIUS_M),
-    { duration: 1.6 },
-  );
+  flyToFocusRadius(vessel.position, VESSEL_FOCUS_RADIUS_M, { duration: 1.6 });
   return true;
 }
 
@@ -1735,9 +1823,10 @@ const militaryAwarenessLayer = {
   getParams() {
     return { passive: state.passive };
   },
-  init(viewer) {
+  /** @param {object} engine motor do app (src/maplibre/engine.js) */
+  init(engine) {
     detachRuntimeListeners();
-    state.viewer = viewer;
+    state.engine = engine;
     state.subjectListener = (event) => {
       if (!state.enabled) return;
       selectSubject(event.detail);
@@ -1849,7 +1938,7 @@ const militaryAwarenessLayer = {
     state.contextListener = null;
     state.clearListener = null;
     state.subjectClearListener = null;
-    state.viewer = null;
+    state.engine = null;
     state.dataManager = null;
   },
   getStats() {

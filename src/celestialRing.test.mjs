@@ -147,3 +147,102 @@ test('fade tuning scales with keyhole radius and supports outside opacity', () =
   ), 0.3);
   setKeyholeFadeTuning({ fadeRatio: 0.16, outsideOpacity: 0.05 });
 });
+
+// ── MapLibre port: globe disc, ephemeris and camera axes (no Cesium) ─────────
+
+import {
+  cameraScreenAxesFixed,
+  globeDiscFromTransform,
+  moonDirectionFixed,
+  projectEarthDiscToViewport,
+  sunDirectionFixed,
+  zoomForGlobeDiscRadius,
+} from './celestialRing.js';
+
+const near = (a, b, eps, msg) => assert.ok(Math.abs(a - b) <= eps, `${msg}: ${a} vs ${b}`);
+
+test('globe disc at nadir is centred and matches the MapLibre globe radius', () => {
+  const f = 1200; // cameraToCenterDistance for a 900 px tall viewport, fov ≈ 36.9°
+  const worldSize = 512 * 2 ** 1.5;
+  const disc = globeDiscFromTransform({ worldSize, centerLat: 0, cameraToCenterDistance: f, pitchDeg: 0, width: 1600, height: 900 });
+  assert.equal(disc.earthCenterX, 800);
+  assert.equal(disc.earthCenterY, 450);
+  const R = worldSize / (2 * Math.PI);
+  near(disc.earthRadius, (f * R) / Math.sqrt(f * f + 2 * f * R), 1e-9, 'limb radius');
+  assert.ok(disc.earthRadius < R, 'perspective limb is smaller than the equatorial radius');
+});
+
+test('pitch pushes the earth centre below the screen centre; bearing never moves it', () => {
+  const base = { worldSize: 1024, centerLat: -25, cameraToCenterDistance: 1200, width: 1000, height: 800 };
+  const nadir = globeDiscFromTransform({ ...base, pitchDeg: 0 });
+  const tilted = globeDiscFromTransform({ ...base, pitchDeg: 40 });
+  assert.ok(tilted.earthCenterY > nadir.earthCenterY);
+  assert.equal(tilted.earthCenterX, nadir.earthCenterX);
+  assert.equal(globeDiscFromTransform({ ...base, worldSize: 0 }), null);
+  assert.equal(globeDiscFromTransform({ ...base, width: 0 }), null);
+});
+
+test('zoomForGlobeDiscRadius inverts the nadir disc radius', () => {
+  const f = 1100;
+  for (const lat of [0, -25, 60]) {
+    const zoom = zoomForGlobeDiscRadius(290, f, lat);
+    const disc = globeDiscFromTransform({ worldSize: 512 * 2 ** zoom, centerLat: lat, cameraToCenterDistance: f, width: 1000, height: 900 });
+    near(disc.earthRadius, 290, 1e-6, `lat ${lat}`);
+  }
+  assert.equal(zoomForGlobeDiscRadius(0, f, 0), null);
+});
+
+test('projectEarthDiscToViewport reads a MapLibre engine and adds the keyhole', () => {
+  const engine = {
+    isGlobe: () => true,
+    map: {
+      transform: { worldSize: 1024, cameraToCenterDistance: 1200, centerOffset: { x: 0, y: 0 } },
+      getCenter: () => ({ lng: -51, lat: -24 }),
+      getPitch: () => 0,
+    },
+  };
+  const disc = projectEarthDiscToViewport(engine, 1000, 800);
+  assert.equal(disc.keyholeRadius, 400 * 1.05);
+  assert.ok(isFullGlobeInsideKeyhole(disc, false), 'a zoom-1 globe fits the keyhole');
+  assert.equal(projectEarthDiscToViewport({ ...engine, isGlobe: () => false }, 1000, 800), null, 'flat map has no disc');
+});
+
+test('sun direction: March equinox noon UTC points at lon 0 on the equator', () => {
+  const sun = sunDirectionFixed(new Date(Date.UTC(2026, 2, 20, 12, 0, 0)));
+  near(Math.hypot(sun.x, sun.y, sun.z), 1, 1e-12, 'unit');
+  near(sun.x, 1, 0.01, 'x');
+  near(Math.asin(sun.z) * 180 / Math.PI, 0, 0.5, 'declination');
+  const june = sunDirectionFixed(new Date(Date.UTC(2026, 5, 21, 12, 0, 0)));
+  near(Math.asin(june.z) * 180 / Math.PI, 23.44, 0.1, 'June solstice declination');
+});
+
+test('moon direction is a unit vector within the lunar declination band', () => {
+  for (let d = 0; d < 28; d += 3) {
+    const m = moonDirectionFixed(new Date(Date.UTC(2026, 8, 1 + d)));
+    near(Math.hypot(m.x, m.y, m.z), 1, 1e-12, 'unit');
+    assert.ok(Math.abs(Math.asin(m.z) * 180 / Math.PI) < 29.5);
+  }
+});
+
+test('camera screen axes are orthonormal; north-up nadir puts up = north', () => {
+  const { right, up } = cameraScreenAxesFixed({ lat: 0, lon: 0, bearingDeg: 0, pitchDeg: 0 });
+  near(up.z, 1, 1e-12, 'up is north at the equator');
+  near(right.y, 1, 1e-12, 'right is east');
+  const r2 = cameraScreenAxesFixed({ lat: -24, lon: -51, bearingDeg: 73, pitchDeg: 30 });
+  near(r2.right.x * r2.up.x + r2.right.y * r2.up.y + r2.right.z * r2.up.z, 0, 1e-12, 'orthogonal');
+  near(Math.hypot(r2.up.x, r2.up.y, r2.up.z), 1, 1e-12, 'unit up');
+});
+
+import { cameraAltitudeFromTransform, engineCameraAltitude } from './celestialRing.js';
+
+test('camera altitude falls back to the transform when the engine reports none', () => {
+  const t = { worldSize: 512 * 2 ** 9, cameraToCenterDistance: 950, center: { lat: -25 } };
+  const alt = cameraAltitudeFromTransform({ worldSize: t.worldSize, centerLat: -25, cameraToCenterDistance: 950 });
+  assert.ok(alt > 100_000 && alt < 300_000, `zoom 9 is a regional altitude: ${alt}`);
+  const engine = {
+    getCameraView: () => ({ alt: NaN }),
+    map: { _camera: { transform: t }, getCenter: () => ({ lat: -25 }), getPitch: () => 0 },
+  };
+  assert.equal(engineCameraAltitude(engine), alt, 'MapLibre 6 keeps the transform in map._camera');
+  assert.equal(engineCameraAltitude({ getCameraView: () => ({ alt: 1234 }) }), 1234, 'engine value wins');
+});

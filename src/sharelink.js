@@ -1,4 +1,3 @@
-import * as Cesium from 'cesium';
 import { BLOOM_INTENSITY_DEFAULT, BLOOM_SCALE_VERSION } from './bloom.js';
 import {
   migrateDetectionState,
@@ -11,7 +10,17 @@ import { decodeLayerStateParams, encodeLayerStateParams } from './data/layerStat
  * Share Links — URL Hash State Management
  *
  * Encodes camera position + style into the URL hash so links can be shared.
- * Format: #lat=37.77&lon=-122.42&alt=800&heading=0&pitch=-35&style=nvg&bloom=1&bi=84&bv=2&sharpen=0&si=65&hud=tactical&hv=1&dm=BALANCED&dd=50&da=elastic&kf=16&ko=0&cr=0&map=photoreal
+ * Format: #lat=37.77&lon=-122.42&alt=800&heading=0&pitch=-35&style=nvg&bloom=1&bi=84&bv=2&sharpen=0&si=65&hud=tactical&hv=1&dm=BALANCED&dd=50&da=elastic&kf=16&ko=0&cr=0&map=esri
+ *
+ * O formato é o mesmo da era Cesium, para links antigos abrirem: a câmera
+ * (posição lat/lon/alt, heading, pitch, roll em graus) é lida e aplicada pelo
+ * motor MapLibre (`engine.getCameraView()` / `setCameraView()` /
+ * `flyToCamera()`), que converte para o MapLibre. `map=photoreal|bing-*` dos
+ * links antigos cai em `esri` (MapStackController.normalizeStackId).
+ * Parâmetros novos, opcionais (ausentes = comportamento de sempre):
+ *   `gl=0`  vista plana 2D (Mercator) em vez do globo;
+ *   `rel=1` relevo 3D ligado;
+ *   `rot=0` rótulos do satélite desligados.
  */
 
 const DEBOUNCE_MS = 500;
@@ -122,7 +131,10 @@ export class ShareLinkManager {
     // null = the altitude-adaptive terminus (the default). A number pins the
     // outside-fill opacity as a percent, 94..100. (`sce`, 2026-08-17)
     this._scopeTerminusPct = null;
-    this._mapStack = 'photoreal';
+    this._mapStack = 'esri';
+    this._globe = true;
+    this._terrain = false;
+    this._labels = true;
     this._layerStateProvider = null;
     this._panelStateProvider = null;
     this._styleParamStateProvider = null;
@@ -142,10 +154,10 @@ export class ShareLinkManager {
       ? cancelOwnedNavigation
       : null;
 
-    // Listen for camera changes
-    this._removeCameraChanged = this.viewer.camera.changed.addEventListener(() => {
+    // Listen for camera changes (fim de cada movimento do mapa)
+    this._removeCameraChanged = this.viewer.on?.('moveend', () => {
       this._scheduleUpdate();
-    });
+    }) ?? null;
   }
 
   /**
@@ -159,9 +171,9 @@ export class ShareLinkManager {
     const lat = parseFloat(params.get('lat'));
     const lon = parseFloat(params.get('lon'));
 
-    // Coordinates drive Cartesian conversion, so reject non-finite URL values
-    // before marking a share restoration as pending. `parseFloat('Infinity')`
-    // is not NaN and would otherwise reach Cesium asynchronously at startup.
+    // Coordinates drive the camera, so reject non-finite URL values before
+    // marking a share restoration as pending. `parseFloat('Infinity')` is not
+    // NaN and would otherwise reach the map engine asynchronously at startup.
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
     const parseOr = (value, fallback) => {
@@ -224,7 +236,11 @@ export class ShareLinkManager {
       scopeTerminusPct: params.has('sce')
         ? clampScopeTerminusPct(params.get('sce'))
         : null,
-      mapStack: params.get('map') || 'photoreal',
+      mapStack: params.get('map') || 'esri',
+      // Opcionais (links antigos não têm): globo por padrão, relevo desligado.
+      mapGlobe: params.get('gl') !== '0',
+      mapTerrain: params.get('rel') === '1',
+      mapLabels: params.get('rot') !== '0',
       layerState: decodedLayerState,
       layerStateInvalid: params.get('v') === '2'
         && params.has('l')
@@ -249,12 +265,12 @@ export class ShareLinkManager {
   async applyState(state, { applyCamera = true, navigationToken = null } = {}) {
     if (this._destroyed || !state) return { succeeded: false, reason: 'unavailable' };
     const view = {
-      destination: Cesium.Cartesian3.fromDegrees(state.lon, state.lat, state.alt),
-      orientation: {
-        heading: Cesium.Math.toRadians(state.heading),
-        pitch: Cesium.Math.toRadians(state.pitch),
-        roll: Cesium.Math.toRadians(state.roll),
-      },
+      lat: state.lat,
+      lon: state.lon,
+      alt: state.alt,
+      heading: state.heading,
+      pitch: state.pitch,
+      roll: state.roll,
     };
     let cameraPromise = Promise.resolve({ status: applyCamera ? 'superseded' : 'skipped' });
     if (applyCamera && this._isNavigationCurrent(navigationToken)) {
@@ -270,10 +286,8 @@ export class ShareLinkManager {
       this._activeCameraFlight = { restoreGeneration, navigationToken, settle: releaseOwnedFlight };
       // Re-apply the final pose only while this share restoration still owns
       // navigation. A later user or voice command wins over delayed restore.
-      this.viewer.camera.flyTo({
-        ...view,
+      this.viewer.flyToCamera(view, {
         duration: 3.0,
-        easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
         complete: () => {
           if (
             this._destroyed
@@ -283,8 +297,8 @@ export class ShareLinkManager {
             releaseOwnedFlight('superseded');
             return;
           }
-          this.viewer.camera.setView(view);
-          this.viewer.scene?.requestRender?.();
+          this.viewer.setCameraView(view);
+          this.viewer.requestRender?.();
           releaseOwnedFlight('applied');
         },
         cancel: () => releaseOwnedFlight('cancelled'),
@@ -325,6 +339,9 @@ export class ShareLinkManager {
         scopeFeatherPct: visualCurrent ? state.scopeFeatherPct : undefined,
         scopeTerminusPct: visualCurrent ? state.scopeTerminusPct : undefined,
         mapStack: mapCurrent ? state.mapStack : undefined,
+        mapGlobe: mapCurrent ? state.mapGlobe : undefined,
+        mapTerrain: mapCurrent ? state.mapTerrain : undefined,
+        mapLabels: mapCurrent ? state.mapLabels : undefined,
         panelState,
         styleParams: visualCurrent ? state.styleParams : undefined,
       });
@@ -439,6 +456,9 @@ export class ShareLinkManager {
       this._scopeTerminusPct = clampScopeTerminusPct(extras.scopeTerminusPct);
     }
     if (typeof extras.mapStack === 'string') this._mapStack = extras.mapStack;
+    if (typeof extras.mapGlobe === 'boolean') this._globe = extras.mapGlobe;
+    if (typeof extras.mapTerrain === 'boolean') this._terrain = extras.mapTerrain;
+    if (typeof extras.mapLabels === 'boolean') this._labels = extras.mapLabels;
     this._scheduleUpdate();
   }
 
@@ -473,18 +493,18 @@ export class ShareLinkManager {
   /** Build a deterministic snapshot without mutating history. */
   _buildHashParams() {
     if (this._destroyed) return null;
-    const camera = this.viewer.camera;
-    const carto = camera.positionCartographic;
-    if (!carto) return null;
+    const view = this.viewer.getCameraView?.();
+    if (!view || !Number.isFinite(view.lat) || !Number.isFinite(view.lon)) return null;
+    const alt = Number.isFinite(view.alt) ? view.alt : 800;
 
     const params = new URLSearchParams();
     params.set('v', '2');
-    params.set('lat', Cesium.Math.toDegrees(carto.latitude).toFixed(4));
-    params.set('lon', Cesium.Math.toDegrees(carto.longitude).toFixed(4));
-    params.set('alt', Math.round(carto.height).toString());
-    params.set('heading', Math.round(Cesium.Math.toDegrees(camera.heading)).toString());
-    params.set('pitch', Math.round(Cesium.Math.toDegrees(camera.pitch)).toString());
-    params.set('roll', Math.round(Cesium.Math.toDegrees(camera.roll)).toString());
+    params.set('lat', view.lat.toFixed(4));
+    params.set('lon', view.lon.toFixed(4));
+    params.set('alt', Math.round(alt).toString());
+    params.set('heading', Math.round(view.heading || 0).toString());
+    params.set('pitch', Math.round(view.pitch ?? -90).toString());
+    params.set('roll', Math.round(view.roll || 0).toString());
     params.set('style', STYLE_TO_URL[this._currentStyle] || 'normal');
     params.set('bloom', this._bloomEnabled ? '1' : '0');
     params.set('sharpen', this._sharpenEnabled ? '1' : '0');
@@ -508,6 +528,10 @@ export class ShareLinkManager {
     const terminusPct = clampScopeTerminusPct(this._scopeTerminusPct);
     if (terminusPct != null) params.set('sce', String(terminusPct));
     params.set('map', this._mapStack);
+    // Só quando diferem do padrão: um link sem eles abre no globo, sem relevo.
+    if (!this._globe) params.set('gl', '0');
+    if (this._terrain) params.set('rel', '1');
+    if (!this._labels) params.set('rot', '0');
     const layerState = this._layerStateProvider?.();
     if (layerState) encodeLayerStateParams(params, layerState);
     this._encodePanelStateParam(params, this._panelStateProvider?.());

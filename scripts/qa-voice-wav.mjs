@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
+import { appUrl as withSemLogin, resolveChrome } from './lib/qaBrowser.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const appUrl = process.argv[2] || 'http://localhost:4189';
@@ -30,7 +31,7 @@ if (fixtureSha256 !== expectedFixtureSha256) {
 const appOrigin = new URL(appUrl).origin;
 const browser = await puppeteer.launch({
   headless: 'new',
-  executablePath: puppeteer.executablePath(),
+  executablePath: resolveChrome() || puppeteer.executablePath(),
   args: [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -56,7 +57,7 @@ try {
   });
   page.on('pageerror', (error) => consoleErrors.push(error.message));
 
-  await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.goto(withSemLogin(appUrl), { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForFunction(() => (
     window.__godsEyeView?.voiceCommands
     && document.getElementById('gev-voice-button')
@@ -66,13 +67,12 @@ try {
     const voice = window.__godsEyeView?.voiceCommands;
     const radio = window.__godsEyeView?.dataManager?.layers?.get('radio')?.module;
     const radioState = radio?.getUIState?.() || null;
-    const camera = window.__godsEyeView?.viewer?.camera;
-    const cartographic = camera?.positionCartographic;
+    const view = window.__godsEyeView?.engine?.getCameraView?.() || null;
     return {
       at: Date.now(),
       voiceStatus: voice?.status || null,
       voiceDetail: document.getElementById('gev-voice-detail')?.textContent?.trim() || null,
-      cameraHeightM: cartographic?.height ?? null,
+      cameraHeightM: view?.alt ?? null,
       radioEnabled: radioState?.enabled ?? null,
       radioAudioState: radioState?.audioState ?? null,
       radioStation: radioState?.selected?.name || null,

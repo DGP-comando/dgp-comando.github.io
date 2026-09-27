@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * fly_route cinematic evidence — drives the REAL voice runner headlessly and
- * measures the REAL camera (Cesium heading/pitch/roll + position) every
+ * measures the REAL camera (engine.getCameraView(): heading/pitch/roll + position) every
  * rendered frame, so the proof is the shot the owner will watch, not our own
  * internal numbers.
  *
@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 import sharp from 'sharp';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,11 +25,6 @@ const OUT_DIR = getOpt('--out', path.join(ROOT, 'qa-shots', 'flyroute'));
 const MIRROR_DIR = getOpt('--mirror', '');
 const SHOT_EVERY_MS = Number(getOpt('--shot-ms', '2000'));
 
-const CHROME_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-].filter(Boolean);
-const CHROME_EXECUTABLE = CHROME_CANDIDATES.find((c) => { try { return fs.existsSync(c); } catch { return false; } });
 
 // A 6-waypoint downtown Austin route: north, right, left, right, left.
 const ROUTE_POINTS = [
@@ -57,26 +52,12 @@ const wrapDeg = (deg) => ((deg + 540) % 360) - 180;
 fs.mkdirSync(OUT_DIR, { recursive: true });
 if (MIRROR_DIR) fs.mkdirSync(MIRROR_DIR, { recursive: true });
 
-const browser = await puppeteer.launch({
-  headless: 'new',
-  ...(CHROME_EXECUTABLE ? { executablePath: CHROME_EXECUTABLE } : {}),
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    // Real GPU when the host has one: the dolly is frame-rate independent, but
-    // a higher sample rate makes the roll and the ease ramps far easier to see.
-    ...(process.platform === 'darwin'
-      ? ['--use-angle=metal', '--enable-gpu']
-      : ['--use-gl=angle', '--use-angle=swiftshader']),
-    '--disable-dev-shm-usage',
-    '--disable-background-timer-throttling',
-    '--disable-renderer-backgrounding',
-    '--window-size=1500,950',
-  ],
-  protocolTimeout: 240000,
+// Real GPU with --headful: the dolly is frame-rate independent, but a higher
+// sample rate makes the roll and the ease ramps far easier to see.
+const { browser, page } = await launchQaBrowser({
+  headful: process.argv.includes('--headful'),
+  viewport: { width: 1500, height: 950 },
 });
-const page = await browser.newPage();
-await page.setViewport({ width: 1500, height: 950 });
 page.on('pageerror', (e) => console.log(`  [page error] ${String(e).slice(0, 160)}`));
 
 // Cold-corridor proof: hold the terrain proxy back so the dolly has to survive
@@ -96,40 +77,38 @@ if (TERRAIN_DELAY_MS > 0) {
   });
 }
 
-/** Install a postRender sampler: one row per RENDERED frame. */
+/** Install a render sampler: one row per RENDERED map frame. */
 async function installSampler() {
   await page.evaluate(() => {
-    const viewer = window.__godsEyeView.viewer;
+    const { engine } = window.__godsEyeView;
     window.__gevFlyTrace = { rows: [], marks: [] };
     if (window.__gevFlyTraceRemove) window.__gevFlyTraceRemove();
     let frame = 0;
     const listener = () => {
-      const cam = viewer.camera;
-      const carto = cam.positionCartographic;
-      // Every 6th frame, ask the RENDERED WORLD what is under the camera. This
-      // is the only measurement that can prove "never below terrain": it reads
-      // the surface the user is actually looking at, not our own floor cache.
+      const v = engine.getCameraView();
+      // Every 6th frame, ask the RENDERED terrain what is under the camera
+      // (MapLibre answers only while the 3D relief is on). This reads the
+      // surface the user is actually looking at, not our own floor cache.
       let surfaceM = null;
       frame += 1;
-      if (frame % 6 === 0 && typeof viewer.scene.sampleHeight === 'function') {
+      if (frame % 6 === 0 && engine.hasTerrain?.() && typeof engine.map.queryTerrainElevation === 'function') {
         try {
-          const probe = viewer.scene.sampleHeight(carto.clone());
+          const probe = engine.map.queryTerrainElevation([v.lon, v.lat]);
           if (Number.isFinite(probe)) surfaceM = probe;
         } catch { /* tiles not loaded under the camera */ }
       }
       window.__gevFlyTrace.rows.push({
         t: performance.now(),
-        lon: (carto.longitude * 180) / Math.PI,
-        lat: (carto.latitude * 180) / Math.PI,
-        height: carto.height,
-        headingDeg: (cam.heading * 180) / Math.PI,
-        pitchDeg: (cam.pitch * 180) / Math.PI,
-        rollDeg: (cam.roll * 180) / Math.PI,
+        lon: v.lon,
+        lat: v.lat,
+        height: v.alt,
+        headingDeg: v.heading,
+        pitchDeg: v.pitch,
+        rollDeg: v.roll || 0,
         surfaceM,
       });
     };
-    viewer.scene.postRender.addEventListener(listener);
-    window.__gevFlyTraceRemove = () => viewer.scene.postRender.removeEventListener(listener);
+    window.__gevFlyTraceRemove = engine.on('render', listener);
   });
 }
 
@@ -151,9 +130,9 @@ function sampleDistanceM(a, b) {
 
 try {
   console.log(`\nfly_route cinematic evidence — ${APP_URL}`);
-  await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+  await page.goto(appUrl(APP_URL), { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForFunction(
-    () => window.__godsEyeView?.viewer && window.__gevVoiceCommands?.runner && window.__gevAnnotations,
+    () => window.__godsEyeView?.engine && window.__gevVoiceCommands?.runner && window.__gevAnnotations,
     { timeout: 150000, polling: 250 },
   );
   const run = (name, args = {}) => page.evaluate(
@@ -426,7 +405,7 @@ try {
   const second = await run('fly_route', { label: 'cinema evidence', speed: 'normal' });
   report(second?.ok === true, 'second flight starts for the interrupt case');
   const liveRollDeg = () => page.evaluate(
-    () => (window.__godsEyeView.viewer.camera.roll * 180) / Math.PI,
+    () => window.__godsEyeView.engine.getCameraView().roll || 0,
   );
   let rollBeforeCut = 0;
   for (let waited = 0; waited < 90000; waited += 400) {
@@ -439,8 +418,8 @@ try {
   await page.screenshot({ path: path.join(OUT_DIR, 'interrupt-0-banked.png') });
 
   const cut = await page.evaluate(async () => {
-    const viewer = window.__godsEyeView.viewer;
-    const canvas = viewer.scene.canvas;
+    const { engine } = window.__godsEyeView;
+    const canvas = engine.canvas;
     // Read the motion slot BEFORE the cut too: under Vite a dynamic import can
     // hand back a second module instance whose slot is always empty, and an
     // "empty after" that was already empty before proves nothing.
@@ -452,11 +431,11 @@ try {
       read = () => mod.getActiveCameraMotion?.() ?? null;
       slotBefore = read();
     } catch { /* dev-only module read */ }
-    const rollBefore = (viewer.camera.roll * 180) / Math.PI;
+    const rollBefore = engine.getCameraView().roll || 0;
     window.__gevFlyTrace.marks.push({ label: 'pointerdown', t: performance.now() });
     canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
     // Same synchronous turn as the pointerdown — no frame has rendered yet.
-    const rollAfter = (viewer.camera.roll * 180) / Math.PI;
+    const rollAfter = engine.getCameraView().roll || 0;
     if (read) slotAfter = read();
     return { slotBefore, slotAfter, rollBefore, rollAfter };
   });

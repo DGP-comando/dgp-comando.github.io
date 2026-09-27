@@ -40,8 +40,35 @@ export function unregisterSpriteCollection(layerId, collection) {
  * @param {Cesium.Viewer|Object} viewer - Active viewer.
  * @returns {void}
  */
+/**
+ * MIGRAÇÃO MAPLIBRE (2026-09): com o `engine` do app, a "coleção" registrada é
+ * a lista de ids de layers MapLibre da camada (array, ou objeto com
+ * `layerIds`). A ordem de SPRITE_LAYER_ORDER é restaurada movendo esses layers,
+ * na ordem, para o topo da faixa de pontos do anfitrião (logo abaixo da âncora
+ * `dg-slot-label`), de modo que `flights` fique por cima de tudo.
+ * O caminho Cesium (viewer.scene.primitives.raiseToTop) continua para coleções
+ * legadas.
+ */
+function restoreMapLayerOrder(map) {
+  const before = map.getLayer?.('dg-slot-label') ? 'dg-slot-label' : undefined;
+  for (const layerId of SPRITE_LAYER_ORDER) {
+    const collection = _collections.get(layerId);
+    const ids = Array.isArray(collection) ? collection : collection?.layerIds;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) {
+      try {
+        if (map.getLayer(id)) map.moveLayer(id, before);
+      } catch { /* estilo trocando */ }
+    }
+  }
+}
+
 export function restoreSpriteOrder(viewer) {
   if (!viewer || viewer.isDestroyed?.()) return;
+  if (viewer.map && !viewer.scene) {
+    restoreMapLayerOrder(viewer.map);
+    return;
+  }
   const scene = viewer.scene;
   const primitives = scene?.primitives;
   if (!primitives || scene.isDestroyed?.() || primitives.isDestroyed?.()) return;

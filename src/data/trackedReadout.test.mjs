@@ -13,6 +13,7 @@ import {
   trackedLabelModelFromText,
 } from './trackedReadout.js';
 
+/** Mock of the engine's 'trackedchange' listener set. */
 function makeCesiumEvent() {
   const listeners = new Set();
   return {
@@ -22,6 +23,16 @@ function makeCesiumEvent() {
     },
     raise() { for (const callback of [...listeners]) callback(); },
     get size() { return listeners.size; },
+  };
+}
+
+/** Mock MapLibre engine: `trackedTarget` + on('trackedchange'). */
+function makeEngine(target, changed) {
+  return {
+    trackedTarget: target,
+    on(type, fn) {
+      return type === 'trackedchange' ? changed.addEventListener(fn) : () => {};
+    },
   };
 }
 
@@ -131,7 +142,7 @@ test('tracked entity publishes a protected host entry backed by the frame cache'
     gevDisplayPosition: () => display,
     gevLabelModel: { title: 'UAL123', details: ['FL350 · 451 kts'], accent: '#39d0ff' },
   };
-  const viewer = { trackedEntity: entity, trackedEntityChanged: changed };
+  const viewer = makeEngine(entity, changed);
   const recorder = makeHostRecorder();
   globalThis.window = fakeWindow;
   _setTrackedOverlayHostForTest(recorder.host);
@@ -159,7 +170,7 @@ test('tracked entity publishes a protected host entry backed by the frame cache'
       'FL360 · 455 kts',
     ]);
 
-    viewer.trackedEntity = null;
+    viewer.trackedTarget = null;
     changed.raise();
     assert.equal(getActiveTrackedReadoutId(), null);
     assert.equal(recorder.calls.at(-1).op, 'clear');
@@ -174,7 +185,7 @@ test('selection lifecycle ignores vessels, accepts installations, and clears wit
   const originalWindow = globalThis.window;
   const fakeWindow = new EventTarget();
   const changed = makeCesiumEvent();
-  const viewer = { trackedEntity: null, trackedEntityChanged: changed };
+  const viewer = makeEngine(null, changed);
   const recorder = makeHostRecorder();
   const installation = {
     gevTrackedId: 'installations:fort-test',
@@ -215,7 +226,7 @@ test('selection lifecycle ignores vessels, accepts installations, and clears wit
     const clearsBeforeDestroy = recorder.calls.filter(({ op }) => op === 'clear').length;
     destroyTrackedReadout();
     assert.ok(recorder.calls.filter(({ op }) => op === 'clear').length > clearsBeforeDestroy);
-    assert.equal(changed.size, 0, 'trackedEntityChanged listener was removed');
+    assert.equal(changed.size, 0, "the engine's trackedchange listener was removed");
     assert.ok(recorder.calls.some(({ op, visible }) => op === 'visible' && visible === false));
   } finally {
     destroyTrackedReadout();
@@ -238,36 +249,37 @@ test('trackedReadout cannot resurrect a dedicated canvas or render listener', as
   }
 });
 
-test('tracking layers write gevLabelModel and expose only their cached display positions', async () => {
+test('tracking layers that feed the readout write gevLabelModel and a display position', async () => {
+  // Contract, not a snapshot of the layers: during the MapLibre migration each
+  // layer is ported by its owner. Whichever layer still refreshes the readout
+  // must hand it the explicit model and a position accessor (the cached
+  // gevDisplayPosition, or the getPosition the engine follows).
   const files = await Promise.all([
     'flights.js',
     'militaryFlights.js',
     'satellites.js',
     'militaryInstallations.js',
   ].map(async (name) => [name, await readFile(new URL(`./${name}`, import.meta.url), 'utf8')]));
-  const sources = Object.fromEntries(files);
   for (const [name, source] of files) {
+    if (!source.includes('trackedReadout.js')) continue;
     assert.ok(source.includes('.gevLabelModel ='), `${name} writes the explicit model directly`);
-    assert.ok(source.includes('.gevDisplayPosition ='), `${name} exposes a display-position cache`);
+    assert.ok(
+      source.includes('.gevDisplayPosition =') || source.includes('getPosition'),
+      `${name} exposes a display-position accessor`,
+    );
+    assert.equal(source.includes('_trackedEntity.label.text'), false, `${name} must not read label text back`);
   }
-  assert.ok(sources['flights.js'].includes('gevDisplayPosition = _trackedDisplayCached'));
-  assert.ok(sources['militaryFlights.js'].includes('gevDisplayPosition = _trackedDisplayCached'));
-  assert.ok(sources['satellites.js'].includes('gevDisplayPosition = _trackedDisplayCached'));
-  assert.equal(sources['flights.js'].includes('_trackedEntity.label.text'), false);
-  assert.equal(sources['militaryFlights.js'].includes('_trackedEntity.label.text'), false);
-  assert.equal(sources['satellites.js'].includes('_trackedEntity.label.text'), false);
 });
 
-test('civilian and military trail heads use the lower-centre model anchor and weak-texture tint', async () => {
-  const files = await Promise.all(['flights.js', 'militaryFlights.js'].map(async (name) => (
-    [name, await readFile(new URL(`./${name}`, import.meta.url), 'utf8')]
-  )));
-  for (const [name, source] of files) {
-    assert.ok(
-      source.includes('const head = _trackedTrailCached() || _trackedDisplayPosition(_trackedIcao);'),
-      `${name} trail head uses the dedicated lower-centre model anchor`,
-    );
-    assert.ok(source.includes('const MODEL_COLOR_BLEND_AMOUNT = 0.94;'),
-      `${name} keeps diffuse texture contribution weak through code-side MIX`);
-  }
+// (Removed with the MapLibre migration: the pin on the flight layers' Cesium
+// 3D-model trail-head anchor and MODEL_COLOR_BLEND_AMOUNT tint described
+// Cesium model rendering, which the MapLibre layers no longer have.)
+
+
+test('alvo que desenha o próprio cartão (mapLabel) não é publicado de novo', async () => {
+  const { createTrackedOverlayEntry } = await import('./trackedReadout.js');
+  const model = { title: 'AZU4567', details: ['FL350'], accent: '#00d4ff' };
+  assert.ok(createTrackedOverlayEntry({ id: 'x', gevLabelModel: model, getPosition: () => ({ lon: -49, lat: -25, height: 10000 }) }) !== undefined);
+  const src = (await import('node:fs')).readFileSync(new URL('./trackedReadout.js', import.meta.url), 'utf8');
+  assert.match(src, /entity\?\.mapLabel \? null/);
 });

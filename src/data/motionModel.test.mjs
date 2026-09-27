@@ -1,7 +1,6 @@
 // src/data/motionModel.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as Cesium from 'cesium';
 import {
   norm360, norm180,
   courseBetweenCartesians, limitCourseStep,
@@ -10,11 +9,16 @@ import {
   liftRepeatedGroundFix, synthesizeForwardKinematicsFix,
   projectGroundArcLatLon, corridorPathLatLon,
   COURSE_TRACK_ONLY_MPS, COURSE_CHORD_ONLY_MPS, COURSE_MIN_DPS, TURN_MIN_SPEED_MPS,
+  ecefFromGeo, geoFromEcef, toGeo, distanceM, timeToMs, courseBetweenPositions,
 } from './motionModel.js';
+
+// Sem Cesium: posições ECEF via ecefFromGeo (o antigo Cartesian3.fromDegrees)
+// e tempos em ms epoch.
+const fromDegrees = (lon, lat, h = 0) => ecefFromGeo(lon, lat, h);
 
 const AUSTIN = { lat: 30.2672, lon: -97.7431, alt: 9000 };
 const cart = (latOff, lonOff) =>
-  Cesium.Cartesian3.fromDegrees(AUSTIN.lon + lonOff, AUSTIN.lat + latOff, AUSTIN.alt);
+  fromDegrees(AUSTIN.lon + lonOff, AUSTIN.lat + latOff, AUSTIN.alt);
 
 test('norm helpers', () => {
   assert.equal(norm360(-90), 270);
@@ -93,10 +97,10 @@ test('estimateTurnRateDps: 2°/s ramp detected; noise floored; clamped', () => {
   assert.equal(estimateTurnRateDps(wild), -4); // clamped
 });
 
-test('turnRateFromFixHistory adapts JulianDate history', () => {
-  const t0 = Cesium.JulianDate.now();
+test('turnRateFromFixHistory adapts ms-epoch history', () => {
+  const t0 = Date.now();
   const h = [0, 30, 60].map((s, i) => ({
-    time: Cesium.JulianDate.addSeconds(t0, s, new Cesium.JulianDate()),
+    time: t0 + s * 1000,
     track: i * 60,
   }));
   assert.ok(Math.abs(turnRateFromFixHistory(h) - 2) < 1e-9);
@@ -142,9 +146,9 @@ test('courseSlewCapDps: COURSE_MIN_DPS at low speed easing to the fleet cap at c
 });
 
 test('turn-rate guard: hover fix-track jitter manufactures NO turn rate; a real slow turn still does', () => {
-  const t0 = Cesium.JulianDate.now();
+  const t0 = Date.now();
   const mk = (specs) => specs.map(([s, track, velocity]) => ({
-    time: Cesium.JulianDate.addSeconds(t0, s, new Cesium.JulianDate()),
+    time: t0 + s * 1000,
     track, velocity,
   }));
   // Hovering heli: 1 m/s drift, reported track flipping ±45° — used to yield ±°/s
@@ -178,11 +182,11 @@ test('arcOffsetEnu: backward dt retraces the forward arc (warm-up symmetry)', ()
 
 test('repeated kinematics apply only from a forward synthetic fix', () => {
   const epochMs = 1_800_000_000_000;
-  const originalPosition = Cesium.Cartesian3.fromDegrees(-97.7431, 30.2672, 9000);
+  const originalPosition = fromDegrees(-97.7431, 30.2672, 9000);
   const newest = {
-    time: Cesium.JulianDate.fromDate(new Date(epochMs)),
+    time: epochMs,
     epochMs,
-    position: Cesium.Cartesian3.clone(originalPosition),
+    position: { ...originalPosition },
     velocity: 100,
     track: 90,
   };
@@ -194,35 +198,35 @@ test('repeated kinematics apply only from a forward synthetic fix', () => {
   assert.ok(synthetic);
   assert.equal(newest.velocity, 100);
   assert.equal(newest.track, 90);
-  assert.ok(Cesium.Cartesian3.equals(newest.position, originalPosition));
+  assert.deepEqual(newest.position, originalPosition);
   assert.equal(synthetic.velocity, 220);
   assert.equal(synthetic.track, 15);
-  assert.ok(Math.abs(Cesium.Cartesian3.distance(newest.position, synthetic.position) - 1000) < 0.5);
+  assert.ok(Math.abs(distanceM(newest.position, synthetic.position) - 1000) < 0.5);
 });
 
 test('liftRepeatedGroundFix raises only grounded history and preserves the stored coordinates', () => {
   const newest = {
-    time: Cesium.JulianDate.now(),
+    time: Date.now(),
     epochMs: 123,
-    position: Cesium.Cartesian3.fromDegrees(-98.04, 29.71, -30),
+    position: fromDegrees(-98.04, 29.71, -30),
     velocity: 0,
     track: 270,
   };
-  const lifted = Cesium.Cartesian3.fromDegrees(-97.5, 30.1, 320);
+  const lifted = fromDegrees(-97.5, 30.1, 320);
   assert.equal(liftRepeatedGroundFix(newest, lifted, true), true);
-  const carto = Cesium.Cartographic.fromCartesian(newest.position);
-  assert.ok(Math.abs(Cesium.Math.toDegrees(carto.longitude) - (-98.04)) < 1e-7);
-  assert.ok(Math.abs(Cesium.Math.toDegrees(carto.latitude) - 29.71) < 1e-7);
-  assert.ok(Math.abs(carto.height - 320) < 1e-5);
+  const carto = geoFromEcef(newest.position);
+  assert.ok(Math.abs(carto.lon - (-98.04)) < 1e-7);
+  assert.ok(Math.abs(carto.lat - 29.71) < 1e-7);
+  assert.ok(Math.abs(carto.alt - 320) < 1e-5);
   assert.equal(newest.epochMs, 123);
   assert.equal(newest.velocity, 0);
   assert.equal(newest.track, 270);
 
-  const airborne = { position: Cesium.Cartesian3.fromDegrees(-98.04, 29.71, -30) };
+  const airborne = { position: fromDegrees(-98.04, 29.71, -30) };
   assert.equal(liftRepeatedGroundFix(airborne, lifted, false), false);
-  const lower = Cesium.Cartesian3.fromDegrees(-98.04, 29.71, 100);
+  const lower = fromDegrees(-98.04, 29.71, 100);
   assert.equal(liftRepeatedGroundFix(newest, lower, true), false);
-  assert.ok(Math.abs(Cesium.Cartographic.fromCartesian(newest.position).height - 320) < 1e-5);
+  assert.ok(Math.abs(geoFromEcef(newest.position).alt - 320) < 1e-5);
 });
 
 // --- Forward ground projection (display-floor corridor) --------------------
@@ -340,4 +344,36 @@ test('corridorPathLatLon returns nothing without a display position', () => {
   assert.deepEqual(corridorPathLatLon({
     extrapolating: true, displayLat: NaN, displayLon: -97.66, courseDeg: 0, speedMps: 10, lookaheadSec: 60,
   }), []);
+});
+
+// --- Posições neutras (migração MapLibre) -----------------------------------
+
+test('geodesy helpers round-trip WGS84 and accept every position shape', () => {
+  const p = ecefFromGeo(-49.27, -25.43, 934);
+  const g = geoFromEcef(p);
+  assert.ok(Math.abs(g.lon + 49.27) < 1e-9 && Math.abs(g.lat + 25.43) < 1e-9 && Math.abs(g.alt - 934) < 1e-6);
+  assert.deepEqual(toGeo([1, 2, 3]), { lon: 1, lat: 2, alt: 3 });
+  assert.deepEqual(toGeo({ lng: 1, lat: 2, height: 5 }), { lon: 1, lat: 2, alt: 5 });
+  assert.equal(toGeo(null), null);
+  // Equador: 1° de longitude ≈ 111,32 km.
+  assert.ok(Math.abs(distanceM({ lon: 0, lat: 0 }, { lon: 1, lat: 0 }) - 111_319.5) < 5);
+  assert.equal(timeToMs(new Date(5)), 5);
+  assert.equal(timeToMs({ dayNumber: 2440587.5, secondsOfDay: 1 }), 1000);
+});
+
+test('course, lift and forward fix work on neutral {lon, lat, alt} positions too', () => {
+  const a = { lon: -49, lat: -25, alt: 1000 };
+  const b = { lon: -48.99, lat: -25, alt: 1000 };
+  assert.ok(Math.abs(courseBetweenPositions(a, b) - 90) < 0.01);
+  assert.equal(courseBetweenCartesians(a, { ...a }), null);
+  const newest = { position: { lon: -49, lat: -25, alt: 10 } };
+  assert.equal(liftRepeatedGroundFix(newest, { lon: -48, lat: -24, alt: 30 }, true), true);
+  assert.deepEqual(newest.position, { lon: -49, lat: -25, alt: 30 });
+  const fwd = synthesizeForwardKinematicsFix(
+    { epochMs: 0, position: { lon: -49, lat: -25, alt: 1000 }, velocity: 100, track: 0 },
+    { epochMs: 10_000, velocity: 50, track: 90 },
+  );
+  assert.ok(fwd.position.lat > -25 && Math.abs(fwd.position.lon + 49) < 1e-9, '1 km due north, same shape');
+  assert.ok(Math.abs(distanceM(fwd.position, { lon: -49, lat: -25, alt: 1000 }) - 1000) < 0.5);
+  assert.equal(fwd.time, 10_000);
 });

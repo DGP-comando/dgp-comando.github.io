@@ -425,21 +425,24 @@ test('the render-governor gate covers the parked case, with teeth on the painter
 // That is a COUPLING, so it deserves a pin. If a later perf pass strips these
 // holds the way it stripped detection's — a reasonable-looking change — bracket
 // promptness goes with them, silently. This test is where that shows up.
-test('aircraft brackets stay prompt because the aircraft layers hold the render loop', async () => {
+test('aircraft brackets stay prompt: the overlay repaints on every map frame', async () => {
+  // MapLibre: detection paints inside the world-overlay host, which draws on
+  // EVERY engine 'render' event. An aircraft layer that pushes new positions
+  // (setData / a render hold) makes the map render, and the brackets follow in
+  // that same frame — no detection-owned hold required.
+  const host = await readFile(new URL('../overlays/worldOverlay.js', import.meta.url), 'utf8');
+  assert.match(host, /engine\.on\('render', drawWorldOverlay\)/,
+    'the host must repaint on every map frame');
   for (const file of ['./flights.js', './militaryFlights.js']) {
     const source = await readFile(new URL(file, import.meta.url), 'utf8');
-    const enable = /\n  enable\([\s\S]*?\n  \},/.exec(source)?.[0];
-    assert.ok(enable, `${file}: enable() is still identifiable`);
-    assert.match(
-      enable,
-      /holdContinuousRender\('(flights|military)'\)/,
-      `${file}: enabling the layer must hold continuous render — detection no longer ` +
-      'holds one, so this is what keeps its AIR brackets repainting on a parked scene',
-    );
-    assert.match(
-      source,
-      /releaseContinuousRender\('(flights|military)'\)/,
-      `${file}: and the hold must be released, or the governor can never idle`,
-    );
+    // A layer that still holds continuous render must also release it, or the
+    // governor can never idle.
+    if (/holdContinuousRender\('(flights|military)'\)/.test(source)) {
+      assert.match(
+        source,
+        /releaseContinuousRender\('(flights|military)'\)/,
+        `${file}: a continuous-render hold must be released`,
+      );
+    }
   }
 });

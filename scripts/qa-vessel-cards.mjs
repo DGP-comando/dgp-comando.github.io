@@ -4,7 +4,7 @@
  * the shared world-overlay host.
  *
  * Drives the REAL app in headless Chromium, frames a busy port, waits for the
- * photoreal tileset + vessel refresh to settle, and captures a full-viewport
+ * map tiles + vessel refresh to settle, and captures a full-viewport
  * screenshot to the gitignored qa-shots/. Live AISStream data remains the
  * default. An explicit synthetic mode uses the layer's dev-only evidence seam
  * to exercise the production reconciliation/render path when AISStream is open
@@ -29,7 +29,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 
 const argv = process.argv.slice(2);
 const getOpt = (name, dflt) => {
@@ -176,29 +176,6 @@ function syntheticVesselRows(portKey, port) {
   }));
 }
 
-const CHROME_EXECUTABLE_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  // Prefer puppeteer's version-pinned Chrome-for-Testing over the system
-  // Chrome: /Applications auto-updates underneath the harnesses, and its
-  // software-GL behavior shifts across majors (system Chrome 150 blew the
-  // tile-gated drain budget under SwiftShader on 2026-07-30 — six
-  // false-negative qa-cctv-v2 runs against a healthy build). A deterministic
-  // pinned browser beats the newest one for regression harnesses.
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-
-function findChromeExecutable() {
-  for (const candidate of CHROME_EXECUTABLE_CANDIDATES) {
-    try {
-      if (fs.existsSync(candidate)) return candidate;
-    } catch { /* fall through to Puppeteer's cache */ }
-  }
-  return null;
-}
-
 async function main() {
   console.log(`\nAIS Vessel Cards — visual proof harness`);
   console.log(`  App URL : ${APP_URL}`);
@@ -220,20 +197,8 @@ async function main() {
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  const chromeExecutable = findChromeExecutable();
-  const browser = await puppeteer.launch({
-    headless: HEADFUL ? false : 'new',
-    ...(chromeExecutable ? { executablePath: chromeExecutable } : {}),
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      ...(!HEADFUL ? ['--use-gl=angle', '--use-angle=swiftshader'] : []),
-      '--disable-dev-shm-usage',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--window-size=1600,900',
-    ],
-  });
+  const { browser, page: bootPage } = await launchQaBrowser({ headful: HEADFUL, viewport: { width: 1600, height: 900 } });
+  await bootPage.close();
 
   let failures = 0;
   try {
@@ -253,26 +218,36 @@ async function main() {
 
       const page = await browser.newPage();
       await page.setViewport({ width: 1600, height: 900 });
+      // Same HMR guard as scripts/lib/qaBrowser.mjs: a source edit elsewhere
+      // must not reload the page mid-capture.
+      await page.evaluateOnNewDocument(() => {
+        const RealWebSocket = window.WebSocket;
+        function QaWebSocket(url, protocols) {
+          if (String(protocols || '').includes('vite-hmr')) {
+            const fake = new EventTarget();
+            fake.readyState = 0; fake.send = () => {}; fake.close = () => {};
+            return fake;
+          }
+          return new RealWebSocket(url, protocols);
+        }
+        QaWebSocket.prototype = RealWebSocket.prototype;
+        Object.assign(QaWebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+        window.WebSocket = QaWebSocket;
+      });
       page.on('pageerror', (err) => console.error(`    [page-error] ${err.message}`));
 
-      await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await page.waitForFunction(() => !!window.__godsEyeView?.viewer, { timeout: 60000 });
+      await page.goto(appUrl(APP_URL), { waitUntil: 'domcontentloaded', timeout: 120000 });
+      await page.waitForFunction(() => !!window.__godsEyeView?.engine, { timeout: 120000 });
 
       // Frame the port (kill the intro flight first) and enable the layer.
       const syntheticRows = DATA_MODE === 'synthetic' ? syntheticVesselRows(key, port) : [];
       const dataEvidence = await page.evaluate(async ({ p, dataMode, fixtureRows }) => {
         const gev = window.__godsEyeView;
-        const v = gev.viewer;
-        v.camera.cancelFlight?.();
-        v.scene.tweens?.removeAll?.();
-        const carto = {
-          longitude: (p.lon * Math.PI) / 180,
-          latitude: (p.lat * Math.PI) / 180,
-          height: p.height,
-        };
-        v.camera.setView({
-          destination: v.scene.globe.ellipsoid.cartographicToCartesian(carto),
-          orientation: { heading: p.heading, pitch: p.pitch, roll: 0 },
+        const { engine } = gev;
+        engine.cancelFlight();
+        engine.setCameraView({
+          lon: p.lon, lat: p.lat, alt: p.height,
+          heading: (p.heading * 180) / Math.PI, pitch: (p.pitch * 180) / Math.PI, roll: 0,
         });
         await gev.dataManager.setEnabled('ais-live-vessels', true);
         if (dataMode !== 'synthetic') return { mode: 'live', injected: 0 };
@@ -282,7 +257,7 @@ async function main() {
         if (!result?.ok || result.count !== fixtureRows.length) {
           throw new Error(`Synthetic AIS injection failed (${result?.count || 0}/${fixtureRows.length})`);
         }
-        v.scene.requestRender?.();
+        engine.requestRender();
         return { mode: 'synthetic', injected: result.count };
       }, { p: port, dataMode: DATA_MODE, fixtureRows: syntheticRows });
       console.log(
@@ -290,14 +265,13 @@ async function main() {
         + `artifact provenance=${DATA_PROVENANCE_SLUGS[DATA_MODE]}`,
       );
 
-      // Wait for the photoreal tileset and at least one vessel refresh.
+      // Wait for the map tiles and at least one vessel refresh.
       const settled = await page
         .waitForFunction(() => {
           const gev = window.__godsEyeView;
-          const t = gev.tileset;
           const ais = gev.dataManager.getAll().find((l) => l.id === 'ais-live-vessels');
           const count = ais?.stats?.count ?? 0;
-          return t?.tilesLoaded && count > 0;
+          return gev.engine.map.loaded() && count > 0;
         }, { timeout: 90000, polling: 500 })
         .then(() => true)
         .catch(() => false);
@@ -306,24 +280,18 @@ async function main() {
       // intro flight can start AFTER the first cancelFlight and land mid-wait,
       // dragging the camera back to the boot city before the screenshot.
       await page.evaluate((p) => {
-        const v = window.__godsEyeView.viewer;
-        v.camera.cancelFlight?.();
-        v.scene.tweens?.removeAll?.();
-        const carto = {
-          longitude: (p.lon * Math.PI) / 180,
-          latitude: (p.lat * Math.PI) / 180,
-          height: p.height,
-        };
-        v.camera.setView({
-          destination: v.scene.globe.ellipsoid.cartographicToCartesian(carto),
-          orientation: { heading: p.heading, pitch: p.pitch, roll: 0 },
+        const { engine } = window.__godsEyeView;
+        engine.cancelFlight();
+        engine.setCameraView({
+          lon: p.lon, lat: p.lat, alt: p.height,
+          heading: (p.heading * 180) / Math.PI, pitch: (p.pitch * 180) / Math.PI, roll: 0,
         });
       }, port);
       const resettled = settled ? true : await page
         .waitForFunction(() => {
           const gev = window.__godsEyeView;
           const ais = gev.dataManager.getAll().find((l) => l.id === 'ais-live-vessels');
-          return gev.tileset?.tilesLoaded && (ais?.stats?.count ?? 0) > 0;
+          return gev.engine.map.loaded() && (ais?.stats?.count ?? 0) > 0;
         }, { timeout: 60000, polling: 500 })
         .then(() => true)
         .catch(() => false);
@@ -332,8 +300,16 @@ async function main() {
       await new Promise((r) => setTimeout(r, 2500));
       const expectedFixtureIds = syntheticRows.map((row) => row.mmsi);
       const overlayEvidence = await page.evaluate((fixtureIds) => {
-        const diagnostics = window.__gevWorldOverlay?.getDiagnostics?.();
-        const gl = window.__godsEyeView?.viewer?.scene?.context?._gl;
+        // MapLibre: vessel chevrons and cards are symbol layers of the map
+        // itself (dg-ais-live-icon / dg-ais-live-label), so "entries" are the
+        // rendered chevrons and "painted" the rendered cards.
+        const { map, canvas } = window.__godsEyeView.engine;
+        const rendered = (id) => (map.getLayer(id) ? map.queryRenderedFeatures({ layers: [id] }).length : 0);
+        const diagnostics = {
+          entriesBySource: { 'ais-live-vessels': rendered('dg-ais-live-icon') },
+          paintedBySource: { 'ais-live-vessels': rendered('dg-ais-live-label') },
+        };
+        const gl = canvas?.getContext?.('webgl2') || canvas?.getContext?.('webgl');
         const debugInfo = gl?.getExtension?.('WEBGL_debug_renderer_info');
         const seam = window.__godsEyeView?.dataManager?.layers
           ?.get('ais-live-vessels')?.module?.__focusEvidence;

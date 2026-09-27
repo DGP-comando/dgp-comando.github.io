@@ -1,5 +1,21 @@
-import * as Cesium from 'cesium';
 import { viewportBias, placesNearViewRecovery } from './annotations/annotationResolver.js';
+
+// Voos sobre o motor MapLibre (src/maplibre/engine.js). A câmera continua em
+// semântica Cesium (pitch -90 = nadir, heading 0 = norte). O alvo devolvido
+// para a órbita (`targetPosition`) é {lat, lon, height} em graus/metros.
+const DEG = Math.PI / 180;
+const toRadians = (deg) => deg * DEG;
+
+/** Altura do solo em (lon, lat): o relevo do MapLibre quando ligado, senão 0. */
+function groundHeight(engine, lon, lat) {
+  if (!engine?.hasTerrain?.()) return 0;
+  try {
+    const h = engine.map?.queryTerrainElevation?.([lon, lat]);
+    return Number.isFinite(h) ? h : 0;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * Points of Interest per city.
@@ -110,28 +126,27 @@ export const GLOBE_VIEW = Object.freeze({
 /**
  * Fly straight out to the full-earth globe view, keeping the current sub-camera
  * point centered so the user's continent stays in front of them.
- * @param {Cesium.Viewer} viewer
+ * @param {object} viewer motor MapLibre (engine)
  * @param {{duration?: number, onComplete?: Function, onCancel?: Function}} options
  * @returns {{latitude: number, longitude: number, heightM: number}}
  */
 export function flyToGlobeView(viewer, options = {}) {
-  const carto = viewer.camera.positionCartographic;
-  const longitude = Cesium.Math.toDegrees(carto.longitude);
-  const latitude = Cesium.Math.toDegrees(carto.latitude);
-  viewer.camera.cancelFlight();
-  viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, GLOBE_VIEW.heightM),
-    orientation: {
-      heading: 0,
-      pitch: Cesium.Math.toRadians(GLOBE_VIEW.pitchDeg),
-      roll: 0,
-    },
+  const view = viewer.getCameraView();
+  const longitude = Number.isFinite(view?.targetLon) ? view.targetLon : view.lon;
+  const latitude = Number.isFinite(view?.targetLat) ? view.targetLat : view.lat;
+  viewer.cancelFlight();
+  if (viewer.trackedTarget) viewer.track(null);
+  viewer.flyToCamera({
+    lat: latitude,
+    lon: longitude,
+    alt: GLOBE_VIEW.heightM,
+    heading: 0,
+    pitch: GLOBE_VIEW.pitchDeg,
+    roll: 0,
+  }, {
     duration: finitePositive(options.duration) || GLOBE_VIEW.durationS,
-    endTransform: Cesium.Matrix4.IDENTITY,
-    // Cesium's Camera.flyTo reads `complete`/`cancel`. `onComplete`/`onCancel`
-    // are this module's OWN option names and are silently ignored by Cesium —
-    // spelling them through to flyTo meant the reset never resolved on the
-    // flight's own events and every caller fell back to its watchdog timeout.
+    // O motor lê `complete`/`cancel`; `onComplete`/`onCancel` são os nomes
+    // deste módulo e seriam ignorados se repassados como estão.
     complete: options.onComplete,
     cancel: options.onCancel,
   });
@@ -149,10 +164,11 @@ export const LOCATIONS = Object.entries(CITY_POIS).map(([id, city]) => ({
 }));
 
 /**
- * Fly the camera to a landmark using lookAt-based targeting.
- * Guarantees the target is centered in viewport via flyToBoundingSphere + lookAt.
+ * Fly the camera to a landmark: the camera looks at the target from `range`
+ * meters with the given heading/pitch (engine.flyToTarget), so the target
+ * lands centered in the viewport.
  *
- * @param {Cesium.Viewer} viewer
+ * @param {object} viewer motor MapLibre (engine)
  * @param {number} lat - Latitude in degrees
  * @param {number} lon - Longitude in degrees
  * @param {object} options
@@ -162,7 +178,7 @@ export const LOCATIONS = Object.entries(CITY_POIS).map(([id, city]) => ({
  * @param {number} options.buildingHeight - Estimated landmark center height above ground (default 30)
  * @param {number} options.groundElevation - Fallback ground elevation when terrain isn't loaded (default 0)
  * @param {number} options.duration - Flight duration in seconds (default 3.0)
- * @returns {{ targetPosition: Cesium.Cartesian3 }} The computed target for orbit use
+ * @returns {{ targetPosition: {lat:number, lon:number, height:number} }} The computed target for orbit use
  */
 export function flyToLandmark(viewer, lat, lon, options = {}) {
   const {
@@ -178,52 +194,41 @@ export function flyToLandmark(viewer, lat, lon, options = {}) {
     buildingBounds = null,
   } = options;
 
-  // Sample terrain height (sync — uses loaded tiles; 0 if globe/terrain not ready)
-  const targetCartographic = Cesium.Cartographic.fromDegrees(lon, lat);
-  const sampledHeight = viewer.scene.globe?.getHeight(targetCartographic);
-
-  // Use sampled height if available, otherwise fall back to pre-baked city ground elevation.
-  // Google 3D Tiles don't populate globe terrain, so first fly-to always gets the fallback.
-  const terrainHeight = (sampledHeight != null && sampledHeight > 0) ? sampledHeight : groundElevation;
+  // Sem prédios 3D no MapLibre: o alvo fica no solo (relevo quando ligado,
+  // senão a superfície plana a 0 m). `buildingHeight`/`groundElevation`
+  // continuam aceitos pela compatibilidade dos chamadores.
+  void buildingHeight;
+  void groundElevation;
+  const terrainHeight = groundHeight(viewer, lon, lat);
 
   const bounds = normalizeBuildingBounds(buildingBounds);
-  const targetHeight = bounds ? terrainHeight + bounds.height / 2 : terrainHeight + buildingHeight;
-  const targetPosition = Cesium.Cartesian3.fromDegrees(lon, lat, targetHeight);
+  const targetHeight = terrainHeight;
+  const targetPosition = { lat, lon, height: targetHeight };
   const boundingRadius = bounds ? buildingBoundingRadius(bounds) : 0;
   const framingRange = bounds
     ? Math.max(rangeForBoundingSphere(viewer, boundingRadius), boundingRadius * 1.35)
     : range;
 
-  const hpr = new Cesium.HeadingPitchRange(
-    Cesium.Math.toRadians(heading),
-    Cesium.Math.toRadians(pitch),
-    framingRange
-  );
-
   if (typeof onStart === 'function') {
     try { onStart(); } catch { /* no-op */ }
   }
 
-  // Fly to target, then lock with lookAt for guaranteed centering
-  viewer.camera.flyToBoundingSphere(
-    new Cesium.BoundingSphere(targetPosition, boundingRadius),
-    {
-      offset: hpr,
-      duration,
-      complete: () => {
-        viewer.camera.lookAt(targetPosition, hpr);
-        viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
-        if (typeof onComplete === 'function') {
-          try { onComplete(); } catch { /* no-op */ }
-        }
-      },
-      cancel: () => {
-        if (typeof onCancel === 'function') {
-          try { onCancel(); } catch { /* no-op */ }
-        }
-      },
-    }
-  );
+  viewer.flyToTarget(targetPosition, {
+    rangeM: framingRange,
+    heading,
+    pitch,
+    duration,
+    complete: () => {
+      if (typeof onComplete === 'function') {
+        try { onComplete(); } catch { /* no-op */ }
+      }
+    },
+    cancel: () => {
+      if (typeof onCancel === 'function') {
+        try { onCancel(); } catch { /* no-op */ }
+      }
+    },
+  });
 
   return {
     targetPosition,
@@ -301,15 +306,15 @@ export const MUNICIPIO_VIEW_PITCH_DEG = -68;
 /**
  * Enquadra um municipio inteiro.
  *
- * Range ZERO de proposito: com `HeadingPitchRange.range === 0` o Cesium calcula
- * a distancia que faz a esfera caber no frustum atual, o que respeita a
- * proporcao da janela — um municipio estreito no celular e um largo no monitor
- * ficam ambos enquadrados. Fixar um range em metros so acertaria numa tela.
+ * Enquadra o retangulo da divisa (`target.bbox`, [w, s, e, n]) com fitBounds,
+ * o que respeita a proporcao da janela — um municipio estreito no celular e um
+ * largo no monitor ficam ambos enquadrados. Fixar um range em metros so
+ * acertaria numa tela.
  *
- * @param {Cesium.Viewer} viewer
- * @param {{lat: number, lon: number, boundingSphere?: Cesium.BoundingSphere|null}} target
+ * @param {object} viewer motor MapLibre (engine)
+ * @param {{lat: number, lon: number, bbox?: number[]|null}} target
  * @param {{duration?: number, beforeFly?: Function, onStart?: Function, onComplete?: Function, onCancel?: Function}} [options]
- * @returns {{targetPosition: Cesium.Cartesian3, boundingRadius: number, range: null, navigationMode: string}|false|typeof CANCELLED_SEARCH}
+ * @returns {{targetPosition: {lat:number, lon:number, height:number}, boundingRadius: number, range: null, navigationMode: string}|false|typeof CANCELLED_SEARCH}
  */
 export function flyToMunicipio(viewer, target, options = {}) {
   const lat = Number(target?.lat);
@@ -323,29 +328,31 @@ export function flyToMunicipio(viewer, target, options = {}) {
     onCancel = null,
   } = options;
 
-  const outline = target?.boundingSphere || null;
-  const center = outline
-    ? Cesium.Cartesian3.clone(outline.center, new Cesium.Cartesian3())
-    : Cesium.Cartesian3.fromDegrees(lon, lat, 0);
+  // Divisa do município: bbox [w, s, e, n] (de /data/municipios-pr.geojson).
+  // Sem ela, um quadrado do raio típico de um município paranaense.
+  const rawBbox = Array.isArray(target?.bbox) && target.bbox.length === 4 && target.bbox.every(Number.isFinite)
+    ? target.bbox
+    : null;
+  const bbox = municipioFramingBbox(rawBbox, lat, lon);
   const radius = Math.max(
     1,
-    (Number.isFinite(outline?.radius) && outline.radius > 0
-      ? outline.radius
-      : MUNICIPIO_FALLBACK_RADIUS_M) * MUNICIPIO_FRAMING_PADDING,
+    approximateDistanceM(bbox[1], bbox[0], bbox[3], bbox[2]) / 2,
   );
 
   if (typeof beforeFly === 'function' && beforeFly() === false) return CANCELLED_SEARCH;
   if (typeof onStart === 'function') {
     try { onStart(); } catch { /* no-op */ }
   }
+  if (viewer.trackedTarget) viewer.track(null);
 
-  viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(center, radius), {
-    offset: new Cesium.HeadingPitchRange(
-      0,
-      Cesium.Math.toRadians(MUNICIPIO_VIEW_PITCH_DEG),
-      0,
-    ),
+  // fitBounds respeita a proporção da janela: um município estreito no
+  // celular e um largo no monitor ficam ambos enquadrados.
+  viewer.flyToBounds(bbox, {
+    pitch: MUNICIPIO_VIEW_PITCH_DEG,
+    heading: 0,
+    padding: municipioFramingPadding(),
     duration: finitePositive(duration) || 3.0,
+    maxZoom: 15,
     complete: () => {
       if (typeof onComplete === 'function') {
         try { onComplete(); } catch { /* no-op */ }
@@ -359,11 +366,41 @@ export function flyToMunicipio(viewer, target, options = {}) {
   });
 
   return {
-    targetPosition: center,
+    targetPosition: { lat, lon, height: 0 },
     boundingRadius: radius,
     range: null,
     navigationMode: 'municipio-overview',
   };
+}
+
+/**
+ * Retângulo de enquadramento de um município com a folga
+ * MUNICIPIO_FRAMING_PADDING. Pura — exportada para testes.
+ * @param {number[]|null} bbox [w, s, e, n] da divisa, ou null
+ * @param {number} lat centro (fallback)
+ * @param {number} lon centro (fallback)
+ * @returns {number[]} [w, s, e, n]
+ */
+export function municipioFramingBbox(bbox, lat, lon) {
+  if (bbox) {
+    const [w, s, e, n] = bbox;
+    const cx = (w + e) / 2;
+    const cy = (s + n) / 2;
+    const hx = ((e - w) / 2) * MUNICIPIO_FRAMING_PADDING;
+    const hy = ((n - s) / 2) * MUNICIPIO_FRAMING_PADDING;
+    return [cx - hx, cy - hy, cx + hx, cy + hy];
+  }
+  const r = MUNICIPIO_FALLBACK_RADIUS_M * MUNICIPIO_FRAMING_PADDING;
+  const dLat = r / (KM_PER_DEGREE * 1000);
+  const dLon = r / (KM_PER_DEGREE * 1000 * Math.max(0.05, Math.cos(toRadians(lat))));
+  return [lon - dLon, lat - dLat, lon + dLon, lat + dLat];
+}
+
+function municipioFramingPadding() {
+  const w = globalThis.innerWidth || 1200;
+  const h = globalThis.innerHeight || 800;
+  const pad = Math.round(Math.min(w, h) * 0.06);
+  return { top: pad + 40, bottom: pad + 40, left: pad + 40, right: pad + 40 };
 }
 
 const POI_STOPWORDS = new Set(['the', 'a', 'an', 'at', 'of', 'in', 'on', 'to']);
@@ -640,7 +677,7 @@ export function viewportMetrics(viewport) {
   if (centerLng > 180) centerLng -= 360;
 
   const latSpanKm = Math.abs(latSpanDeg) * KM_PER_DEGREE;
-  const lonSpanKm = lonSpanDeg * KM_PER_DEGREE * Math.cos(Cesium.Math.toRadians(centerLat));
+  const lonSpanKm = lonSpanDeg * KM_PER_DEGREE * Math.cos(toRadians(centerLat));
   return {
     latSpanDeg,
     lonSpanDeg,
@@ -702,10 +739,10 @@ const PLACE_FALLBACK_HALF_SPAN_KM = 20;
 
 /** Great-circle distance in km (small enough here that the spherical model is fine). */
 function greatCircleKm(lat1, lng1, lat2, lng2) {
-  const dLat = Cesium.Math.toRadians(lat2 - lat1);
-  const dLng = Cesium.Math.toRadians(lng2 - lng1);
+  const dLat = toRadians(lat2 - lat1);
+  const dLng = toRadians(lng2 - lng1);
   const a = Math.sin(dLat / 2) ** 2
-    + Math.cos(Cesium.Math.toRadians(lat1)) * Math.cos(Cesium.Math.toRadians(lat2))
+    + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2))
       * Math.sin(dLng / 2) ** 2;
   return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
 }
@@ -742,7 +779,7 @@ export function placeFramingViewport(viewport, anchorLat, anchorLng, types = [])
 
   const latHalfDeg = PLACE_FALLBACK_HALF_SPAN_KM / KM_PER_DEGREE;
   // Guard the cosine so a near-polar anchor cannot blow the longitude half-extent up.
-  const cosLat = Math.max(0.05, Math.cos(Cesium.Math.toRadians(anchorLat)));
+  const cosLat = Math.max(0.05, Math.cos(toRadians(anchorLat)));
   const lngHalfDeg = PLACE_FALLBACK_HALF_SPAN_KM / (KM_PER_DEGREE * cosLat);
   const wrapLng = (lng) => ((lng + 180) % 360 + 360) % 360 - 180;
   return {
@@ -825,30 +862,35 @@ function flyToViewportBounds(viewer, viewport, options = {}) {
   // that crosses the antimeridian: Alaska (sw 172.3E, ne -130.0) subtracts to
   // -302, and a 0.4-degree metro box straddling the dateline subtracts to -359.6,
   // whose 12% padding alone is 43 degrees — that box framed 86.7 degrees of ocean
-  // instead of a city. Cesium's Rectangle does NOT normalize past +/-180, so the
-  // padded edges are wrapped here into a proper east<west crossing rectangle.
+  // instead of a city. The
+  // padded west edge is wrapped and east = west + span (MapLibre accepts > 180).
   const metrics = viewportMetrics(viewport);
   const latitudePadding = Math.max(0.05, Math.abs(metrics.latSpanDeg) * 0.12);
   const longitudePadding = Math.max(0.05, metrics.lonSpanDeg * 0.12);
   const paddedLonSpan = metrics.lonSpanDeg + longitudePadding * 2;
   const south = Math.max(-89.9, southwest.lat - latitudePadding);
   const north = Math.min(89.9, northeast.lat + latitudePadding);
-  const rectangle = paddedLonSpan >= 360
-    ? Cesium.Rectangle.fromDegrees(-180, south, 180, north)
-    : Cesium.Rectangle.fromDegrees(
-      wrapLongitude(southwest.lng - longitudePadding),
-      south,
-      wrapLongitude(southwest.lng + metrics.lonSpanDeg + longitudePadding),
-      north,
-    );
+  // MapLibre aceita leste > 180 para uma caixa que cruza o antimeridiano.
+  let west;
+  let east;
+  if (paddedLonSpan >= 360) {
+    west = -180;
+    east = 180;
+  } else {
+    west = wrapLongitude(southwest.lng - longitudePadding);
+    east = west + paddedLonSpan;
+  }
+  const rectangle = [west, south, east, north];
   if (typeof beforeFly === 'function' && beforeFly() === false) return CANCELLED_SEARCH;
   if (typeof onStart === 'function') {
     try { onStart(); } catch { /* no-op */ }
   }
-  viewer.camera.flyTo({
-    destination: rectangle,
+  if (viewer.trackedTarget) viewer.track(null);
+  viewer.flyToBounds(rectangle, {
+    pitch: -90,
+    heading: 0,
+    padding: 20,
     duration,
-    endTransform: Cesium.Matrix4.IDENTITY,
     complete: () => {
       if (typeof onComplete === 'function') {
         try { onComplete(); } catch { /* no-op */ }
@@ -863,7 +905,7 @@ function flyToViewportBounds(viewer, viewport, options = {}) {
   // Same short-way-round rule for the reported centre: averaging raw longitudes
   // puts a dateline-crossing box's centre on the opposite side of the planet.
   return {
-    targetPosition: Cesium.Cartesian3.fromDegrees(metrics.centerLng, metrics.centerLat, 0),
+    targetPosition: { lat: metrics.centerLat, lon: metrics.centerLng, height: 0 },
     boundingRadius: 0,
     range: null,
     viewBounds: viewport,
@@ -888,9 +930,10 @@ function buildingBoundingRadius(bounds) {
 }
 
 function rangeForBoundingSphere(viewer, radius) {
-  const frustum = viewer.camera.frustum;
-  const verticalFov = Number(frustum?.fov) || Cesium.Math.toRadians(60);
-  const aspectRatio = Math.max(0.5, Number(frustum?.aspectRatio) || 1);
+  const fovDeg = Number(viewer?.map?.getVerticalFieldOfView?.()) || 36.87;
+  const verticalFov = toRadians(fovDeg);
+  const container = viewer?.container;
+  const aspectRatio = Math.max(0.5, (container?.clientWidth || 1) / (container?.clientHeight || 1));
   const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspectRatio);
   const limitingFov = Math.min(verticalFov, horizontalFov);
   // Target 57% sphere occupancy so perspective still leaves at least 40%
@@ -1064,7 +1107,7 @@ function pointInPolygon(lon, lat, coordinates) {
 
 function approximateDistanceM(latA, lonA, latB, lonB) {
   const latitudeScale = 111320;
-  const longitudeScale = latitudeScale * Math.cos(Cesium.Math.toRadians((latA + latB) / 2));
+  const longitudeScale = latitudeScale * Math.cos(toRadians((latA + latB) / 2));
   return Math.hypot(
     (latB - latA) * latitudeScale,
     (lonB - lonA) * longitudeScale
@@ -1074,4 +1117,71 @@ function approximateDistanceM(latA, lonA, latB, lonB) {
 function finitePositive(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+// ── Divisas municipais (bbox por município) ────────────────────────────────
+
+/** GeoJSON das divisas dos 399 municípios (o mesmo da camada datageo-municipios). */
+export const MUNICIPIOS_GEOJSON_URL = '/data/municipios-pr.geojson';
+
+/**
+ * Retângulo [w, s, e, n] de uma geometria GeoJSON. Pura — exportada para testes.
+ * @param {{coordinates: any}} geometry
+ * @returns {number[]|null}
+ */
+export function geometryBbox(geometry) {
+  let w = Infinity;
+  let s = Infinity;
+  let e = -Infinity;
+  let n = -Infinity;
+  const visit = (coords) => {
+    if (!Array.isArray(coords)) return;
+    if (typeof coords[0] === 'number') {
+      if (coords[0] < w) w = coords[0];
+      if (coords[0] > e) e = coords[0];
+      if (coords[1] < s) s = coords[1];
+      if (coords[1] > n) n = coords[1];
+      return;
+    }
+    for (const c of coords) visit(c);
+  };
+  visit(geometry?.coordinates);
+  return Number.isFinite(w) && Number.isFinite(n) ? [w, s, e, n] : null;
+}
+
+let municipioBboxesPromise = null;
+/**
+ * Divisas por código IBGE: Map<ibge, {nome, bbox, lat, lon}> (lat/lon = centro
+ * do bbox). Carregado uma vez; em falha devolve null e tenta de novo depois.
+ * @param {typeof fetch} [fetchImpl]
+ * @returns {Promise<Map<string, {nome: string, bbox: number[], lat: number, lon: number}>|null>}
+ */
+export function loadMunicipioBboxes(fetchImpl = globalThis.fetch) {
+  municipioBboxesPromise ??= Promise.resolve()
+    .then(() => fetchImpl(MUNICIPIOS_GEOJSON_URL))
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then((geo) => {
+      const byIbge = new Map();
+      for (const feature of geo?.features ?? []) {
+        const ibge = String(feature?.properties?.CD_MUN ?? '');
+        const bbox = geometryBbox(feature?.geometry);
+        if (!ibge || !bbox) continue;
+        byIbge.set(ibge, {
+          nome: feature.properties.NM_MUN,
+          bbox,
+          lat: (bbox[1] + bbox[3]) / 2,
+          lon: (bbox[0] + bbox[2]) / 2,
+        });
+      }
+      return byIbge;
+    })
+    .catch((error) => {
+      console.warn('[locations] divisas municipais indisponíveis', error);
+      municipioBboxesPromise = null;
+      return null;
+    });
+  return municipioBboxesPromise;
 }

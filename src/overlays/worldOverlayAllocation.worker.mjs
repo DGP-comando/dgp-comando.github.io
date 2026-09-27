@@ -1,4 +1,3 @@
-import * as Cesium from 'cesium';
 import {
   AMBIENT_CARD_COLLISION_CAPACITY,
   destroyWorldOverlay,
@@ -6,15 +5,6 @@ import {
   initWorldOverlay,
   setOverlayEntries,
 } from './worldOverlay.js';
-import {
-  LOCAL_OVERLAY_COHORT_LIMIT,
-  createLocalInfrastructureOverlayEntry,
-} from '../data/localGeojson.js';
-import {
-  FIRMS_AMBIENT_COHORT_LIMIT,
-  FIRMS_OVERLAY_SOURCE_ID,
-} from '../data/firmsLabels.js';
-import { applyFirmsOverlayPolicy } from '../data/firmsHeatmap.js';
 import {
   applyVesselOverlayPolicy,
   VESSEL_OVERLAY_SOURCE_ID,
@@ -31,12 +21,6 @@ import {
   createCctvThumbnailOverlayEntry,
   createFrameSlot,
 } from '../data/cctvCards.js';
-import {
-  EARTHQUAKE_OVERLAY_COHORT_LIMIT,
-  EARTHQUAKE_OVERLAY_COLLISION_CAPACITY,
-  EARTHQUAKE_OVERLAY_SOURCE_ID,
-  createEarthquakeOverlayEntry,
-} from '../data/earthquakes.js';
 import {
   BIKESHARE_SELECTED_OVERLAY_SOURCE_ID,
   BIKESHARE_SELECTED_OVERLAY_SOURCE_OPTIONS,
@@ -66,12 +50,6 @@ import {
   RADIO_OVERLAY_SOURCE_OPTIONS,
 } from '../data/radio.js';
 import {
-  CABLE_OVERLAY_COLLISION_CAPACITY,
-  CABLE_OVERLAY_SOURCE_ID,
-  CABLE_REFERENCE_LABEL_WINNER_CAP,
-  createCableOverlayEntry,
-} from '../data/telegeographySubmarineCables.js';
-import {
   destroyDetection,
   getDetectionDiagnostics,
   initDetection,
@@ -89,6 +67,12 @@ import {
  * The workload is deterministic: a fixed-seed grid of moving entries, a
  * non-recording Canvas2D stub (so the probe measures the overlay and not the
  * harness), and a fixed virtual clock stepped at 16 ms per frame.
+ *
+ * MapLibre migration: the local-infrastructure (datacenters/dams), FIRMS,
+ * earthquake and submarine-cable profiles were removed. Those layers now draw
+ * their cards as MapLibre symbol layers (src/maplibre/layers/contextoGev.js)
+ * and no longer publish to the world overlay, so the cumulative phase
+ * workloads below start from the vessel cohort.
  */
 
 const ENTRY_COUNT = Number(process.env.GEV_ALLOC_ENTRIES) || 60;
@@ -115,6 +99,14 @@ function makeRandom(seed) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
     return state / 4294967296;
   };
+}
+
+/**
+ * Neutral WorldPosition for the harness: lon/lat are normalized device
+ * coordinates under the mock engine's projection (see installMockEnvironment).
+ */
+function pos(x, y, height = 0) {
+  return { lon: x, lat: y, height };
 }
 
 /** Canvas2D stub that records nothing; recording would dominate the delta. */
@@ -243,7 +235,7 @@ function installMockEnvironment({ width, height, dpr }) {
   globalThis.window = window;
 
   const container = new MockElement('div');
-  container.id = 'cesiumContainer';
+  container.id = 'map';
   body.appendChild(container);
 
   // Array-backed so raising a frame allocates nothing: the harness floor has
@@ -262,17 +254,32 @@ function installMockEnvironment({ width, height, dpr }) {
   }
 
   const postRender = new MockEvent();
+  const moveEnd = new MockEvent();
+  // Mock of the MapLibre engine. `projectInto` is the allocation-free
+  // projection seam the host prefers: lon/lat are normalized device
+  // coordinates scaled by `projectionScale`, over a flat map (no horizon).
+  const cameraView = { lon: 0, lat: 0, alt: 1000, heading: 0, pitch: -90, zoom: 5 };
   const viewer = {
     container,
     canvas: { clientWidth: width, clientHeight: height },
-    camera: {
-      positionWC: new Cesium.Cartesian3(0, 0, 10_000_000),
-      positionCartographic: { height: 1000 },
-      viewMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY),
-      frustum: { projectionMatrix: Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY) },
-      moveEnd: new MockEvent(),
+    camera: { positionCartographic: { height: 1000 } },
+    projectionScale: { x: 1, y: 1 },
+    on(type, fn) {
+      if (type === 'render') return postRender.addEventListener(fn);
+      if (type === 'moveend') return moveEnd.addEventListener(fn);
+      return () => {};
     },
-    scene: { postRender, requestRender() {} },
+    requestRender() {},
+    isGlobe() { return false; },
+    getCameraView() {
+      cameraView.alt = viewer.camera.positionCartographic.height;
+      return cameraView;
+    },
+    projectInto(p, out) {
+      out.x = (p.lon * viewer.projectionScale.x * 0.5 + 0.5) * width;
+      out.y = (0.5 - p.lat * viewer.projectionScale.y * 0.5) * height;
+      return true;
+    },
   };
 
   return {
@@ -298,7 +305,7 @@ function buildWorkload(count) {
     const row = Math.floor(index / columns);
     const baseX = -0.86 + column * spanX;
     const baseY = -0.82 + row * spanY;
-    positions.push(new Cesium.Cartesian3(baseX, baseY, 0));
+    positions.push(pos(baseX, baseY, 0));
     drifts.push({
       baseX,
       baseY,
@@ -322,168 +329,20 @@ function buildWorkload(count) {
   return { entries, positions, drifts };
 }
 
-function buildLocalInfrastructureWorkload(count) {
-  const workload = buildWorkload(count);
-  const split = Math.ceil(count / 2);
-  const datacenters = [];
-  const dams = [];
-  for (let index = 0; index < workload.entries.length; index++) {
-    const sourceId = index < split ? 'local-datacenters' : 'local-dams';
-    const isDatacenter = sourceId === 'local-datacenters';
-    const entry = createLocalInfrastructureOverlayEntry({
-      id: `${isDatacenter ? 'dc' : 'dam'}-${index}`,
-      layerId: sourceId,
-      position: workload.entries[index].position,
-      properties: isDatacenter ? {
-        tags: {
-          name: `DC ${1000 + index}`,
-          operator: `Operator ${index % 17}`,
-          'capacity:it_load': `${20 + index % 40} MW`,
-        },
-      } : {
-        name: `Dam ${1000 + index}`,
-        tags: { associated_river: `River ${index % 23}` },
-      },
-      priority: index % 7,
-      accent: isDatacenter ? '#00ffff' : '#0088ff',
-    });
-    // The allocation harness uses identity view/projection matrices, so its
-    // positions are normalized screen coordinates rather than WGS84 points.
-    // Only horizon culling is disabled; every allocation-relevant production
-    // field and the two real source registrations stay intact.
-    entry.horizonCull = false;
-    (isDatacenter ? datacenters : dams).push(entry);
-  }
-  return {
-    ...workload,
-    registrations: [
-      {
-        sourceId: 'local-datacenters',
-        entries: datacenters,
-        options: { collisionCapacity: 96, cohortLimit: LOCAL_OVERLAY_COHORT_LIMIT },
-      },
-      {
-        sourceId: 'local-dams',
-        entries: dams,
-        options: { collisionCapacity: 96, cohortLimit: LOCAL_OVERLAY_COHORT_LIMIT },
-      },
-    ],
-  };
-}
-
-function buildPhase3FirmsWorkload(count) {
-  const localCount = LOCAL_OVERLAY_COHORT_LIMIT * 2;
-  const expectedCount = localCount + FIRMS_AMBIENT_COHORT_LIMIT;
-  if (count !== expectedCount) throw new Error(`phase3-firms requires ${expectedCount} entries`);
-  const workload = buildWorkload(count);
-  const datacenters = [];
-  const dams = [];
-  const firms = [];
-  for (let index = 0; index < workload.entries.length; index++) {
-    const position = workload.entries[index].position;
-    if (index < localCount) {
-      const isDatacenter = index < LOCAL_OVERLAY_COHORT_LIMIT;
-      const sourceId = isDatacenter ? 'local-datacenters' : 'local-dams';
-      const entry = createLocalInfrastructureOverlayEntry({
-        id: `${isDatacenter ? 'dc' : 'dam'}-${index}`,
-        layerId: sourceId,
-        position,
-        properties: isDatacenter
-          ? { tags: { name: `DC ${index}`, operator: `Operator ${index % 17}` } }
-          : { name: `Dam ${index}`, tags: { associated_river: `River ${index % 23}` } },
-        priority: index % 7,
-        accent: isDatacenter ? '#00ffff' : '#0088ff',
-      });
-      entry.horizonCull = false;
-      (isDatacenter ? datacenters : dams).push(entry);
-      continue;
-    }
-    const fireIndex = index - localCount;
-    firms.push(applyFirmsOverlayPolicy({
-      id: `fire:${fireIndex}`,
-      position,
-      gapPx: 10,
-      accent: '224, 82, 82',
-      title: `▲ ${50 + fireIndex} MW`,
-      details: ['high · 2h · N20'],
-      selected: false,
-      priority: 100 - fireIndex,
-    }, 12_000_000));
-    firms.at(-1).horizonCull = false;
-  }
-  return {
-    ...workload,
-    registrations: [
-      {
-        sourceId: 'local-datacenters',
-        entries: datacenters,
-        options: { collisionCapacity: 96, cohortLimit: LOCAL_OVERLAY_COHORT_LIMIT },
-      },
-      {
-        sourceId: 'local-dams',
-        entries: dams,
-        options: { collisionCapacity: 96, cohortLimit: LOCAL_OVERLAY_COHORT_LIMIT },
-      },
-      {
-        sourceId: FIRMS_OVERLAY_SOURCE_ID,
-        entries: firms,
-        options: {
-          collisionCapacity: FIRMS_AMBIENT_COHORT_LIMIT,
-          cohortLimit: FIRMS_AMBIENT_COHORT_LIMIT,
-        },
-      },
-    ],
-    ambientCardCapacity: AMBIENT_CARD_COLLISION_CAPACITY,
-  };
+/** Vessel ambient cohort plus one protected selected card: the base of every phase row. */
+function phase3Count() {
+  return vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1;
 }
 
 function buildPhase3VesselsWorkload(count) {
-  const localCount = LOCAL_OVERLAY_COHORT_LIMIT * 2;
   const vesselAmbientCount = vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
-  const expectedCount = localCount + FIRMS_AMBIENT_COHORT_LIMIT + vesselAmbientCount + 1;
+  const expectedCount = phase3Count();
   if (count !== expectedCount) throw new Error(`phase3-vessels requires ${expectedCount} entries`);
   const workload = buildWorkload(count);
-  const datacenters = [];
-  const dams = [];
-  const firms = [];
   const vessels = [];
   for (let index = 0; index < workload.entries.length; index++) {
     const position = workload.entries[index].position;
-    if (index < localCount) {
-      const isDatacenter = index < LOCAL_OVERLAY_COHORT_LIMIT;
-      const sourceId = isDatacenter ? 'local-datacenters' : 'local-dams';
-      const entry = createLocalInfrastructureOverlayEntry({
-        id: `${isDatacenter ? 'dc' : 'dam'}-${index}`,
-        layerId: sourceId,
-        position,
-        properties: isDatacenter
-          ? { tags: { name: `DC ${index}`, operator: `Operator ${index % 17}` } }
-          : { name: `Dam ${index}`, tags: { associated_river: `River ${index % 23}` } },
-        priority: index % 7,
-        accent: isDatacenter ? '#00ffff' : '#0088ff',
-      });
-      entry.horizonCull = false;
-      (isDatacenter ? datacenters : dams).push(entry);
-      continue;
-    }
-    const firmsEnd = localCount + FIRMS_AMBIENT_COHORT_LIMIT;
-    if (index < firmsEnd) {
-      const fireIndex = index - localCount;
-      const entry = applyFirmsOverlayPolicy({
-        id: `fire:${fireIndex}`,
-        position,
-        gapPx: 10,
-        accent: '224, 82, 82',
-        title: `▲ ${50 + fireIndex} MW`,
-        details: ['high · 2h · N20'],
-        selected: false,
-        priority: 100 - fireIndex,
-      }, 12_000_000);
-      entry.horizonCull = false;
-      firms.push(entry);
-      continue;
-    }
-    const vesselIndex = index - firmsEnd;
+    const vesselIndex = index;
     const selected = vesselIndex === vesselAmbientCount;
     const entry = applyVesselOverlayPolicy({
       id: selected ? 'vessel:selected' : `vessel:${vesselIndex}`,
@@ -504,24 +363,6 @@ function buildPhase3VesselsWorkload(count) {
     ...workload,
     registrations: [
       {
-        sourceId: 'local-datacenters',
-        entries: datacenters,
-        options: { collisionCapacity: 96, cohortLimit: LOCAL_OVERLAY_COHORT_LIMIT },
-      },
-      {
-        sourceId: 'local-dams',
-        entries: dams,
-        options: { collisionCapacity: 96, cohortLimit: LOCAL_OVERLAY_COHORT_LIMIT },
-      },
-      {
-        sourceId: FIRMS_OVERLAY_SOURCE_ID,
-        entries: firms,
-        options: {
-          collisionCapacity: FIRMS_AMBIENT_COHORT_LIMIT,
-          cohortLimit: FIRMS_AMBIENT_COHORT_LIMIT,
-        },
-      },
-      {
         sourceId: VESSEL_OVERLAY_SOURCE_ID,
         entries: vessels,
         options: { collisionCapacity: vesselAmbientCount, cohortLimit: vesselAmbientCount },
@@ -532,9 +373,8 @@ function buildPhase3VesselsWorkload(count) {
 }
 
 function buildPhase3TrackedWorkload(count) {
-  const localCount = LOCAL_OVERLAY_COHORT_LIMIT * 2;
   const vesselAmbientCount = vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
-  const expectedCount = localCount + FIRMS_AMBIENT_COHORT_LIMIT + vesselAmbientCount + 1;
+  const expectedCount = phase3Count();
   if (count !== expectedCount) throw new Error(`phase3-tracked requires ${expectedCount} entries`);
   const workload = buildPhase3VesselsWorkload(count);
   const vesselRegistration = workload.registrations.find(
@@ -566,18 +406,16 @@ function buildPhase3TrackedWorkload(count) {
 }
 
 function buildPhase4CctvWorkload(count) {
-  const phase3Count = LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-    + vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1;
-  const expectedCount = phase3Count + CCTV_AMBIENT_CARD_MAX + 1;
+  const expectedCount = phase3Count() + CCTV_AMBIENT_CARD_MAX + 1;
   if (count !== expectedCount) throw new Error(`phase4-cctv requires ${expectedCount} entries`);
-  const workload = buildPhase3TrackedWorkload(phase3Count);
+  const workload = buildPhase3TrackedWorkload(phase3Count());
   const cctv = [];
   for (let index = 0; index <= CCTV_AMBIENT_CARD_MAX; index++) {
     const column = index % 7;
     const row = Math.floor(index / 7);
     const baseX = -0.78 + column * 0.26;
     const baseY = -0.68 + row * 0.23;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
+    const position = pos(baseX, baseY, 0);
     workload.positions.push(position);
     workload.drifts.push({
       baseX,
@@ -615,55 +453,12 @@ function buildPhase4CctvWorkload(count) {
   return workload;
 }
 
-function buildPhase5EarthquakesWorkload(count) {
-  const phase4Count = LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-    + vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1
-    + CCTV_AMBIENT_CARD_MAX + 1;
-  const expectedCount = phase4Count + EARTHQUAKE_OVERLAY_COHORT_LIMIT;
-  if (count !== expectedCount) throw new Error(`phase5-earthquakes requires ${expectedCount} entries`);
-  const workload = buildPhase4CctvWorkload(phase4Count);
-  const earthquakes = [];
-  for (let index = 0; index < EARTHQUAKE_OVERLAY_COHORT_LIMIT; index++) {
-    const column = index % 12;
-    const row = Math.floor(index / 12);
-    const baseX = -0.82 + column * 0.15;
-    const baseY = -0.74 + row * 0.2;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
-    workload.positions.push(position);
-    workload.drifts.push({
-      baseX,
-      baseY,
-      phase: index * 0.29,
-      rate: 0.31 + (index % 7) * 0.05,
-    });
-    const entry = createEarthquakeOverlayEntry({
-      id: `quake-${index}`,
-      position,
-      magnitude: 2.5 + (index % 45) / 10,
-      accent: index % 3 === 0 ? '#ff0000' : index % 3 === 1 ? '#ffa500' : '#ffff00',
-    });
-    entry.horizonCull = false;
-    earthquakes.push(entry);
-  }
-  workload.registrations.push({
-    sourceId: EARTHQUAKE_OVERLAY_SOURCE_ID,
-    entries: earthquakes,
-    options: {
-      collisionCapacity: EARTHQUAKE_OVERLAY_COLLISION_CAPACITY,
-      cohortLimit: EARTHQUAKE_OVERLAY_COHORT_LIMIT,
-    },
-  });
-  return workload;
-}
-
 function buildPhase5BikeshareWorkload(count) {
-  const earthquakeCount = LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-    + vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1
-    + CCTV_AMBIENT_CARD_MAX + 1 + EARTHQUAKE_OVERLAY_COHORT_LIMIT;
-  const expectedCount = earthquakeCount + 1;
+  const phase4Count = phase3Count() + CCTV_AMBIENT_CARD_MAX + 1;
+  const expectedCount = phase4Count + 1;
   if (count !== expectedCount) throw new Error(`phase5-bikeshare requires ${expectedCount} entries`);
-  const workload = buildPhase5EarthquakesWorkload(earthquakeCount);
-  const position = new Cesium.Cartesian3(0.12, -0.08, 0);
+  const workload = buildPhase4CctvWorkload(phase4Count);
+  const position = pos(0.12, -0.08, 0);
   workload.positions.push(position);
   workload.drifts.push({ baseX: 0.12, baseY: -0.08, phase: 0.7, rate: 0.41 });
   const entry = createBikeshareSelectedOverlayEntry('allocation:station', {
@@ -687,13 +482,11 @@ function buildPhase5BikeshareWorkload(count) {
 }
 
 function buildPhase5SatellitesWorkload(count) {
-  const bikeshareCount = LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-    + vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1
-    + CCTV_AMBIENT_CARD_MAX + 1 + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 1;
+  const bikeshareCount = phase3Count() + CCTV_AMBIENT_CARD_MAX + 1 + 1;
   const expectedCount = bikeshareCount + 1;
   if (count !== expectedCount) throw new Error(`phase5-satellites requires ${expectedCount} entries`);
   const workload = buildPhase5BikeshareWorkload(bikeshareCount);
-  const position = new Cesium.Cartesian3(-0.42, 0.54, 0);
+  const position = pos(-0.42, 0.54, 0);
   workload.positions.push(position);
   workload.drifts.push({ baseX: -0.42, baseY: 0.54, phase: 1.3, rate: 0.62 });
   const entry = createIssOverlayEntry(() => position);
@@ -707,15 +500,13 @@ function buildPhase5SatellitesWorkload(count) {
 }
 
 function buildPhase5CctvProjectionWorkload(count) {
-  const satelliteCount = LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-    + vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1
-    + CCTV_AMBIENT_CARD_MAX + 1 + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 2;
+  const satelliteCount = phase3Count() + CCTV_AMBIENT_CARD_MAX + 1 + 2;
   const expectedCount = satelliteCount + 1;
   if (count !== expectedCount) {
     throw new Error(`phase5-cctv-projection requires ${expectedCount} entries`);
   }
   const workload = buildPhase5SatellitesWorkload(satelliteCount);
-  const position = new Cesium.Cartesian3(0.48, 0.44, 0);
+  const position = pos(0.48, 0.44, 0);
   workload.positions.push(position);
   workload.drifts.push({ baseX: 0.48, baseY: 0.44, phase: 1.8, rate: 0.47 });
   const entry = createCctvProjectionOverlayEntry({
@@ -765,7 +556,7 @@ function appendRocketMissionAmbientWorkload(workload, count) {
     const row = Math.floor(index / 8);
     const baseX = -0.78 + column * 0.22;
     const baseY = -0.68 + row * 0.24;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
+    const position = pos(baseX, baseY, 0);
     workload.positions.push(position);
     workload.drifts.push({
       baseX,
@@ -808,9 +599,7 @@ function buildRocketMissionAmbientWorkload(count) {
 }
 
 function buildPhase5RocketMissionWorkload(count) {
-  const phase5Count = LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-    + vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1
-    + CCTV_AMBIENT_CARD_MAX + 1 + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3;
+  const phase5Count = phase3Count() + CCTV_AMBIENT_CARD_MAX + 1 + 3;
   const expectedCount = phase5Count + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT;
   if (count !== expectedCount) {
     throw new Error(`phase5-rockets requires ${expectedCount} entries`);
@@ -822,23 +611,16 @@ function buildPhase5RocketMissionWorkload(count) {
 }
 
 function buildAllLiveRadioWorkload(count) {
-  const phase5Count = LOCAL_OVERLAY_COHORT_LIMIT * 2 + FIRMS_AMBIENT_COHORT_LIMIT
-    + vesselOverlayCohortLimit(VIEWPORT_WIDTH, VIEWPORT_HEIGHT) + 1
-    + CCTV_AMBIENT_CARD_MAX + 1 + EARTHQUAKE_OVERLAY_COHORT_LIMIT + 3
+  const phase5Count = phase3Count() + CCTV_AMBIENT_CARD_MAX + 1 + 3
     + ROCKET_MISSION_AMBIENT_OVERLAY_COHORT_LIMIT;
-  // 2026-08-18: "every shared-host source" includes the migrated
-  // submarine-cable cohort, so the aggregate exercises cable labels
-  // interacting with Radio/earthquake/mission quotas and allocation.
-  const expectedCount = phase5Count + RADIO_OVERLAY_COHORT_LIMIT + 1
-    + CABLE_REFERENCE_LABEL_WINNER_CAP;
+  const expectedCount = phase5Count + RADIO_OVERLAY_COHORT_LIMIT + 1;
   if (count !== expectedCount) throw new Error(`all-live-radio requires ${expectedCount} entries`);
   const workload = buildPhase5RocketMissionWorkload(phase5Count);
-  appendSubmarineCableWorkload(workload, CABLE_REFERENCE_LABEL_WINNER_CAP);
   const entries = [];
   for (let index = 0; index < RADIO_OVERLAY_COHORT_LIMIT; index += 1) {
-    const position = new Cesium.Cartesian3(-0.72 + (index % 8) * 0.18, -0.64 + Math.floor(index / 8) * 0.16, 0);
+    const position = pos(-0.72 + (index % 8) * 0.18, -0.64 + Math.floor(index / 8) * 0.16, 0);
     workload.positions.push(position);
-    workload.drifts.push({ baseX: position.x, baseY: position.y, phase: index * 0.21, rate: 0.35 });
+    workload.drifts.push({ baseX: position.lon, baseY: position.lat, phase: index * 0.21, rate: 0.35 });
     const entry = createRadioClusterOverlayEntry({
       id: `cluster-${index}`,
       position: () => position,
@@ -849,7 +631,7 @@ function buildAllLiveRadioWorkload(count) {
     entry.horizonCull = false;
     entries.push(entry);
   }
-  const selectedPosition = new Cesium.Cartesian3(0.08, 0.12, 0);
+  const selectedPosition = pos(0.08, 0.12, 0);
   workload.positions.push(selectedPosition);
   workload.drifts.push({ baseX: selectedPosition.x, baseY: selectedPosition.y, phase: 0.5, rate: 0.4 });
   const selectedEntry = createRadioSelectedOverlayEntry({
@@ -867,66 +649,6 @@ function buildAllLiveRadioWorkload(count) {
   return workload;
 }
 
-/**
- * Append the submarine-cable reference cohort (2026-08-18 host migration):
- * the full 160-winner ambient-label field a mid-ocean camera can produce,
- * mixing cable and landing-point accents. Per-frame drift republishes
- * nothing (the real source republishes at 2 Hz and skips identical
- * cohorts); the probe measures the host's steady projection/solve/paint
- * cost for the source shape. Shared by the isolated row and the all-live
- * aggregate.
- */
-function appendSubmarineCableWorkload(workload, count) {
-  const entries = [];
-  for (let index = 0; index < count; index++) {
-    const column = index % 16;
-    const row = Math.floor(index / 16);
-    const baseX = -0.84 + column * 0.112;
-    const baseY = -0.78 + row * 0.164;
-    const position = new Cesium.Cartesian3(baseX, baseY, 0);
-    workload.positions.push(position);
-    workload.drifts.push({
-      baseX,
-      baseY,
-      phase: index * 0.23,
-      rate: 0.33 + (index % 5) * 0.04,
-    });
-    const kind = index % 3 === 0 ? 'cable' : 'landing-point';
-    const entry = createCableOverlayEntry({
-      id: `${kind}-reference-${index}-alloc`,
-      kind,
-      label: kind === 'cable' ? `Cable System ${index}` : `Landing Point ${index}`,
-      tip: position,
-      distanceM: 200_000 + index * 40_000,
-    });
-    entry.horizonCull = false;
-    // The mock camera sits beyond the source's real 9,000 km label range;
-    // lift the range gate (an environment adjustment like horizonCull) so the
-    // probe measures painting labels, not distance-culling them.
-    entry.maxDistance = Number.POSITIVE_INFINITY;
-    entries.push(entry);
-  }
-  workload.registrations.push({
-    sourceId: CABLE_OVERLAY_SOURCE_ID,
-    entries,
-    options: {
-      cohortLimit: CABLE_REFERENCE_LABEL_WINNER_CAP,
-      collisionCapacity: CABLE_OVERLAY_COLLISION_CAPACITY,
-    },
-  });
-  return workload;
-}
-
-function buildSubmarineCablesWorkload(count) {
-  if (count !== CABLE_REFERENCE_LABEL_WINNER_CAP) {
-    throw new Error(`submarine-cables requires ${CABLE_REFERENCE_LABEL_WINNER_CAP} entries`);
-  }
-  return appendSubmarineCableWorkload(
-    { entries: [], positions: [], drifts: [], registrations: [] },
-    count,
-  );
-}
-
 function buildPhase6DetectionWorkload(count) {
   const random = makeRandom(0xd37ec710);
   const positions = [];
@@ -936,17 +658,14 @@ function buildPhase6DetectionWorkload(count) {
   const rows = Math.max(1, Math.ceil(count / columns));
   const spanX = columns > 1 ? 1_400_000 / (columns - 1) : 0;
   const spanY = rows > 1 ? 1_050_000 / (rows - 1) : 0;
-  const polarRadiusM = Cesium.Ellipsoid.WGS84.radii.z;
-  const equatorialRadiusM = Cesium.Ellipsoid.WGS84.radii.x;
   for (let index = 0; index < count; index++) {
     const column = index % columns;
     const row = Math.floor(index / columns);
     const baseX = -700_000 + column * spanX;
     const baseY = -525_000 + row * spanY;
-    const normalizedHorizontal = (baseX * baseX + baseY * baseY)
-      / (equatorialRadiusM * equatorialRadiusM);
-    const z = polarRadiusM * Math.sqrt(Math.max(0, 1 - normalizedHorizontal));
-    const position = new Cesium.Cartesian3(baseX, baseY, z);
+    // Metres in the old polar-ECEF layout; the mock projection scales them
+    // onto the viewport (see `projectionScale` in main()).
+    const position = pos(baseX, baseY, 0);
     positions.push(position);
     drifts.push({
       baseX,
@@ -980,8 +699,8 @@ function advanceWorkload(positions, drifts, frame) {
     const drift = drifts[index];
     const t = frame * 0.016 * drift.rate + drift.phase;
     const amplitude = drift.amplitude ?? 0.03;
-    positions[index].x = drift.baseX + Math.sin(t) * amplitude;
-    positions[index].y = drift.baseY + Math.cos(t * 0.7) * amplitude;
+    positions[index].lon = drift.baseX + Math.sin(t) * amplitude;
+    positions[index].lat = drift.baseY + Math.cos(t * 0.7) * amplitude;
   }
 }
 
@@ -996,47 +715,29 @@ function main() {
     dpr: 2,
   });
   initWorldOverlay(env.viewer);
-  const workload = PROFILE === 'phase6-detection'
-    ? buildPhase6DetectionWorkload(ENTRY_COUNT)
-    : PROFILE === 'local-infrastructure'
-      ? buildLocalInfrastructureWorkload(ENTRY_COUNT)
-      : PROFILE === 'phase3-firms'
-      ? buildPhase3FirmsWorkload(ENTRY_COUNT)
-      : PROFILE === 'phase3-vessels'
-        ? buildPhase3VesselsWorkload(ENTRY_COUNT)
-        : PROFILE === 'phase3-tracked'
-          ? buildPhase3TrackedWorkload(ENTRY_COUNT)
-          : PROFILE === 'phase4-cctv'
-            ? buildPhase4CctvWorkload(ENTRY_COUNT)
-            : PROFILE === 'phase5-earthquakes'
-              ? buildPhase5EarthquakesWorkload(ENTRY_COUNT)
-              : PROFILE === 'phase5-bikeshare'
-                ? buildPhase5BikeshareWorkload(ENTRY_COUNT)
-                : PROFILE === 'phase5-satellites'
-                  ? buildPhase5SatellitesWorkload(ENTRY_COUNT)
-                  : PROFILE === 'phase5-cctv-projection'
-                    ? buildPhase5CctvProjectionWorkload(ENTRY_COUNT)
-                    : PROFILE === 'phase5-civil'
-                      ? buildPhase5CivilWorkload(ENTRY_COUNT)
-                      : PROFILE === 'phase5-military'
-                        ? buildPhase5MilitaryWorkload(ENTRY_COUNT)
-                        : PROFILE === 'rocket-missions'
-                          ? buildRocketMissionAmbientWorkload(ENTRY_COUNT)
-                          : PROFILE === 'phase5-rockets'
-                            ? buildPhase5RocketMissionWorkload(ENTRY_COUNT)
-                            : PROFILE === 'all-live-radio'
-                              ? buildAllLiveRadioWorkload(ENTRY_COUNT)
-                              : PROFILE === 'submarine-cables'
-                                ? buildSubmarineCablesWorkload(ENTRY_COUNT)
-        : buildWorkload(ENTRY_COUNT);
+  const builders = {
+    'phase6-detection': buildPhase6DetectionWorkload,
+    'phase3-vessels': buildPhase3VesselsWorkload,
+    'phase3-tracked': buildPhase3TrackedWorkload,
+    'phase4-cctv': buildPhase4CctvWorkload,
+    'phase5-bikeshare': buildPhase5BikeshareWorkload,
+    'phase5-satellites': buildPhase5SatellitesWorkload,
+    'phase5-cctv-projection': buildPhase5CctvProjectionWorkload,
+    'phase5-civil': buildPhase5CivilWorkload,
+    'phase5-military': buildPhase5MilitaryWorkload,
+    'rocket-missions': buildRocketMissionAmbientWorkload,
+    'phase5-rockets': buildPhase5RocketMissionWorkload,
+    'all-live-radio': buildAllLiveRadioWorkload,
+  };
+  const workload = (builders[PROFILE] || buildWorkload)(ENTRY_COUNT);
   const { entries, positions, drifts } = workload;
   const solveIntervalMs = Number(process.env.GEV_ALLOC_SOLVE_MS) || 125;
   const detectionActive = !!workload.detectionLayer;
   if (detectionActive) {
-    // Spread polar ECEF x/y over the viewport while retaining a real WGS84
-    // horizon test and detection's manual matrix projection path.
-    env.viewer.camera.viewMatrix[0] = 1 / 800_000;
-    env.viewer.camera.viewMatrix[5] = 1 / 600_000;
+    // Spread the ±700 km grid over the viewport through detection's real
+    // resolve → project path (the mock projection scales it).
+    env.viewer.projectionScale.x = 1 / 800_000;
+    env.viewer.projectionScale.y = 1 / 600_000;
     env.viewer.camera.positionCartographic.height = 2_500_000;
     initDetection(env.viewer, [workload.detectionLayer], () => {});
     setDetectionTuning({ densityPct: 100, allocationStrategy: 'ELASTIC' });

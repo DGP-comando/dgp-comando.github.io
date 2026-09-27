@@ -11,7 +11,8 @@
  * them real types AMBIENTLY (nothing is ever tracked, 3D stays off), while
  * honoring the politeness bounds.
  *
- * Fetch shim (installed before app code, same pattern as qa-sprites-b5.mjs):
+ * Fetch shim (installed before app code; the retired Cesium harness
+ * qa-sprites-b5.mjs used the same pattern):
  *   - /api/opensky           → 12 straight-flying planes, category 0
  *   - /api/adsbdb/type/:hex  → varied REAL type codes (C172, B744, DH8D, H60,
  *                              F16, GLID, B77W, A320, B738, PC12, R44) + one
@@ -26,9 +27,10 @@
  *   E2 baseline  : BEFORE any enrichment answer, all 12 billboards carry the
  *                  default airliner glyph at scale 1 (the real-world problem)
  *   E3 requests  : the sweep requested all 12 hexes, each exactly once
- *   E4 diversity : ≥5 distinct glyph data-URIs displayed ambiently after
+ *   E4 diversity : ≥5 distinct glyphs (icon kinds) displayed ambiently after
  *                  enrichment (expected: 8)
- *   E5 glyphs    : every billboard's image === aircraftIcon(classify(typeCode))
+ *   E5 glyphs    : every fleet feature's icon kind === classify(typeCode)
+ *                  (MapLibre: `img` of the `dg-flights` GeoJSON feature)
  *   E6 scales    : every billboard's scale === CLASS_SCALE_2D[klass]
  *   E7 bounds    : ≤4 concurrent requests, ≥185 ms between dispatches (≤5/s
  *                  drip), total ≤300 (budget ceiling)
@@ -52,12 +54,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 import { classifyAircraft, CLASS_SCALE_2D } from '../src/data/aircraftClass.js';
-import { aircraftIcon } from '../src/data/aircraftIcons.js';
 
 // ---------------------------------------------------------------------------
-// Args (same shape as qa-sprites-b5.mjs)
+// Args
 // ---------------------------------------------------------------------------
 const argv = process.argv.slice(2);
 const getFlag = (name) => argv.includes(name);
@@ -84,27 +85,6 @@ const SESSION_CAP = 300;       // ENRICH_AMBIENT_BUDGET_CEIL (rolling-bucket cei
 // after the 12 baseline planes — E10's batch exhausts those 8 and stalls.
 const BUDGET_QA = { ceil: 20, refillTokens: 6, windowMs: 3600000 };
 const RESUME_WINDOW_MS = 1000; // E11 swaps windowMs to this to unlock refills
-
-const CHROME_EXECUTABLE_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  // Prefer puppeteer's version-pinned Chrome-for-Testing over the system
-  // Chrome: /Applications auto-updates underneath the harnesses, and its
-  // software-GL behavior shifts across majors (system Chrome 150 blew the
-  // tile-gated drain budget under SwiftShader on 2026-07-30 — six
-  // false-negative qa-cctv-v2 runs against a healthy build). A deterministic
-  // pinned browser beats the newest one for regression harnesses.
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-
-function findChromeExecutable() {
-  for (const candidate of CHROME_EXECUTABLE_CANDIDATES) {
-    try { if (fs.existsSync(candidate)) return candidate; } catch { /* skip */ }
-  }
-  return null;
-}
 
 const results = [];
 function record(name, ok, detail) {
@@ -159,7 +139,9 @@ const SPEC = {
 const expected = new Map(Object.entries(TYPES).map(([hex, tc]) => [
   hex, classifyAircraft(tc ? { typeCode: tc } : { category: 0 }),
 ]));
-const AIRLINER_ICON = aircraftIcon(classifyAircraft({ category: 0 })); // pre-enrichment default
+// Glyph = the icon KIND of the fleet feature (`img` = `${kind}-${tint}` in the
+// `dg-flights` GeoJSON source; kind is the aircraft class).
+const AIRLINER_ICON = classifyAircraft({ category: 0 }); // pre-enrichment default
 
 // ---------------------------------------------------------------------------
 async function main() {
@@ -177,31 +159,18 @@ async function main() {
 
   fs.mkdirSync(SHOT_DIR, { recursive: true });
 
-  const chromeExecutable = findChromeExecutable();
-  const browser = await puppeteer.launch({
-    headless: HEADFUL ? false : 'new',
-    ...(chromeExecutable ? { executablePath: chromeExecutable } : {}),
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--disable-dev-shm-usage',
-      '--disable-web-security',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--window-size=1280,800',
-    ],
-  });
+  const { browser, page: firstPage } = await launchQaBrowser({ headful: HEADFUL, viewport: { width: 1280, height: 800 } });
 
   const consoleErrors = [];
   try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
+    const page = firstPage;
     page.on('console', (msg) => {
       if (msg.type() === 'error') {
         const text = msg.text();
-        if (!/Failed to load resource.*404/i.test(text)) consoleErrors.push(text);
+        // Resource-load noise (base-map tiles failing through a proxy — MapLibre
+        // logs them as AJAXError —, DataGeo tables that answer 401 without a
+        // session on ?semlogin) is environmental; real JS errors still land here.
+        if (!/Failed to load resource|AJAXError|net::ERR_/i.test(text)) consoleErrors.push(text);
       }
     });
     page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
@@ -287,33 +256,30 @@ async function main() {
     }, SPEC);
 
     console.log('Loading app...');
-    await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(appUrl(APP_URL), { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForFunction(
-      () => window.__godsEyeView && window.__godsEyeView.viewer && window.__godsEyeView.dataManager,
-      { timeout: 60000, polling: 200 }
+      () => window.__godsEyeView && window.__godsEyeView.engine && window.__godsEyeView.dataManager,
+      { timeout: 120000, polling: 200 }
     );
     console.log('  App globals ready.');
 
-    // ---- In-page billboard probe (same walk as qa-sprites-b5.mjs) ----------
+    // ---- In-page fleet probe: the drawn fleet features ---------------------
+    // The fleet is one GeoJSON source (`dg-flights`) rewritten by the fleet
+    // tick; each feature carries `img` (`<kind>-<tint>`) and `s` (scale).
     await page.evaluate(() => {
-      window.__collectBillboards = function () {
-        const v = window.__godsEyeView.viewer;
-        const out = [];
-        const walk = (coll) => {
-          const n = coll.length;
-          for (let i = 0; i < n; i++) {
-            let p;
-            try { p = coll.get(i); } catch { continue; }
-            if (!p) continue;
-            if (typeof p.length === 'number' && typeof p.get === 'function') { walk(p); continue; }
-            if (p.image !== undefined && p.alignedAxis !== undefined) {
-              out.push({ id: p.id, image: p.image, scale: p.scale, show: p.show });
-            }
-          }
-        };
-        walk(v.scene.primitives);
-        return out;
+      window.__fleetSnapshot = { rows: [] };
+      const { map } = window.__godsEyeView.engine;
+      const refresh = async () => {
+        const data = await map.getSource('dg-flights')?.getData?.();
+        window.__fleetSnapshot.rows = (data?.features ?? []).map((f) => ({
+          id: f.properties.icao,
+          image: String(f.properties.img || '').replace(/-[a-z]$/, ''),
+          scale: f.properties.s,
+          show: true,
+        }));
       };
+      window.__fleetSnapshotTimer = setInterval(refresh, 150);
+      window.__collectBillboards = () => window.__fleetSnapshot.rows;
     });
 
     // ---- Frame the row FIRST (top-down, all 12 on-screen), then prime ------
@@ -322,19 +288,15 @@ async function main() {
     // (correctly) skips off-screen planes.
     const centerLon = ROW_LON0 + ((SPEC.planes.length - 1) / 2) * ROW_STEP_DEG;
     await page.evaluate(({ lat, lon, height }) => {
-      const v = window.__godsEyeView.viewer;
-      v.camera.cancelFlight(); // the boot fly-to-Austin otherwise stomps setView
-      const C3 = v.camera.position.constructor;
-      v.camera.setView({
-        destination: C3.fromDegrees(lon, lat, height),
-        orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-      });
+      const { engine } = window.__godsEyeView;
+      engine.cancelFlight(); // the boot flight otherwise stomps the jump
+      engine.setCameraView({ lat, lon, alt: height, heading: 0, pitch: -90, roll: 0 });
     }, { lat: ROW_LAT, lon: centerLon, height: 20000 });
 
     console.log('Priming straight-flight history through the render delay (30 s)...');
     const primed = await page.evaluate(async () => {
       const dm = window.__godsEyeView.dataManager;
-      const v = window.__godsEyeView.viewer;
+      const v = window.__godsEyeView.engine;
       window.__ENR.timeOffsetSec = -32;
       await dm.setEnabled('flights', true);
       const fl = dm.layers.get('flights').module;
@@ -355,6 +317,9 @@ async function main() {
     // E2 — deterministic pre-enrichment baseline (responses still held)
     // ========================================================================
     console.log('\nE2 — pre-enrichment baseline (adsbdb responses held)');
+    // The fleet snapshot refreshes every 150 ms from the GeoJSON source.
+    await page.waitForFunction((n) => window.__fleetSnapshot.rows.length >= n, { timeout: 10_000 }, SPEC.planes.length)
+      .catch(() => {});
     const before = await page.evaluate(() => window.__collectBillboards());
     const beforeById = new Map(before.map((b) => [b.id, b]));
     const baselineBad = [];
@@ -407,19 +372,19 @@ async function main() {
     const syntheticImages = new Set(
       Object.keys(TYPES).map((hex) => afterById.get(hex)?.image).filter(Boolean)
     );
-    record('E4 diversity: ≥5 distinct glyph data-URIs displayed ambiently',
+    record('E4 diversity: ≥5 distinct glyphs (icon kinds) displayed ambiently',
       syntheticImages.size >= 5, `${syntheticImages.size} distinct glyphs (expected 8)`);
 
     const glyphBad = [];
     const scaleBad = [];
     for (const [hex, klass] of expected) {
       const bb = afterById.get(hex);
-      const wantImg = aircraftIcon(klass);
+      const wantImg = klass;
       const wantScale = CLASS_SCALE_2D[klass] || 1;
       if (!bb || bb.image !== wantImg) glyphBad.push(`${hex}(${klass})${bb ? ':wrong-image' : ':missing'}`);
       if (bb && Math.abs(bb.scale - wantScale) > 1e-9) scaleBad.push(`${hex}: ${bb.scale} != ${wantScale}`);
     }
-    record('E5 glyphs: every billboard matches aircraftIcon(classify(typeCode))',
+    record('E5 glyphs: every fleet icon matches classify(typeCode)',
       glyphBad.length === 0, glyphBad.length ? glyphBad.join(' ') : `${expected.size} matched (incl. the found:false miss staying airliner)`);
     record('E6 scales: every billboard has its per-class CLASS_SCALE_2D',
       scaleBad.length === 0, scaleBad.length ? scaleBad.join(' ') : 'all scales exact (composes with scaleByDistance)');
@@ -456,7 +421,7 @@ async function main() {
     console.log('\nE8 — next poll after enrichment');
     await page.evaluate(async () => {
       const dm = window.__godsEyeView.dataManager;
-      const v = window.__godsEyeView.viewer;
+      const v = window.__godsEyeView.engine;
       await dm.layers.get('flights').module.update(v);
     });
     await sleep(500);
@@ -468,7 +433,7 @@ async function main() {
     const pollBad = [];
     for (const [hex, klass] of expected) {
       const bb = afterPollById.get(hex);
-      if (!bb || bb.image !== aircraftIcon(klass)) pollBad.push(`${hex}(${klass})${bb ? ':reverted' : ':missing'}`);
+      if (!bb || bb.image !== klass) pollBad.push(`${hex}(${klass})${bb ? ':reverted' : ':missing'}`);
       else if (Math.abs(bb.scale - (CLASS_SCALE_2D[klass] || 1)) > 1e-9) pollBad.push(`${hex}:scale-reverted`);
     }
     const noReRequests = afterPoll.starts === Object.keys(TYPES).length;
@@ -493,7 +458,7 @@ async function main() {
     const startsBeforeBatch = await page.evaluate(() => window.__ENRICH_LOG.starts.length);
     await page.evaluate(async ({ hexes, rowLat, rowLon0, stepDeg }) => {
       const dm = window.__godsEyeView.dataManager;
-      const v = window.__godsEyeView.viewer;
+      const v = window.__godsEyeView.engine;
       // Two fresh rows just north of the original one — still inside the
       // top-down 20 km frame, so the sweep's frustum test keeps them.
       // STATIONARY (speed 0): moving planes drift north out of the frustum at
@@ -522,7 +487,7 @@ async function main() {
     // One more poll while exhausted — still nothing new.
     await page.evaluate(async () => {
       const dm = window.__godsEyeView.dataManager;
-      await dm.layers.get('flights').module.update(window.__godsEyeView.viewer);
+      await dm.layers.get('flights').module.update(window.__godsEyeView.engine);
     });
     await sleep(1000);
     const exhausted = await page.evaluate(() => ({
@@ -544,7 +509,7 @@ async function main() {
     await sleep(RESUME_WINDOW_MS + 200); // a full (shortened) refill window elapses
     await page.evaluate(async () => {
       const dm = window.__godsEyeView.dataManager;
-      await dm.layers.get('flights').module.update(window.__godsEyeView.viewer);
+      await dm.layers.get('flights').module.update(window.__godsEyeView.engine);
     });
     const expectedTotal = startsBeforeBatch + BATCH_COUNT; // every batch plane eventually requested
     const resumed = await page.waitForFunction(

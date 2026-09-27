@@ -6,36 +6,46 @@
  * to one active HTMLAudioElement after an explicit user action; GEV does not
  * proxy, cache, record, or redistribute streams.
  *
+ * Desligada no build de produção (PROXY_DEPENDENT_LAYER_IDS em main.js e o
+ * painel #radio-panel removido); no dev liga e desenha no MapLibre.
+ *
+ * Migração Cesium -> MapLibre (comportamento preservado):
+ * - estações: CustomDataSource + EntityCluster viraram uma fonte GeoJSON com
+ *   `cluster` (raio 42 px, mínimo 3 estações, como pixelRange/minimumClusterSize);
+ *   a cor e o selo do cluster ("12 NEWS") vêm de clusterProperties por
+ *   categoria com a MESMA regra de radioClusterCategoryId;
+ * - rótulos (antes entradas do worldOverlay): layers symbol com colisão
+ *   nativa; os builders createRadio*OverlayEntry continuam exportados e
+ *   alimentam getOverlayDiagnostics a partir do que está desenhado;
+ * - seleção: ponto 14 px + colchete de quatro cantos (radioSelectionBracketSvg)
+ *   + rótulo protegido, numa fonte própria;
+ * - horizonte: o globo do MapLibre oculta o outro lado sozinho (a varredura
+ *   periódica do EllipsoidalOccluder saiu; horizonScans conta as recargas);
+ * - câmera: voos pelo engine (flyToCamera/cancelFlight), mesmas durações e o
+ *   mesmo plano radioStationCameraPlan; a navegação cede a qualquer alvo
+ *   acompanhado (engine.trackedTarget), como cedia ao trackedEntity. A
+ *   recentralização do disco da Terra no "keyhole" do Cesium não se aplica ao
+ *   MapLibre (radioGlobeRecenterPlan devolve null); os helpers puros seguem
+ *   exportados e testados.
+ * - `init(engine)` recebe o motor (src/maplibre/engine.js).
+ *
  * @module radio
  */
-import * as Cesium from 'cesium';
-import { cachedGroundFloor, warmGroundFloor } from './groundFloor.js';
 import { normalizeRadioCountryInput } from './radioCountry.js';
 import { normalizeRadioFilter } from './layerState.js';
-import { horizonOccluder } from './iconOrientation.js';
 import {
   isOwnedByOtherLayer,
   registerPickOwner,
   resolvePickId,
   unregisterPickOwner,
 } from './pickRegistry.js';
-import {
-  clearOverlaySource,
-  setOverlayEntries,
-  setOverlaySourceVisible,
-} from '../overlays/worldOverlay.js';
-import {
-  earthDiscScreenRadius,
-  getKeyholeGeometry,
-  GLOBE_ENTER_CLEARANCE_PX,
-  isFullGlobeInsideKeyhole,
-  projectEarthDiscToViewport,
-} from '../celestialRing.js';
+import { geoPoint, geoDistanceM } from './geoPoint.js';
+import { defineLayer, EMPTY_FC, TEXT_FONT, TEXT_FONT_BOLD } from '../maplibre/kit.js';
+import { getActiveLayerHost } from '../maplibre/layerHost.js';
 import { governorRequestRender } from '../renderGovernor.js';
 
 const RADIO_PREFIX = 'radio:';
 const DIRECTORY_ENDPOINT = '/api/radio/stations';
-const HORIZON_TICK_MS = 250;
 const HORIZON_CAMERA_MOVE_EPSILON_M = 1;
 const MARKER_LIFT_M = 2.5;
 const SELECTED_LIFT_M = 5;
@@ -59,18 +69,25 @@ export const RADIO_OVERLAY_SOURCE_OPTIONS = Object.freeze({
   collisionCapacity: 96,
   moving: false,
 });
-const RADIO_PICK_OFFSETS = Object.freeze([
-  [0, -RADIO_PICK_TOLERANCE_PX],
-  [RADIO_PICK_TOLERANCE_PX, 0],
-  [0, RADIO_PICK_TOLERANCE_PX],
-  [-RADIO_PICK_TOLERANCE_PX, 0],
-  [6, -6],
-  [6, 6],
-  [-6, 6],
-  [-6, -6],
-]);
-const _radioEarthScreenCenter = new Cesium.Cartesian2();
-const _radioEarthToCenter = new Cesium.Cartesian3();
+/** Clearance required before a full Earth disc counts as inside the keyhole (celestialRing.js). */
+const GLOBE_ENTER_CLEARANCE_PX = 24;
+const GLOBE_EXIT_CLEARANCE_PX = 12;
+/** Pure copy of celestialRing.isFullGlobeInsideKeyhole (that module still carries Cesium). */
+function isFullGlobeInsideKeyhole(geometry, wasVisible = false) {
+  const {
+    earthCenterX,
+    earthCenterY,
+    earthRadius,
+    keyholeCenterX,
+    keyholeCenterY,
+    keyholeRadius,
+  } = geometry || {};
+  const values = [earthCenterX, earthCenterY, earthRadius, keyholeCenterX, keyholeCenterY, keyholeRadius];
+  if (!values.every(Number.isFinite) || earthRadius <= 0 || keyholeRadius <= 0) return false;
+  const offset = Math.hypot(earthCenterX - keyholeCenterX, earthCenterY - keyholeCenterY);
+  const clearance = keyholeRadius - (offset + earthRadius);
+  return clearance >= (wasVisible ? GLOBE_EXIT_CLEARANCE_PX : GLOBE_ENTER_CLEARANCE_PX);
+}
 export const DEFAULT_RADIO_FILTER = 'all';
 export const GLOBAL_RADIO_ALTITUDE_M = 2_000_000;
 
@@ -152,8 +169,10 @@ const EMPTY_ACCEPTED_CATALOG_SNAPSHOT = Object.freeze({
   stationIds: Object.freeze([]),
 });
 
-let _viewer = null;
-let _dataSource = null;
+let _engine = null;
+/** Map + layer host once attached (null in unit tests and before boot). */
+let _map = null;
+let _host = null;
 let _enabled = false;
 let _managerLifecyclePresentation = null;
 let _loading = false;
@@ -168,7 +187,6 @@ let _categories = [];
 let _renderById = new Map();
 let _filter = DEFAULT_RADIO_FILTER;
 let _selectedId = null;
-let _selectedEntity = null;
 let _selectionGeneration = 0;
 let _selectionTimer = null;
 let _radioCameraNavigationGeneration = 0;
@@ -206,13 +224,11 @@ let _playFallbackFocus = null;
 let _playFallbackOrigin = 'programmatic';
 let _playFallbackAttemptId = null;
 let _clickHandler = null;
-let _horizonTimer = null;
-let _lastHorizonCameraPosition = null;
+let _moveEndRemover = null;
 let _horizonScanCount = 0;
 let _abortController = null;
 let _requestGeneration = 0;
 let _sessionGeneration = 0;
-let _removeClusterListener = null;
 let _overlayPublishTimer = null;
 let _clusterOverlayIdentitySequence = 0;
 let _clusterOverlayIdentities = [];
@@ -457,7 +473,7 @@ export function createRadioClusterOverlayEntry({ id, position, text, accent, sta
   };
 }
 
-/** Build one ambient station label while Cesium retains its point and picking. */
+/** Build one ambient station label entry (diagnostics / shared overlay contract). */
 export function createRadioSingletonOverlayEntry({ station, position, priority = 1 }) {
   if (!station?.id || !station?.name || !position) return null;
   return {
@@ -845,10 +861,11 @@ export function isEnglishRadioStation(station) {
 }
 
 function radioAngularDistance(station, anchor) {
-  const lat1 = Cesium.Math.toRadians(Number(anchor?.lat));
-  const lon1 = Cesium.Math.toRadians(Number(anchor?.lon));
-  const lat2 = Cesium.Math.toRadians(Number(station?.lat));
-  const lon2 = Cesium.Math.toRadians(Number(station?.lon));
+  const toRadians = (deg) => Number(deg) * Math.PI / 180;
+  const lat1 = toRadians(anchor?.lat);
+  const lon1 = toRadians(anchor?.lon);
+  const lat2 = toRadians(station?.lat);
+  const lon2 = toRadians(station?.lon);
   if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Number.POSITIVE_INFINITY;
   const deltaLat = lat2 - lat1;
   const deltaLon = lon2 - lon1;
@@ -904,7 +921,7 @@ export function rankRadioStationsForRequest(stations, {
     : matches.slice();
 }
 
-/** Classify a globe-scale Radio view without flapping on Cesium height round-off. */
+/** Classify a globe-scale Radio view without flapping on camera height round-off. */
 export function radioViewIsGlobal(altitudeM) {
   return Number.isFinite(altitudeM) && Math.round(altitudeM) >= GLOBAL_RADIO_ALTITUDE_M;
 }
@@ -922,7 +939,7 @@ export function radioRequestIsCurrent(
     && sessionGeneration === currentSessionGeneration;
 }
 
-/** Resolve a station id from ordinary, selected, or Cesium cluster pick shapes. */
+/** Resolve a station id from ordinary, selected, or cluster pick shapes (`radio:<id>` ids). */
 export function radioStationIdFromPick(picked) {
   const pending = [picked?.id, picked?.primitive?.id];
   const seen = new Set();
@@ -1124,12 +1141,9 @@ export function radioTuningStaticShouldPlay({
 }
 
 function markerPosition(station, liftM = MARKER_LIFT_M) {
-  const floor = cachedGroundFloor(station.lat, station.lon);
-  return Cesium.Cartesian3.fromDegrees(
-    station.lon,
-    station.lat,
-    (Number.isFinite(floor) ? floor : 0) + liftM,
-  );
+  // Neutral point (degrees + ECEF). The old ground-floor lift only mattered
+  // for depth-tested 3D terrain; the 2D map anchors at the station itself.
+  return geoPoint(station.lon, station.lat, liftM);
 }
 
 function selectedStation() {
@@ -1145,23 +1159,24 @@ function visibleStations() {
   return filterRadioStations(_stations, _filter);
 }
 
+/** Camera height (m) from the engine, or the zoom-equivalent when unknown. */
+function engineCameraHeight(view) {
+  const alt = Number(view?.alt);
+  if (Number.isFinite(alt) && alt > 0) return alt;
+  const zoom = Number(view?.zoom);
+  return Number.isFinite(zoom) ? 1.0e8 / 2 ** zoom : Number.NaN;
+}
+
 function viewportRadioAnchor() {
-  const camera = _viewer?.camera;
-  const scene = _viewer?.scene;
-  if (!camera) return null;
-  const altitudeM = Number(camera.positionCartographic?.height);
-  let cartographic = null;
-  const canvas = scene?.canvas;
-  if (canvas && typeof camera.pickEllipsoid === 'function') {
-    const center = new Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2);
-    const position = camera.pickEllipsoid(center, scene.globe?.ellipsoid || Cesium.Ellipsoid.WGS84);
-    if (position) cartographic = Cesium.Cartographic.fromCartesian(position);
-  }
-  cartographic ||= camera.positionCartographic || null;
-  if (!cartographic) return null;
+  const view = _engine?.getCameraView?.();
+  if (!view) return null;
+  const altitudeM = engineCameraHeight(view);
+  const lat = Number.isFinite(view.targetLat) ? view.targetLat : view.lat;
+  const lon = Number.isFinite(view.targetLon) ? view.targetLon : view.lon;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   return {
-    lat: Cesium.Math.toDegrees(cartographic.latitude),
-    lon: Cesium.Math.toDegrees(cartographic.longitude),
+    lat,
+    lon,
     altitudeM,
     globalView: radioViewIsGlobal(altitudeM),
   };
@@ -1432,76 +1447,30 @@ export function setRadioTuningStatic(active) {
   return true;
 }
 
-function radioCameraState(camera = _viewer?.camera) {
-  if (!camera) return null;
+function radioCameraState(engine = _engine) {
+  const view = engine?.getCameraView?.();
+  if (!view) return null;
+  const toRadians = (deg) => (Number.isFinite(deg) ? deg * Math.PI / 180 : undefined);
   return {
-    height: camera.positionCartographic?.height,
-    heading: camera.heading,
-    pitch: camera.pitch,
-    roll: camera.roll,
+    height: engineCameraHeight(view),
+    heading: toRadians(view.heading),
+    pitch: toRadians(view.pitch),
+    roll: toRadians(view.roll) ?? 0,
   };
 }
 
-/** Radio may move the globe only while no tracked entity owns the follow camera. */
-export function radioCameraNavigationAllowed(viewer = _viewer) {
-  return Boolean(viewer?.camera) && !viewer.trackedEntity;
+/** Radio may move the camera only while no tracked target owns the follow camera. */
+export function radioCameraNavigationAllowed(engine = _engine) {
+  return typeof engine?.flyToCamera === 'function' && !engine.trackedTarget;
 }
 
-function radioGlobeRecenterPlan(viewer = _viewer) {
-  const camera = viewer?.camera;
-  const canvas = viewer?.scene?.canvas;
-  const width = canvas?.clientWidth || canvas?.width;
-  const height = canvas?.clientHeight || canvas?.height;
-  const cartographic = camera?.positionCartographic;
-  if (!camera || !cartographic || !(width > 0) || !(height > 0)) return null;
-  const geometry = projectEarthDiscToViewport(
-    viewer,
-    width,
-    height,
-    _radioEarthScreenCenter,
-    _radioEarthToCenter,
-  );
-  let fullGlobeCapable = false;
-  if (geometry) {
-    if (!radioGlobeNeedsRecentering(geometry)) return null;
-    fullGlobeCapable = isFullGlobeInsideKeyhole({
-      ...geometry,
-      earthCenterX: geometry.keyholeCenterX,
-      earthCenterY: geometry.keyholeCenterY,
-    }, false);
-  } else {
-    const earthRadius = earthDiscScreenRadius(
-      Cesium.Cartesian3.magnitude(camera.positionWC),
-      height,
-      camera.frustum?.fovy,
-    );
-    const facingEarthCenter = Cesium.Cartesian3.dot(
-      camera.directionWC,
-      _radioEarthToCenter,
-    ) > 0;
-    if (!earthRadius || facingEarthCenter) return null;
-    const keyhole = getKeyholeGeometry(width, height);
-    fullGlobeCapable = earthRadius + GLOBE_ENTER_CLEARANCE_PX <= keyhole.radius;
-  }
-  const recenterHeight = radioGlobeRecenterHeight(
-    cartographic.height,
-    fullGlobeCapable,
-  );
-  if (recenterHeight == null) return null;
-  return {
-    destination: Cesium.Cartesian3.fromRadians(
-      cartographic.longitude,
-      cartographic.latitude,
-      recenterHeight,
-    ),
-    cameraState: {
-      ...radioCameraState(camera),
-      height: recenterHeight,
-      heading: 0,
-      pitch: -Cesium.Math.PI_OVER_TWO,
-      roll: 0,
-    },
-  };
+/**
+ * Cesium-only staged recovery of a clipped Earth disc inside the keyhole. The
+ * MapLibre globe never leaves the station off the visible hemisphere after a
+ * direct flyToCamera, so there is no recentering leg (always null).
+ */
+function radioGlobeRecenterPlan() {
+  return null;
 }
 
 function radioCameraNavigationIsCurrent(navigation) {
@@ -1509,14 +1478,14 @@ function radioCameraNavigationIsCurrent(navigation) {
     navigation
     && navigation.generation === _radioCameraNavigationGeneration
     && _enabled
-    && radioCameraNavigationAllowed(_viewer)
+    && radioCameraNavigationAllowed(_engine)
   );
 }
 
 function cancelActiveRadioCameraFlight() {
-  if (!_activeRadioCameraFlight || !radioCameraNavigationAllowed(_viewer)) return;
+  if (!_activeRadioCameraFlight || !radioCameraNavigationAllowed(_engine)) return;
   _activeRadioCameraFlight = null;
-  _viewer.camera.cancelFlight();
+  _engine.cancelFlight?.();
 }
 
 function invalidateRadioCameraNavigation() {
@@ -1534,6 +1503,12 @@ function radioCameraNavigationOwnsSelection(navigation, station) {
   );
 }
 
+/**
+ * @param {object} navigation
+ * @param {{view: {lat:number, lon:number, alt:number, heading:number, pitch:number, roll?:number}, duration:number, easing?:Function}} options
+ *   Camera position in engine semantics (degrees, metres).
+ * @param {Function} onComplete
+ */
 function startRadioCameraFlight(navigation, options, onComplete) {
   if (!radioCameraNavigationIsCurrent(navigation)) return false;
   const token = ++_radioCameraFlightSequence;
@@ -1542,12 +1517,26 @@ function startRadioCameraFlight(navigation, options, onComplete) {
     if (_activeRadioCameraFlight?.token === token) _activeRadioCameraFlight = null;
     if (completed && radioCameraNavigationIsCurrent(navigation)) onComplete?.();
   };
-  _viewer.camera.flyTo({
-    ...options,
+  _engine.flyToCamera(options.view, {
+    duration: options.duration,
+    ...(options.easing ? { easing: options.easing } : {}),
     complete: () => finish(true),
     cancel: () => finish(false),
   });
   return true;
+}
+
+/** Radio camera plan (radians) -> engine camera view (degrees). */
+function radioPlanToView(plan) {
+  const toDegrees = (rad) => (Number.isFinite(rad) ? rad * 180 / Math.PI : 0);
+  return {
+    lat: plan.lat,
+    lon: plan.lon,
+    alt: plan.height,
+    heading: toDegrees(plan.heading),
+    pitch: Number.isFinite(plan.pitch) ? toDegrees(plan.pitch) : -90,
+    roll: toDegrees(plan.roll),
+  };
 }
 
 function focusRadioNavigationTarget(navigation) {
@@ -1556,8 +1545,7 @@ function focusRadioNavigationTarget(navigation) {
   if (!plan) return false;
   navigation.phase = 'focusing';
   return startRadioCameraFlight(navigation, {
-    destination: Cesium.Cartesian3.fromDegrees(plan.lon, plan.lat, plan.height),
-    orientation: { heading: plan.heading, pitch: plan.pitch, roll: plan.roll },
+    view: radioPlanToView(plan),
     duration: navigation.duration,
   }, () => {
     navigation.phase = 'settled';
@@ -1566,9 +1554,9 @@ function focusRadioNavigationTarget(navigation) {
 
 function beginRadioCameraNavigation(cameraState = null) {
   const generation = ++_radioCameraNavigationGeneration;
-  if (!radioCameraNavigationAllowed(_viewer) || !_enabled) return null;
+  if (!radioCameraNavigationAllowed(_engine) || !_enabled) return null;
   cancelActiveRadioCameraFlight();
-  const recenterPlan = radioGlobeRecenterPlan(_viewer);
+  const recenterPlan = radioGlobeRecenterPlan(_engine);
   return {
     generation,
     phase: 'idle',
@@ -1595,15 +1583,11 @@ function rotateRadioStationIntoView(
   if (activeNavigation.recenterPlan && !activeNavigation.recentered) {
     activeNavigation.phase = 'recentering';
     const recenterDuration = Math.min(0.9, Math.max(0.65, duration));
+    const cubicInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
     return startRadioCameraFlight(activeNavigation, {
-      destination: activeNavigation.recenterPlan.destination,
-      orientation: {
-        heading: activeNavigation.cameraState.heading,
-        pitch: activeNavigation.cameraState.pitch,
-        roll: activeNavigation.cameraState.roll,
-      },
+      view: activeNavigation.recenterPlan.view,
       duration: recenterDuration,
-      easingFunction: Cesium.EasingFunction.CUBIC_IN_OUT,
+      easing: cubicInOut,
     }, () => {
       activeNavigation.recentered = true;
       activeNavigation.phase = 'idle';
@@ -2002,12 +1986,6 @@ export function setRadioParams(params = {}) {
   }
   if (changed && radioPresentationAllowed()) {
     updateRenderVisibility();
-    if (filterChanged && _dataSource?.clustering?.enabled) {
-      const clusterPoints = _dataSource.clustering.clusterPoints;
-      _dataSource.clustering.clusterPoints = !clusterPoints;
-      _dataSource.clustering.clusterPoints = clusterPoints;
-      _viewer?.scene?.requestRender();
-    }
     scheduleRadioOverlayPublish();
   }
   emitState();
@@ -2079,61 +2057,49 @@ export function setRadioVoiceDucking(ducked, {
 }
 
 function updateSelectionEntity() {
-  if (_selectedEntity && _viewer) _viewer.entities.remove(_selectedEntity);
-  _selectedEntity = null;
   const station = selectedPresentationStation();
-  if (!radioPresentationAllowed() || !_viewer || !station) {
+  if (!radioPresentationAllowed() || !station) {
+    setRadioSource(SRC_SELECTED, EMPTY_FC);
+    setRadioSource(SRC_SELECTED_LABEL, EMPTY_FC);
     scheduleRadioOverlayPublish();
     return;
   }
-  const selectionColor = radioCategoryColor(radioStationCategoryId(station));
-  const bracketImage = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(radioSelectionBracketSvg(selectionColor))}`;
-
-  _selectedEntity = _viewer.entities.add({
-    id: `${RADIO_PREFIX}selected:${station.id}`,
-    position: markerPosition(station, SELECTED_LIFT_M),
-    point: {
-      pixelSize: 14,
-      color: Cesium.Color.fromCssColorString(selectionColor),
-      outlineColor: Cesium.Color.BLACK,
-      outlineWidth: 2,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(
-        0,
-        RADIO_GLOBE_INTERACTION_MAX_DISTANCE_M,
-      ),
-    },
-    billboard: {
-      image: bracketImage,
-      width: 40,
-      height: 40,
-      horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-      verticalOrigin: Cesium.VerticalOrigin.CENTER,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(
-        0,
-        RADIO_GLOBE_INTERACTION_MAX_DISTANCE_M,
-      ),
-      scaleByDistance: new Cesium.NearFarScalar(100_000, 1, 12_000_000, 0.72),
-    },
-  });
+  const color = radioCategoryColor(radioStationCategoryId(station));
+  const bracket = ensureRadioBracketImage(color);
+  const selected = {
+    type: 'FeatureCollection',
+    features: [{
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [station.lon, station.lat] },
+      properties: {
+        id: station.id,
+        pickId: `${RADIO_PREFIX}selected:${station.id}`,
+        color,
+        bracket,
+        label: radioGlobeLabel(station),
+      },
+    }],
+  };
+  setRadioSource(SRC_SELECTED, selected);
+  setRadioSource(SRC_SELECTED_LABEL, selected);
   scheduleRadioOverlayPublish();
 }
 
-function clusterPointCollection() {
-  return _dataSource?.clustering?._clusterPointCollection || null;
-}
-
-function publishRadioOverlayEntries() {
+/**
+ * Rebuild the overlay-entry diagnostics from what the map is drawing now:
+ * the rendered clusters (membership via getClusterLeaves, identities kept by
+ * reconcileRadioClusterCandidates) and the nearest unclustered stations,
+ * through the same pure builders and caps as the old worldOverlay publisher.
+ * The labels themselves are MapLibre symbol layers.
+ */
+async function publishRadioOverlayEntries() {
   _overlayPublishTimer = null;
   if (!radioPresentationAllowed()) {
     resetRadioClusterOverlayIdentities();
     _overlayDiagnostics = emptyRadioOverlayDiagnostics();
-    clearOverlaySource(RADIO_OVERLAY_SOURCE_ID);
-    setOverlaySourceVisible(RADIO_OVERLAY_SOURCE_ID, false);
     return;
   }
-
+  const sessionGeneration = _sessionGeneration;
   const entries = [];
   const station = selectedPresentationStation();
   if (station) {
@@ -2144,27 +2110,65 @@ function publishRadioOverlayEntries() {
     if (selectedEntry) entries.push(selectedEntry);
   }
 
+  // Rendered features plus the loaded tiles' source features that project
+  // inside the viewport. On the MapLibre 6 globe both queries can come back
+  // short away from the view center (the diagnostics are then partial);
+  // in mercator they are complete.
+  const container = _map?.getContainer?.();
+  const width = container?.clientWidth || 0;
+  const height = container?.clientHeight || 0;
+  const onScreen = (feature) => {
+    const [lon, lat] = feature?.geometry?.coordinates || [];
+    const p = _engine?.project?.(lon, lat);
+    return Boolean(p?.visible && p.x >= 0 && p.y >= 0 && p.x <= width && p.y <= height);
+  };
+  const sourceFeatures = (filter, layerId) => {
+    const out = [];
+    try {
+      if (_map?.getLayer?.(layerId)) out.push(..._map.queryRenderedFeatures({ layers: [layerId] }));
+    } catch { /* style swapping */ }
+    try {
+      out.push(...(_map?.querySourceFeatures?.(SRC_STATIONS, { filter }) || []).filter(onScreen));
+    } catch { /* style swapping */ }
+    return out;
+  };
+  const clusterFeatures = [];
+  const seenClusters = new Set();
+  for (const feature of sourceFeatures(['has', 'point_count'], LAYER_CLUSTER)) {
+    const clusterId = feature.properties?.cluster_id;
+    if (clusterId == null || seenClusters.has(clusterId)) continue;
+    seenClusters.add(clusterId);
+    clusterFeatures.push(feature);
+  }
+  clusterFeatures.sort((a, b) => (b.properties.point_count || 0) - (a.properties.point_count || 0));
+
   const clusterCandidates = [];
   const clusteredStationIds = new Set();
-  const points = clusterPointCollection();
-  for (let index = 0; index < (points?.length || 0); index += 1) {
-    const point = points.get(index);
-    if (!point?.show || !point.position || !Array.isArray(point.id) || point.id.length < 3) continue;
-    const stationIds = point.id
-      .map((entity) => String(entity?.id || '').slice(RADIO_PREFIX.length))
+  const source = _map?.getSource?.(SRC_STATIONS);
+  for (const feature of clusterFeatures.slice(0, RADIO_OVERLAY_COHORT_LIMIT)) {
+    let leaves = [];
+    try {
+      leaves = await source.getClusterLeaves(feature.properties.cluster_id, Number.MAX_SAFE_INTEGER, 0);
+    } catch {
+      leaves = [];
+    }
+    if (sessionGeneration !== _sessionGeneration) return;
+    const stationIds = leaves
+      .map((leaf) => String(leaf?.properties?.id || ''))
       .filter((id) => {
-        const station = _stationById.get(id);
-        return station && stationMatchesRadioCategory(station, _filter);
+        const member = _stationById.get(id);
+        return member && stationMatchesRadioCategory(member, _filter);
       })
       .sort();
     if (stationIds.length < 3) continue;
     for (const stationId of stationIds) clusteredStationIds.add(stationId);
     const clusteredStations = stationIds.map((id) => _stationById.get(id));
     const category = radioClusterCategoryId(clusteredStations, _filter);
+    const [lon, lat] = feature.geometry?.coordinates || [];
     clusterCandidates.push({
       id: `${stationIds[0]}:${stationIds.at(-1)}:${stationIds.length}`,
       stationIds,
-      point,
+      position: geoPoint(lon, lat, MARKER_LIFT_M),
       text: radioClusterBadgeText(category, stationIds.length),
       accent: radioCategoryColor(category),
       stationCount: stationIds.length,
@@ -2177,29 +2181,29 @@ function publishRadioOverlayEntries() {
     () => `stable:${++_clusterOverlayIdentitySequence}`,
   );
   for (const candidate of _clusterOverlayIdentities) {
-    const clusterEntry = createRadioClusterOverlayEntry({
-      ...candidate,
-      position: () => candidate.point.position,
-    });
+    const clusterEntry = createRadioClusterOverlayEntry(candidate);
     if (clusterEntry) entries.push(clusterEntry);
   }
 
-  const cameraPosition = _viewer?.camera?.positionWC;
+  const view = _engine?.getCameraView?.();
+  const cameraHeight = engineCameraHeight(view);
+  const cameraPosition = view ? geoPoint(view.lon, view.lat, cameraHeight) : null;
   const singletonAllowance = Math.min(
-    radioSingletonLabelLimit(_viewer?.camera?.positionCartographic?.height),
+    radioSingletonLabelLimit(cameraHeight),
     Math.max(0, RADIO_OVERLAY_COHORT_LIMIT - selectedClusterCandidates.length),
   );
+  const pointIds = new Set(sourceFeatures(['!', ['has', 'point_count']], LAYER_POINT).map((f) => String(f.properties?.id || '')));
   const singletonCandidates = selectRadioSingletonCandidates(
     [..._renderById.values()]
       .filter((record) => (
-        record.entity?.show
+        pointIds.has(record.station?.id)
         && record.station?.id !== station?.id
         && !clusteredStationIds.has(record.station?.id)
       ))
       .map((record) => ({
         ...record,
         distanceM: cameraPosition
-          ? Cesium.Cartesian3.distance(cameraPosition, record.position)
+          ? geoDistanceM(cameraPosition, record.position)
           : Number.POSITIVE_INFINITY,
       })),
     singletonAllowance,
@@ -2216,8 +2220,6 @@ function publishRadioOverlayEntries() {
     if (singletonEntry) entries.push(singletonEntry);
   }
 
-  setOverlayEntries(RADIO_OVERLAY_SOURCE_ID, entries, RADIO_OVERLAY_SOURCE_OPTIONS);
-  setOverlaySourceVisible(RADIO_OVERLAY_SOURCE_ID, true);
   _overlayDiagnostics = {
     entryCount: entries.length,
     selectedCount: entries.filter((entry) => entry.selected).length,
@@ -2235,19 +2237,17 @@ function publishRadioOverlayEntries() {
 function scheduleRadioOverlayPublish() {
   if (_overlayPublishTimer) clearTimeout(_overlayPublishTimer);
   const sessionGeneration = _sessionGeneration;
+  // Rendered-feature queries need the new data placed: wait a frame or two.
   _overlayPublishTimer = setTimeout(() => {
-    if (sessionGeneration === _sessionGeneration) publishRadioOverlayEntries();
-  }, 0);
+    if (sessionGeneration === _sessionGeneration) void publishRadioOverlayEntries();
+  }, _map ? 120 : 0);
 }
 
 function focusStation(station) {
   _radioCameraNavigationGeneration += 1;
-  if (!station || !radioCameraNavigationAllowed(_viewer)) return false;
+  if (!station || !radioCameraNavigationAllowed(_engine)) return false;
   cancelActiveRadioCameraFlight();
-  _viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(station.lon, station.lat, 85_000),
-    duration: 1.1,
-  });
+  _engine.flyToCamera({ lat: station.lat, lon: station.lon, alt: 85_000, heading: 0, pitch: -90 }, { duration: 1.1 });
   return true;
 }
 
@@ -2272,7 +2272,6 @@ export function selectRadioStation(id, {
   const generation = ++_selectionGeneration;
   const sessionGeneration = _sessionGeneration;
   updateSelectionEntity();
-  warmGroundFloor([{ lat: station.lat, lon: station.lon }]);
   if (_selectionTimer) clearTimeout(_selectionTimer);
   _selectionTimer = setTimeout(() => {
     _selectionTimer = null;
@@ -2346,32 +2345,30 @@ export function selectRequestedRadioStation(criteria = {}, { autoplay = true, or
   return ranked[0];
 }
 
-function updateRenderVisibility({ force = true } = {}) {
-  if (!_viewer || !_dataSource) return;
-  const cameraPosition = _viewer.camera?.positionWC;
-  if (!force && !radioCameraPositionChanged(_lastHorizonCameraPosition, cameraPosition)) return;
-  _lastHorizonCameraPosition = cameraPosition
-    ? { x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z }
-    : null;
+/**
+ * Push the filter-matching stations into the (clustered) map sources. The
+ * MapLibre globe culls the far hemisphere itself, so this runs on data or
+ * filter changes only; `horizonScans` counts these rebuilds.
+ */
+function updateRenderVisibility() {
+  if (!_engine) return;
   _horizonScanCount += 1;
-  const occluder = horizonOccluder(_viewer.camera);
-  let visibilityChanged = false;
-  for (const [id, record] of _renderById) {
-    const matches = stationMatchesRadioCategory(record.station, _filter);
-    const visible = matches && occluder.isPointVisible(record.position);
-    if (record.entity.show !== visible) visibilityChanged = true;
-    record.entity.show = visible;
+  const features = [];
+  for (const record of _renderById.values()) {
+    if (!stationMatchesRadioCategory(record.station, _filter)) continue;
+    features.push(record.feature);
   }
-  if (_selectedEntity) {
-    const position = _selectedEntity.position?.getValue?.(Cesium.JulianDate.now());
-    const selectedVisible = !position || occluder.isPointVisible(position);
-    if (_selectedEntity.show !== selectedVisible) visibilityChanged = true;
-    _selectedEntity.show = selectedVisible;
-  }
+  const data = { type: 'FeatureCollection', features };
+  setRadioSource(SRC_STATIONS, data);
+  setRadioSource(SRC_LABELS, data);
+  applyRadioClusterStyle();
   scheduleRadioOverlayPublish();
-  // The horizon timer can commit AFTER the camera settles and the governor
-  // parks the scene — a changed show flag needs one frame. (perf wave 2 fix)
-  if (visibilityChanged) governorRequestRender('radio-horizon');
+  // Diagnostics read rendered clusters: refresh once the new data is placed.
+  const sessionGeneration = _sessionGeneration;
+  _map?.once?.('idle', () => {
+    if (sessionGeneration === _sessionGeneration) scheduleRadioOverlayPublish();
+  });
+  governorRequestRender('radio-horizon');
 }
 
 /** Change marker/list category without interrupting an active station. */
@@ -2387,15 +2384,6 @@ export function setRadioFilter(categoryId) {
   if (clearsCancelledPresentation) updateSelectionEntity();
   if (changed) resetRadioClusterOverlayIdentities();
   updateRenderVisibility();
-  if (changed && _dataSource?.clustering?.enabled) {
-    // Entity visibility changes do not invalidate Cesium's existing cluster
-    // primitives. Toggle a public clustering input twice to mark the current
-    // cluster set dirty without changing its effective configuration.
-    const clusterPoints = _dataSource.clustering.clusterPoints;
-    _dataSource.clustering.clusterPoints = !clusterPoints;
-    _dataSource.clustering.clusterPoints = clusterPoints;
-    _viewer?.scene?.requestRender();
-  }
   scheduleRadioOverlayPublish();
   emitState();
   return true;
@@ -2428,103 +2416,384 @@ function reconcileStations(stations) {
     _selectedId = null;
   }
 
-  if (_dataSource) _dataSource.entities.removeAll();
   _renderById.clear();
   for (const station of stations) {
     const position = markerPosition(station);
-    const markerColor = radioCategoryColor(radioStationCategoryId(station));
-    const entity = _dataSource.entities.add({
-      id: `${RADIO_PREFIX}${station.id}`,
-      position,
-      point: {
-        pixelSize: 13,
-        color: Cesium.Color.fromCssColorString(markerColor).withAlpha(0.86),
-        outlineColor: Cesium.Color.fromCssColorString('#071b25'),
-        outlineWidth: 1,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        scaleByDistance: new Cesium.NearFarScalar(100_000, 1.15, 12_000_000, 1),
-        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(
-          0,
-          RADIO_GLOBE_INTERACTION_MAX_DISTANCE_M,
-        ),
+    const category = radioStationCategoryId(station);
+    const feature = {
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [station.lon, station.lat] },
+      properties: {
+        id: station.id,
+        pickId: `${RADIO_PREFIX}${station.id}`,
+        cat: category,
+        color: radioCategoryColor(category),
+        label: radioGlobeLabel(station),
       },
-    });
-    _renderById.set(station.id, { station, entity, position });
+    };
+    _renderById.set(station.id, { station, position, feature });
   }
   updateSelectionEntity();
   updateRenderVisibility();
 }
 
-function installClusterStyling() {
-  if (!_dataSource || _removeClusterListener) return;
-  const clustering = _dataSource.clustering;
-  clustering.enabled = true;
-  clustering.pixelRange = 42;
-  clustering.minimumClusterSize = 3;
-  clustering.clusterPoints = true;
-  clustering.clusterLabels = false;
-  clustering.clusterBillboards = false;
-  _removeClusterListener = clustering.clusterEvent.addEventListener((clusteredEntities, cluster) => {
-    const clusteredStations = [];
-    for (const entity of clusteredEntities) {
-      const stationId = String(entity.id || '').slice(RADIO_PREFIX.length);
-      const station = _renderById.get(stationId)?.station;
-      if (station) clusteredStations.push(station);
-    }
-    const clusterCategory = radioClusterCategoryId(clusteredStations, _filter);
-    const clusterColor = Cesium.Color.fromCssColorString(radioCategoryColor(clusterCategory));
-    // Cesium assigns the entity-id array only to the generated cluster label.
-    // Mirror it to the visible point so clicking either part of the callout
-    // resolves the first station and remains a direct playback gesture.
-    cluster.point.id = clusteredEntities;
-    cluster.billboard.id = clusteredEntities;
-    cluster.label.show = false;
-    cluster.label.text = '';
-    cluster.point.show = true;
-    cluster.point.pixelSize = Math.min(26, 12 + Math.log2(clusteredEntities.length) * 1.6);
-    cluster.point.color = clusterColor.withAlpha(0.9);
-    cluster.point.outlineColor = Cesium.Color.BLACK;
-    cluster.point.outlineWidth = 2;
-    cluster.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
-    cluster.point.distanceDisplayCondition = new Cesium.DistanceDisplayCondition(
-      0,
-      RADIO_GLOBE_INTERACTION_MAX_DISTANCE_M,
-    );
-    scheduleRadioOverlayPublish();
+// ------------------------------------------------------------------ MapLibre
+
+const SRC_STATIONS = 'dg-radio';
+const SRC_LABELS = 'dg-radio-lbl';
+const SRC_SELECTED = 'dg-radio-sel';
+const SRC_SELECTED_LABEL = 'dg-radio-sel-lbl';
+const LAYER_CLUSTER = 'dg-radio-cluster';
+const LAYER_POINT = 'dg-radio-point';
+const LAYER_CLUSTER_LABEL = 'dg-radio-cluster-label';
+const LAYER_LABEL = 'dg-radio-label';
+const LAYER_SELECTED = 'dg-radio-sel-point';
+const LAYER_SELECTED_BRACKET = 'dg-radio-sel-bracket';
+const LAYER_SELECTED_LABEL = 'dg-radio-sel-label';
+const RADIO_PICK_LAYERS = [LAYER_SELECTED_BRACKET, LAYER_SELECTED, LAYER_POINT, LAYER_CLUSTER];
+const RADIO_OWN_LAYERS = new Set([
+  ...RADIO_PICK_LAYERS, LAYER_CLUSTER_LABEL, LAYER_LABEL, LAYER_SELECTED_LABEL,
+]);
+/** Cesium EntityCluster pixelRange / minimumClusterSize. */
+const RADIO_CLUSTER_RADIUS_PX = 42;
+const RADIO_CLUSTER_MIN_POINTS = 3;
+const RADIO_BRACKET_PREFIX = 'dg-radio-bracket-';
+const RADIO_CLUSTER_CATEGORIES = Object.freeze([...RADIO_MARKER_CATEGORY_ORDER, 'other']);
+const radioClusterCountKey = (categoryId) => `n_${categoryId.replace(/[^a-z0-9]/gi, '_')}`;
+/** Per-category member counts carried by every cluster. */
+const RADIO_CLUSTER_PROPERTIES = Object.freeze(Object.fromEntries(
+  RADIO_CLUSTER_CATEGORIES.map((id) => [
+    radioClusterCountKey(id),
+    ['+', ['case', ['==', ['get', 'cat'], id], 1, 0]],
+  ]),
+));
+
+/**
+ * MapLibre expression for a cluster's advertised category — radioClusterCategoryId
+ * over the cluster's per-category counts: with the 'all' filter the first
+ * category (marker order) holding the maximum, unless 'other' strictly
+ * outnumbers it; with an active filter, the filter's own category (a string).
+ * @param {string} [activeFilter='all']
+ * @returns {string|Array}
+ */
+export function radioClusterCategoryExpression(activeFilter = 'all') {
+  const filter = String(activeFilter || 'all');
+  if (filter !== 'all') return radioClusterCategoryId([], filter);
+  const count = (id) => ['get', radioClusterCountKey(id)];
+  const maxOrdered = ['max', ...RADIO_MARKER_CATEGORY_ORDER.map(count)];
+  const branches = [['>', count('other'), maxOrdered], 'other'];
+  RADIO_MARKER_CATEGORY_ORDER.forEach((id, index) => {
+    branches.push([
+      'all',
+      ['>', maxOrdered, 0],
+      ['==', count(id), maxOrdered],
+      ...RADIO_MARKER_CATEGORY_ORDER.slice(0, index).map((prev) => ['<', count(prev), maxOrdered]),
+    ], id);
+  });
+  return ['case', ...branches, 'other'];
+}
+
+function radioClusterColorExpression(categoryExpression) {
+  if (typeof categoryExpression === 'string') return radioCategoryColor(categoryExpression);
+  return ['match', categoryExpression,
+    ...RADIO_CLUSTER_CATEGORIES.flatMap((id) => [id, radioCategoryColor(id)]),
+    RADIO_CATEGORY_COLORS.other];
+}
+
+function radioClusterTextExpression(categoryExpression) {
+  const label = typeof categoryExpression === 'string'
+    ? radioClusterBadgeText(categoryExpression, 0).replace(/^0 /, '')
+    : ['match', categoryExpression,
+      ...RADIO_CLUSTER_CATEGORIES.flatMap((id) => [id, radioClusterBadgeText(id, 0).replace(/^0 /, '')]),
+      RADIO_CLUSTER_LABELS.other];
+  return ['concat', ['to-string', ['get', 'point_count']], ' ', label];
+}
+
+const RADIO_TEXT_PAINT = Object.freeze({
+  'text-halo-color': 'rgba(3,10,14,0.92)',
+  'text-halo-width': 1.4,
+});
+
+const radioLayerDef = defineLayer({
+  id: 'radio',
+  name: 'Radio',
+  category: 'Contexto global',
+  icon: '◉',
+  source: 'Radio Browser',
+  sources: {
+    [SRC_STATIONS]: {
+      type: 'geojson',
+      data: EMPTY_FC,
+      cluster: true,
+      clusterRadius: RADIO_CLUSTER_RADIUS_PX,
+      clusterMinPoints: RADIO_CLUSTER_MIN_POINTS,
+      clusterMaxZoom: 16,
+      clusterProperties: RADIO_CLUSTER_PROPERTIES,
+    },
+    // Same data and clustering, labels only: a tile waiting on glyphs never
+    // holds back the station points.
+    [SRC_LABELS]: {
+      type: 'geojson',
+      data: EMPTY_FC,
+      cluster: true,
+      clusterRadius: RADIO_CLUSTER_RADIUS_PX,
+      clusterMinPoints: RADIO_CLUSTER_MIN_POINTS,
+      clusterMaxZoom: 16,
+      clusterProperties: RADIO_CLUSTER_PROPERTIES,
+    },
+    [SRC_SELECTED]: { type: 'geojson', data: EMPTY_FC },
+    [SRC_SELECTED_LABEL]: { type: 'geojson', data: EMPTY_FC },
+  },
+  layers: [
+    {
+      id: LAYER_CLUSTER,
+      type: 'circle',
+      source: SRC_STATIONS,
+      filter: ['has', 'point_count'],
+      paint: {
+        'circle-radius': ['/', ['min', 26, ['+', 12, ['*', ['log2', ['get', 'point_count']], 1.6]]], 2],
+        'circle-color': radioClusterColorExpression(radioClusterCategoryExpression('all')),
+        'circle-opacity': 0.9,
+        'circle-stroke-color': '#000000',
+        'circle-stroke-width': 2,
+        'circle-pitch-alignment': 'viewport',
+      },
+    },
+    {
+      id: LAYER_POINT,
+      type: 'circle',
+      source: SRC_STATIONS,
+      filter: ['!', ['has', 'point_count']],
+      paint: {
+        // pixelSize 13 (diameter) scaled 1 -> 1.15 from far to near.
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 6.5, 10, 7.5],
+        'circle-color': ['get', 'color'],
+        'circle-opacity': 0.86,
+        'circle-stroke-color': '#071b25',
+        'circle-stroke-width': 1,
+        'circle-pitch-alignment': 'viewport',
+      },
+    },
+    {
+      id: LAYER_CLUSTER_LABEL,
+      type: 'symbol',
+      source: SRC_LABELS,
+      filter: ['has', 'point_count'],
+      layout: {
+        'text-field': radioClusterTextExpression(radioClusterCategoryExpression('all')),
+        'text-font': TEXT_FONT_BOLD,
+        'text-size': 11,
+        'text-anchor': 'bottom',
+        'text-offset': [0, -1.25],
+        'symbol-sort-key': ['-', 0, ['get', 'point_count']],
+      },
+      paint: {
+        ...RADIO_TEXT_PAINT,
+        'text-color': radioClusterColorExpression(radioClusterCategoryExpression('all')),
+      },
+    },
+    {
+      id: LAYER_LABEL,
+      type: 'symbol',
+      source: SRC_LABELS,
+      filter: ['!', ['has', 'point_count']],
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': TEXT_FONT,
+        'text-size': 11,
+        'text-anchor': 'bottom',
+        'text-offset': [0, -0.95],
+        'text-max-width': 30,
+      },
+      paint: { ...RADIO_TEXT_PAINT, 'text-color': ['get', 'color'] },
+    },
+    {
+      id: LAYER_SELECTED,
+      type: 'circle',
+      source: SRC_SELECTED,
+      paint: {
+        'circle-radius': 7,
+        'circle-color': ['get', 'color'],
+        'circle-stroke-color': '#000000',
+        'circle-stroke-width': 2,
+        'circle-pitch-alignment': 'viewport',
+      },
+    },
+    {
+      id: LAYER_SELECTED_BRACKET,
+      type: 'symbol',
+      source: SRC_SELECTED,
+      layout: {
+        'icon-image': ['get', 'bracket'],
+        // 40 px near, 0.72 scale at globe distance (NearFarScalar).
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 3, 0.72, 10, 1],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+    },
+    {
+      id: LAYER_SELECTED_LABEL,
+      type: 'symbol',
+      source: SRC_SELECTED_LABEL,
+      layout: {
+        'text-field': ['get', 'label'],
+        'text-font': TEXT_FONT_BOLD,
+        'text-size': 12,
+        'text-anchor': 'bottom',
+        'text-offset': [0, -1.9],
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+      },
+      paint: { ...RADIO_TEXT_PAINT, 'text-color': ['get', 'color'] },
+    },
+  ],
+});
+
+function attachRadioMap(engine, host = getActiveLayerHost()) {
+  if (_map || !engine?.map) return;
+  if (!host) return;
+  host.register(radioLayerDef);
+  try {
+    host.ensureAdded(radioLayerDef);
+  } catch (error) {
+    console.warn('[Radio] style not ready', error);
+    return;
+  }
+  _map = engine.map;
+  _host = host;
+  hookRadioImages(_map);
+}
+
+function setRadioSource(sourceId, data) {
+  try {
+    _map?.getSource?.(sourceId)?.setData(data);
+  } catch (error) {
+    console.warn('[Radio] setData', sourceId, error);
+  }
+}
+
+function setRadioMapVisible(visible) {
+  _host?.setVisible('radio', Boolean(visible));
+}
+
+/** Re-point cluster color/badge expressions at the active filter. */
+function applyRadioClusterStyle() {
+  if (!_map?.getLayer?.(LAYER_CLUSTER)) return;
+  const category = radioClusterCategoryExpression(_filter);
+  const color = radioClusterColorExpression(category);
+  try {
+    _map.setPaintProperty(LAYER_CLUSTER, 'circle-color', color);
+    _map.setPaintProperty(LAYER_CLUSTER_LABEL, 'text-color', color);
+    _map.setLayoutProperty(LAYER_CLUSTER_LABEL, 'text-field', radioClusterTextExpression(category));
+  } catch { /* style swapping */ }
+}
+
+/** Rasterize the selection bracket synchronously (Path2D) for one category color. */
+function ensureRadioBracketImage(color) {
+  const hex = /^#[0-9a-f]{6}$/i.test(String(color)) ? String(color) : RADIO_CATEGORY_COLORS.other;
+  const name = `${RADIO_BRACKET_PREFIX}${hex.slice(1)}`;
+  addRadioBracketImage(_map, name);
+  return name;
+}
+
+function addRadioBracketImage(map, name) {
+  if (!map || map.hasImage?.(name)) return;
+  if (typeof document === 'undefined' || typeof Path2D === 'undefined') return;
+  const color = `#${name.slice(RADIO_BRACKET_PREFIX.length)}`;
+  const ratio = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = 40 * ratio;
+  canvas.height = 40 * ratio;
+  const g = canvas.getContext('2d', { willReadFrequently: true });
+  g.scale(ratio, ratio);
+  // Same path as radioSelectionBracketSvg: four open corners, square caps.
+  g.strokeStyle = color;
+  g.lineWidth = 2;
+  g.lineCap = 'square';
+  g.stroke(new Path2D('M2 13V2H13 M27 2H38V13 M38 27V38H27 M13 38H2V27'));
+  const { data } = g.getImageData(0, 0, canvas.width, canvas.height);
+  map.addImage(name, { width: canvas.width, height: canvas.height, data }, { pixelRatio: ratio });
+}
+
+const _radioHookedMaps = new WeakSet();
+function hookRadioImages(map) {
+  if (!map?.on || _radioHookedMaps.has(map)) return;
+  _radioHookedMaps.add(map);
+  map.on('styleimagemissing', (event) => {
+    if (event?.id?.startsWith(RADIO_BRACKET_PREFIX)) addRadioBracketImage(map, event.id);
   });
 }
 
-function pickedRadioStationAt(position) {
-  const scene = _viewer?.scene;
-  if (!scene || !position) return null;
+/** First live station id represented by a rendered radio feature. */
+async function stationIdFromFeature(feature) {
+  const props = feature?.properties || {};
+  if (props.cluster_id != null) {
+    const source = _map?.getSource?.(SRC_STATIONS);
+    try {
+      const leaves = await source.getClusterLeaves(props.cluster_id, Number.MAX_SAFE_INTEGER, 0);
+      for (const leaf of leaves || []) {
+        const id = String(leaf?.properties?.id || '');
+        if (_stationById.has(id)) return id;
+      }
+    } catch { /* cluster vanished with the zoom */ }
+    return null;
+  }
+  const stationId = radioStationIdFromPick({ id: props.pickId });
+  return stationId && _stationById.has(stationId) ? stationId : null;
+}
 
-  const stationFromPick = (picked) => {
-    const stationId = radioStationIdFromPick(picked);
-    return stationId && _stationById.has(stationId) ? stationId : null;
-  };
-  const primaryPick = scene.pick(position);
-  const primaryStationId = stationFromPick(primaryPick);
-  if (primaryStationId) return primaryStationId;
-  const primaryId = resolvePickId(primaryPick);
-  if (primaryId && isOwnedByOtherLayer('radio', primaryId)) return null;
+async function pickedRadioStationAt(position) {
+  const engine = _engine;
+  if (!engine?.pick || !position) return null;
 
-  if (typeof scene.drillPick === 'function') {
-    const drilled = scene.drillPick(position, 16) || [];
-    for (const picked of drilled) {
-      const stationId = stationFromPick(picked);
+  // Exact point first: a sibling-owned feature above the stations wins.
+  for (const feature of engine.pick(position.x, position.y) || []) {
+    if (RADIO_OWN_LAYERS.has(feature?.layer?.id)) break;
+    const pickedId = resolvePickId(feature) || resolvePickId({ id: feature?.properties?.pickId });
+    if (pickedId && isOwnedByOtherLayer('radio', pickedId)) return null;
+  }
+  // Then the 8 px tolerance box (the old offset probes), selection first.
+  const hits = engine.pick(position.x, position.y, {
+    layers: RADIO_PICK_LAYERS,
+    radius: RADIO_PICK_TOLERANCE_PX,
+  }) || [];
+  for (const layerId of RADIO_PICK_LAYERS) {
+    for (const feature of hits) {
+      if (feature?.layer?.id !== layerId) continue;
+      const stationId = await stationIdFromFeature(feature);
       if (stationId) return stationId;
     }
   }
+  return nearestRadioStationOnScreen(position);
+}
 
-  for (const [offsetX, offsetY] of RADIO_PICK_OFFSETS) {
-    const offsetPosition = new Cesium.Cartesian2(position.x + offsetX, position.y + offsetY);
-    const picked = scene.pick(offsetPosition);
-    const pickedId = resolvePickId(picked);
-    if (pickedId && isOwnedByOtherLayer('radio', pickedId)) continue;
-    const stationId = stationFromPick(picked);
-    if (stationId) return stationId;
+/**
+ * Screen-space fallback: the nearest filter-matching station (or the selected
+ * one) within the pick tolerance plus the marker radius. The MapLibre globe's
+ * rendered-feature query misses features away from the view center, and a
+ * cluster click resolves to its nearest member this way.
+ */
+function nearestRadioStationOnScreen(position) {
+  if (typeof _engine?.project !== 'function') return null;
+  const limit = RADIO_PICK_TOLERANCE_PX + 7;
+  let best = null;
+  let bestDistance = limit * limit;
+  const consider = (station) => {
+    const p = _engine.project(station.lon, station.lat);
+    if (!p?.visible) return;
+    const d = (p.x - position.x) ** 2 + (p.y - position.y) ** 2;
+    if (d <= bestDistance) {
+      bestDistance = d;
+      best = station.id;
+    }
+  };
+  const selected = selectedPresentationStation();
+  if (selected) consider(selected);
+  if (best) return best;
+  for (const record of _renderById.values()) {
+    if (stationMatchesRadioCategory(record.station, _filter)) consider(record.station);
   }
-  return null;
+  return best;
 }
 
 function radioPresentationAllowed() {
@@ -2537,8 +2806,7 @@ function radioPresentationAllowed() {
 
 function syncRadioLifecyclePresentation() {
   const visible = radioPresentationAllowed();
-  if (_dataSource) _dataSource.show = visible;
-  setOverlaySourceVisible(RADIO_OVERLAY_SOURCE_ID, visible);
+  setRadioMapVisible(visible);
   if (visible) {
     installInteraction();
     updateSelectionEntity();
@@ -2546,38 +2814,37 @@ function syncRadioLifecyclePresentation() {
     scheduleRadioOverlayPublish();
   } else {
     removeInteraction();
-    if (_selectedEntity && _viewer) _viewer.entities.remove(_selectedEntity);
-    _selectedEntity = null;
+    setRadioSource(SRC_SELECTED, EMPTY_FC);
+    setRadioSource(SRC_SELECTED_LABEL, EMPTY_FC);
   }
 }
 
 function installInteraction() {
-  if (!_viewer || _clickHandler) return;
+  if (!_engine?.on || _clickHandler) return;
   registerPickOwner('radio', (id) => id.startsWith(RADIO_PREFIX));
-  _clickHandler = new Cesium.ScreenSpaceEventHandler(_viewer.scene.canvas);
-  _clickHandler.setInputAction((click) => {
+  const removeClick = _engine.on('click', async (click) => {
     if (!radioPresentationAllowed()) return;
-    const stationId = pickedRadioStationAt(click.position);
-    if (!stationId) return;
+    const stationId = await pickedRadioStationAt({ x: click?.x, y: click?.y });
+    if (!stationId || !radioPresentationAllowed()) return;
     _playFallbackId = null;
     _playFallbackFocus = null;
     selectRadioStation(stationId, { autoplay: true, origin: 'user' });
     if (typeof document !== 'undefined') {
       document.dispatchEvent(new CustomEvent('gev:radio-selected', { detail: { stationId } }));
     }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-  // Polling remains bounded during flights, but a stationary camera no longer
-  // rewrites every station's visibility four times per second while voice and
-  // audio processing share the main thread.
-  _horizonTimer = setInterval(() => updateRenderVisibility({ force: false }), HORIZON_TICK_MS);
+  });
+  _clickHandler = { destroy: () => removeClick?.() };
+  // Cluster membership changes with the zoom: refresh the diagnostics once the
+  // camera settles (the old 250 ms horizon poll is not needed on MapLibre).
+  _moveEndRemover = _engine.on('moveend', () => scheduleRadioOverlayPublish()) || null;
 }
 
 function removeInteraction() {
   unregisterPickOwner('radio');
   _clickHandler?.destroy();
   _clickHandler = null;
-  if (_horizonTimer) clearInterval(_horizonTimer);
-  _horizonTimer = null;
+  _moveEndRemover?.();
+  _moveEndRemover = null;
 }
 
 /** Radio layer lifecycle implementation. */
@@ -2588,20 +2855,19 @@ export const radioLayer = {
   source: 'Radio Browser',
   updateInterval: 45 * 60 * 1000,
 
-  /** Initialize the Cesium data source and the single audio element. */
-  init(viewer) {
+  /**
+   * Attach the station sources to the shared MapLibre layer host and create
+   * the single audio element.
+   * @param {object} engine Map engine (src/maplibre/engine.js).
+   */
+  init(engine) {
     _sessionGeneration += 1;
-    _viewer = viewer;
+    _engine = engine;
     resetRadioClusterOverlayIdentities();
     installAudio();
-    if (!_dataSource) {
-      _dataSource = new Cesium.CustomDataSource('Radio stations');
-      viewer.dataSources.add(_dataSource);
-      installClusterStyling();
-    }
-    _dataSource.show = false;
-    clearOverlaySource(RADIO_OVERLAY_SOURCE_ID);
-    setOverlaySourceVisible(RADIO_OVERLAY_SOURCE_ID, false);
+    attachRadioMap(engine);
+    setRadioMapVisible(false);
+    _overlayDiagnostics = emptyRadioOverlayDiagnostics();
   },
 
   /** Show stations. Enabling or preset restoration never starts audio. */
@@ -2643,15 +2909,13 @@ export const radioLayer = {
     _cancelledTuningPresentationStation = null;
     _tuningUnavailableStationId = null;
     stopRadioPlayback({ origin: 'layer-disable' });
-    if (_dataSource) _dataSource.show = false;
-    if (_selectedEntity && _viewer) _viewer.entities.remove(_selectedEntity);
-    _selectedEntity = null;
+    setRadioMapVisible(false);
+    setRadioSource(SRC_SELECTED, EMPTY_FC);
+    setRadioSource(SRC_SELECTED_LABEL, EMPTY_FC);
     if (_overlayPublishTimer) clearTimeout(_overlayPublishTimer);
     _overlayPublishTimer = null;
     resetRadioClusterOverlayIdentities();
     _overlayDiagnostics = emptyRadioOverlayDiagnostics();
-    clearOverlaySource(RADIO_OVERLAY_SOURCE_ID);
-    setOverlaySourceVisible(RADIO_OVERLAY_SOURCE_ID, false);
     emitState();
   },
 
@@ -2789,11 +3053,12 @@ export const radioLayer = {
     if (_audio) _audio.volume = DEFAULT_RADIO_VOLUME;
     _audio = null;
     _userVolume = DEFAULT_RADIO_VOLUME;
-    _removeClusterListener?.();
-    _removeClusterListener = null;
-    if (_dataSource && _viewer) _viewer.dataSources.remove(_dataSource, true);
-    _dataSource = null;
-    clearOverlaySource(RADIO_OVERLAY_SOURCE_ID);
+    for (const sourceId of [SRC_STATIONS, SRC_LABELS, SRC_SELECTED, SRC_SELECTED_LABEL]) {
+      setRadioSource(sourceId, EMPTY_FC);
+    }
+    setRadioMapVisible(false);
+    _map = null;
+    _host = null;
     _stations = [];
     _acceptedCatalogSnapshot = EMPTY_ACCEPTED_CATALOG_SNAPSHOT;
     _stationById.clear();
@@ -2801,7 +3066,6 @@ export const radioLayer = {
     _filter = DEFAULT_RADIO_FILTER;
     _renderById.clear();
     resetRadioClusterOverlayIdentities();
-    _lastHorizonCameraPosition = null;
     _horizonScanCount = 0;
     _selectedId = null;
     _tuningPreviewId = null;
@@ -2816,7 +3080,7 @@ export const radioLayer = {
     _error = null;
     _updatedAt = null;
     _managerLifecyclePresentation = null;
-    _viewer = null;
+    _engine = null;
     emitState();
     _listeners.clear();
     _playbackControlListeners.clear();
@@ -2872,5 +3136,10 @@ export const radioLayer = {
   setVolume: setRadioVolume,
   setVoiceDucked: setRadioVoiceDucking,
 };
+
+/** Test-only: attach the layer to a fake map/host pair (no WebGL in node). */
+export function _attachRadioMapForTest(engine, host) {
+  attachRadioMap(engine, host);
+}
 
 export default radioLayer;

@@ -28,7 +28,7 @@
  * Exits non-zero on any FAIL. Does not commit anything.
  */
 
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,26 +45,7 @@ const getOpt = (name, dflt) => {
 const APP_URL = getOpt('--url', 'http://localhost:4410');
 const HEADFUL = argv.includes('--headful');
 
-const CHROME_EXECUTABLE_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  // Prefer puppeteer's version-pinned Chrome-for-Testing over the system
-  // Chrome: /Applications auto-updates underneath the harnesses, and its
-  // software-GL behavior shifts across majors (system Chrome 150 blew the
-  // tile-gated drain budget under SwiftShader on 2026-07-30 — six
-  // false-negative qa-cctv-v2 runs against a healthy build). A deterministic
-  // pinned browser beats the newest one for regression harnesses.
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
 
-function findChromeExecutable() {
-  for (const candidate of CHROME_EXECUTABLE_CANDIDATES) {
-    try { if (fs.existsSync(candidate)) return candidate; } catch { /* ignore */ }
-  }
-  return null;
-}
 
 const results = [];
 function record(name, ok, detail) {
@@ -81,15 +62,10 @@ async function settleTraffic(page, view, { minCount = 1, timeoutS = 30 } = {}) {
     const dm = gev.dataManager;
     await dm.setEnabled('traffic', true);
     const mod = dm.layers.get('traffic').module;
-    const ell = gev.viewer.scene.globe.ellipsoid;
-    const d2r = Math.PI / 180;
-    // The app's intro flyTo animation clobbers a setView issued mid-flight —
-    // cancel any active tween before teleporting.
-    try { gev.viewer.camera.cancelFlight(); } catch { /* no flight active */ }
-    gev.viewer.camera.setView({
-      destination: ell.cartographicToCartesian({ longitude: v.lon * d2r, latitude: v.lat * d2r, height: v.height }),
-      orientation: { heading: (v.heading || 0) * d2r, pitch: (v.pitch ?? -90) * d2r, roll: 0 },
-    });
+    // The app's intro flight clobbers a jump issued mid-flight — cancel any
+    // active tween before teleporting.
+    gev.engine.cancelFlight();
+    gev.engine.setCameraView({ lon: v.lon, lat: v.lat, alt: v.height, heading: v.heading || 0, pitch: v.pitch ?? -90, roll: 0 });
     let s = null;
     for (let i = 0; i < tS; i++) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -119,21 +95,11 @@ async function main() {
   }
 
   fs.mkdirSync(SHOTS_DIR, { recursive: true });
-  const browser = await puppeteer.launch({
-    headless: HEADFUL ? false : 'new',
-    ...(findChromeExecutable() ? { executablePath: findChromeExecutable() } : {}),
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
-      '--disable-dev-shm-usage', '--disable-web-security',
-      '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-      '--window-size=1440,900',
-    ],
-  });
+  const { browser, page: firstPage } = await launchQaBrowser({ headful: HEADFUL, viewport: { width: 1440, height: 900 } });
 
   let exitCode = 0;
   try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1440, height: 900 });
+    const page = firstPage;
 
     // Track flow-tile requests + traffic console lines for (ii)/(iii)/(v).
     const flowRequests = [];
@@ -147,10 +113,10 @@ async function main() {
     });
 
     console.log('Loading app...');
-    await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(appUrl(APP_URL), { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForFunction(
-      () => window.__godsEyeView?.viewer && window.__godsEyeView?.dataManager,
-      { timeout: 60000 },
+      () => window.__godsEyeView?.engine && window.__godsEyeView?.dataManager,
+      { timeout: 120000 },
     );
     await sleep(1500);
 
@@ -187,13 +153,8 @@ async function main() {
         const mod = gev.dataManager.layers.get('traffic').module;
         const before = mod.getStats().lastUpdate;
         mod.setParams({ uncoveredRoads: 'hide' });
-        const ell = gev.viewer.scene.globe.ellipsoid;
-        const d2r = Math.PI / 180;
         // Shift far enough to defeat the overlap gate and force a re-render.
-        gev.viewer.camera.setView({
-          destination: ell.cartographicToCartesian({ longitude: -98.51 * d2r, latitude: 29.435 * d2r, height: 2800 }),
-          orientation: { heading: 0.4, pitch: -1.25, roll: 0 },
-        });
+        gev.engine.setCameraView({ lon: -98.51, lat: 29.435, alt: 2800, heading: 22.9, pitch: -71.6, roll: 0 });
         // Poll for a NEW render (lastUpdate changes) — the pre-shift stats
         // would otherwise satisfy a count>0 check instantly.
         let s = null;
@@ -267,8 +228,8 @@ async function main() {
     });
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForFunction(
-      () => window.__godsEyeView?.viewer && window.__godsEyeView?.dataManager,
-      { timeout: 60000 },
+      () => window.__godsEyeView?.engine && window.__godsEyeView?.dataManager,
+      { timeout: 120000 },
     );
     await sleep(1500);
     let simStats = await settleTraffic(page, { lon: -98.4936, lat: 29.4241, height: 3000 }, { minCount: 100, timeoutS: 45 });

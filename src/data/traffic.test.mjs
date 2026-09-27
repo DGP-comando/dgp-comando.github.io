@@ -151,3 +151,59 @@ test('the shipped layer boots keyless-honest before any status check', () => {
   assert.ok(!LIVE_CLAIM.test(stats.loadingLabel), `boot label implies live data: ${stats.loadingLabel}`);
   assert.equal(layerFeedState(stats), 'fallback');
 });
+
+// ─── MapLibre port: road parsing and query shape (pure) ─────────────────────
+
+test('Overpass query keeps the major/full highway filters and inline geometry', async () => {
+  const { buildOverpassQuery } = await import('./traffic.js');
+  const major = buildOverpassQuery(-25.44, -49.28, -25.42, -49.26, { majorOnly: true, timeoutSec: 12 });
+  assert.match(major, /^\[out:json\]\[timeout:12\];/);
+  assert.match(major, /\^\(motorway\|trunk\|primary\|secondary\)\$/);
+  assert.match(major, /\(-25\.44,-49\.28,-25\.42,-49\.26\)/);
+  assert.match(major, /out geom qt;$/);
+  const full = buildOverpassQuery(0, 0, 1, 1);
+  assert.match(full, /residential\|unclassified/);
+});
+
+test('parseRoads builds lon/lat polylines with metre segment lengths and one-way direction', async () => {
+  const { parseRoads } = await import('./traffic.js');
+  const roads = parseRoads({
+    elements: [
+      {
+        type: 'way',
+        id: 1,
+        tags: { highway: 'primary', oneway: 'yes', name: 'Av. Sete de Setembro' },
+        geometry: [{ lat: -25.44, lon: -49.28 }, { lat: -25.44, lon: -49.27 }, { lat: -25.43, lon: -49.27 }],
+      },
+      { type: 'way', id: 2, tags: { highway: 'residential', oneway: '-1' }, geometry: [{ lat: 0, lon: 0 }, { lat: 0, lon: 0.001 }] },
+      { type: 'way', id: 3, tags: { highway: 'tertiary' }, geometry: [{ lat: 0, lon: 0 }] },
+      { type: 'node', id: 4 },
+    ],
+  });
+  assert.equal(roads.length, 2, 'single-vertex ways and non-ways are dropped');
+  const [a, b] = roads;
+  assert.deepEqual(a.coords[0], [-49.28, -25.44]);
+  assert.equal(a.type, 'primary');
+  assert.equal(a.oneway, 1);
+  assert.equal(a.name, 'Av. Sete de Setembro');
+  assert.equal(a.segmentDist.length, 2);
+  // 0.01° of longitude at 25.44° S ≈ 1005 m; 0.01° of latitude ≈ 1112 m.
+  assert.ok(Math.abs(a.segmentDist[0] - 1005) < 10, `lon segment ${a.segmentDist[0]}`);
+  assert.ok(Math.abs(a.segmentDist[1] - 1112) < 10, `lat segment ${a.segmentDist[1]}`);
+  assert.equal(b.oneway, -1);
+  assert.equal(b.type, 'residential');
+  assert.deepEqual(parseRoads(null), []);
+});
+
+test('long ways are sub-sampled but keep their true endpoint', async () => {
+  const { parseRoads } = await import('./traffic.js');
+  const geometry = Array.from({ length: 401 }, (_, i) => ({ lat: 0, lon: i * 0.0001 }));
+  const [road] = parseRoads({ elements: [{ type: 'way', id: 9, tags: { highway: 'trunk' }, geometry }] });
+  assert.ok(road.coords.length <= 82, `coords ${road.coords.length}`);
+  assert.deepEqual(road.coords.at(-1), [0.04, 0]);
+});
+
+test('detection objects carry a neutral {lon, lat} position, never a Cesium type', () => {
+  // Disabled layer: no objects (and no throw) — the detection loop polls it.
+  assert.deepEqual(trafficLayer.getDetectableObjects({ maxCount: 10 }), []);
+});

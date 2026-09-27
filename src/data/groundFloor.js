@@ -73,7 +73,7 @@ export function floorAltitudeM(altM, groundM, liftM = GROUND_FLOOR_LIFT_M) {
  * stale-feed grace. Both drift the rendered point horizontally away from the
  * fix whose cell supplied the height — across a graded apron (KAUS spans
  * ~119–140 m ellipsoidal) a taxiing sprite therefore renders under the mesh it
- * has drifted over (measured −15.5 m; `scripts/qa-floor-verify.mjs`).
+ * has drifted over (measured −15.5 m; `scripts/qa-floor-verify.mjs`, aposentado — ver scripts/APOSENTADOS.md).
  *
  * This is the same "never below the visible surface" rule applied at the
  * displayed coordinate instead of the fix coordinate. It returns `null` rather

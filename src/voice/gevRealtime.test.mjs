@@ -7,7 +7,7 @@ import { DataLayerManager } from '../data/manager.js';
 import { controlRadio, createGevActionRunner } from './gevActions.js';
 import {
   computeDownscale,
-  renderFreshCesiumFrame,
+  renderFreshMapFrame,
   estimateDataUrlBytes,
   GevRealtimeController,
   gateVoiceVisualizerLevel,
@@ -2520,12 +2520,12 @@ test('hidden document yields no fresh frame — capture must not label a stale c
   const originalDocument = globalThis.document;
   let requested = 0;
   const scene = {
-    postRender: { addEventListener() { return () => {}; } },
+    on() { return () => {}; },
     requestRender() { requested += 1; },
   };
   try {
     globalThis.document = { hidden: true };
-    const fresh = await renderFreshCesiumFrame({ scene });
+    const fresh = await renderFreshMapFrame(scene);
     assert.equal(fresh, false, 'hidden capture reports non-fresh');
     assert.equal(requested, 0, 'no secret render restart while hidden');
   } finally {
@@ -2539,10 +2539,10 @@ test('visible document with a rendering scene reports a fresh frame', async () =
     globalThis.document = { hidden: false };
     let fire = null;
     const scene = {
-      postRender: { addEventListener(listener) { fire = listener; return () => { fire = null; }; } },
+      on(type, listener) { if (type === 'render') fire = listener; return () => { fire = null; }; },
       requestRender() { queueMicrotask(() => fire?.()); },
     };
-    const fresh = await renderFreshCesiumFrame({ scene });
+    const fresh = await renderFreshMapFrame(scene);
     assert.equal(fresh, true);
   } finally {
     globalThis.document = originalDocument;
@@ -2556,10 +2556,10 @@ test('a tab switch during the bounded render wait invalidates freshness', async 
     globalThis.document = doc;
     let fire = null;
     const scene = {
-      postRender: { addEventListener(listener) { fire = listener; return () => { fire = null; }; } },
+      on(type, listener) { if (type === 'render') fire = listener; return () => { fire = null; }; },
       requestRender() { doc.hidden = true; queueMicrotask(() => fire?.()); },
     };
-    const fresh = await renderFreshCesiumFrame({ scene });
+    const fresh = await renderFreshMapFrame(scene);
     assert.equal(fresh, false, 'freshness rechecked after the await');
   } finally {
     globalThis.document = originalDocument;

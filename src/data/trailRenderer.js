@@ -1,129 +1,204 @@
 /**
  * @module trailRenderer
- * @description Shared track-history renderer (PRD WS-F F4; rebuilt round 6,
- * 2026-07-06).
+ * @description Rastro (histórico de posições) compartilhado pelas camadas de
+ * objetos móveis (voos civis, militares, AIS).
  *
- * One trail = one ENTITY polyline. Round 6 replaced the faded per-vertex
- * Primitive for two product invariants from the field:
- *  - "the line must ALWAYS be visible": the Primitive's depthFailAppearance
- *    did not reliably render segments below the photoreal mesh — entity
- *    polylines with `depthFailMaterial` DO (in-repo proof: CCTV's frustum
- *    wireframes read through geometry with exactly this), so occluded
- *    segments now draw dimmed instead of vanishing.
- *  - "show actual tracks, don't style them too much": the tail-fade is gone;
- *    the whole history renders at one readable alpha (dimmer where it passes
- *    behind/below geometry).
+ * MIGRAÇÃO MAPLIBRE (2026-09): um rastro = UMA fonte GeoJSON + UM layer `line`
+ * no mapa do motor (src/maplibre/engine.js), no lugar da entidade polyline do
+ * Cesium. A regra de produto continua: o traço inteiro com uma opacidade
+ * legível (0,85), sem esmaecer a cauda. Em 2D não existe "segmento abaixo da
+ * malha fotorrealista", então a `depthFailMaterial` (0,4) não tem equivalente.
+ * Segmentos longos são desenhados como geodésicas: o MapLibre projeta cada
+ * segmento reto em Mercator, então pontos intermediários são inseridos em
+ * trechos acima de ~50 km (o equivalente ao ArcType.GEODESIC do Cesium).
  *
- * Trails update at poll cadence (~15-60 s) plus once on history backfill, so
- * assigning a fresh positions array per update is cheap. `allowPicking` has
- * no entity equivalent; the polyline entity is excluded from clicks by never
- * carrying a pick id the layers' click handlers resolve.
+ * Assinatura mantida: `createTrail(engine, {color, width})` — o primeiro
+ * argumento é o `engine` (ou um `maplibregl.Map`; aceita-se também qualquer
+ * objeto com `.map`). As posições de `setPositions` são objetos NEUTROS
+ * `{lon, lat, alt?}` (também aceita `[lon, lat, alt?]` e ECEF `{x, y, z}` por
+ * compatibilidade com código ainda não portado).
+ *
+ * O layer não é interativo (não entra em `interactive` de nenhuma camada), então
+ * clicar num rastro nunca seleciona nem desseleciona nada.
  */
-import * as Cesium from 'cesium';
-import { registerPickOwner } from './pickRegistry.js';
+import { toGeo } from './motionModel.js';
 
-// Round 6: trail ENTITIES are pickable (the old Primitive had
-// allowPicking:false). A trail hugs its aircraft, so an unclaimed pick would
-// read as "empty space" in every layer's click handler and deselect the very
-// plane being tracked. Claiming the 'gev-trail:' id namespace makes
-// isOwnedByOtherLayer() true for every layer — clicking a trail is a no-op
-// everywhere. Registered once at module load; the predicate is pure.
-registerPickOwner('trails', (pickedId) => String(pickedId).startsWith('gev-trail:'));
-
-/** @type {number} Uniquifier for trail entity ids (Cesium requires unique entity ids). */
+/** @type {number} Uniquifier for trail source/layer ids. */
 let _trailSeq = 0;
 
-/** @constant {number} Alpha where the trail passes the depth test. */
-const TRAIL_ALPHA = 0.85;
-/** @constant {number} Alpha where the trail is behind/below scene geometry —
- *  still visible, but readable as occluded. */
-const TRAIL_OCCLUDED_ALPHA = 0.4;
-/** @constant {number} Squared distance (m^2) below which consecutive points are merged. */
-const MIN_SEGMENT_DISTANCE_SQ = 0.01;
+/** @constant {number} Alpha of the trail line. */
+export const TRAIL_ALPHA = 0.85;
+/** @constant {number} Degrees below which consecutive points are merged (~1 cm). */
+const MIN_SEGMENT_DEG = 1e-7;
+/** @constant {number} Segments longer than this (degrees of arc, ~220 km) are densified. */
+const GEODESIC_STEP_DEG = 2;
+
+const DEG = Math.PI / 180;
+
+/** Interpolação na esfera (slerp) entre dois pontos lon/lat, `n` passos. */
+function greatCircleInsert(a, b, out) {
+  const p1 = a[1] * DEG;
+  const l1 = a[0] * DEG;
+  const p2 = b[1] * DEG;
+  const l2 = b[0] * DEG;
+  const d = 2 * Math.asin(Math.sqrt(
+    Math.sin((p2 - p1) / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin((l2 - l1) / 2) ** 2,
+  ));
+  const n = Math.ceil(d / DEG / GEODESIC_STEP_DEG);
+  if (!(d > 0) || n < 2) return;
+  for (let i = 1; i < n; i++) {
+    const f = i / n;
+    const A = Math.sin((1 - f) * d) / Math.sin(d);
+    const B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(p1) * Math.cos(l1) + B * Math.cos(p2) * Math.cos(l2);
+    const y = A * Math.cos(p1) * Math.sin(l1) + B * Math.cos(p2) * Math.sin(l2);
+    const z = A * Math.sin(p1) + B * Math.sin(p2);
+    let lon = Math.atan2(y, x) / DEG;
+    // Continuidade na antimeridiana: segue o lado do ponto anterior.
+    const prev = out[out.length - 1][0];
+    while (lon - prev > 180) lon -= 360;
+    while (lon - prev < -180) lon += 360;
+    out.push([lon, Math.atan2(z, Math.hypot(x, y)) / DEG]);
+  }
+}
 
 /**
- * Create an always-visible polyline trail bound to a viewer.
- * @param {Cesium.Viewer} viewer - Viewer whose entity collection owns the trail.
+ * Normaliza uma lista de posições (qualquer formato) em coordenadas GeoJSON,
+ * removendo duplicatas consecutivas e densificando segmentos longos.
+ * Exportada para teste.
+ * @param {Array<object>} positions
+ * @returns {number[][]} [[lon, lat], ...] (vazio quando < 2 pontos distintos)
+ */
+export function trailCoordinates(positions) {
+  const out = [];
+  for (const position of Array.isArray(positions) ? positions : []) {
+    const g = toGeo(position);
+    if (!g) continue;
+    const last = out[out.length - 1];
+    let lon = g.lon;
+    if (last) {
+      while (lon - last[0] > 180) lon -= 360;
+      while (lon - last[0] < -180) lon += 360;
+      if (Math.abs(lon - last[0]) < MIN_SEGMENT_DEG && Math.abs(g.lat - last[1]) < MIN_SEGMENT_DEG) continue;
+      greatCircleInsert(last, [lon, g.lat], out);
+    }
+    out.push([lon, g.lat]);
+  }
+  return out.length >= 2 ? out : [];
+}
+
+function mapOf(target) {
+  if (!target) return null;
+  if (typeof target.addLayer === 'function') return target;
+  return target.map ?? null;
+}
+
+/**
+ * Create an always-visible polyline trail bound to the map engine.
+ * @param {object} engine - `engine` do app (ou um maplibregl.Map).
  * @param {object} options - Trail options.
  * @param {string} options.color - CSS color string for the trail hue.
- * @param {number} [options.width=2.5] - Polyline width in pixels.
- * @returns {{setPositions: function(Cesium.Cartesian3[]): void, setVisible: function(boolean): void, clear: function(): void, destroy: function(): void}}
- *   Trail handle: setPositions replaces the geometry, setVisible temporarily
- *   hides it without discarding history, clear empties it, and destroy removes
- *   the entity permanently.
+ * @param {number} [options.width=2.5] - Line width in pixels.
+ * @returns {{setPositions: function(Array<object>): void, setVisible: function(boolean): void,
+ *   clear: function(): void, destroy: function(): void, id: string, getCoordinates: function(): number[][]}}
  */
-export function createTrail(viewer, { color, width = 2.5 }) {
-  const baseColor = Cesium.Color.fromCssColorString(color);
-  /** @type {Cesium.Cartesian3[]} Current deduped positions (owned copy). */
-  let current = [];
+export function createTrail(engine, { color, width = 2.5 } = {}) {
+  const seq = ++_trailSeq;
+  const sourceId = `dg-trail-${seq}`;
+  const layerId = `dg-trail-${seq}-line`;
+  let coords = [];
   let destroyed = false;
   let visible = true;
-  /** @type {Cesium.Entity|null} */
-  let entity = null;
+  let added = false;
 
-  function ensureEntity() {
-    if (entity || destroyed || !viewer || viewer.isDestroyed()) return;
-    entity = viewer.entities.add({
-      id: `gev-trail:${++_trailSeq}`,
-      show: visible,
-      polyline: {
-        // CallbackProperty so a positions swap never rebuilds the entity —
-        // Cesium re-reads on change; `false` marks it non-constant.
-        positions: new Cesium.CallbackProperty(() => current, false),
-        width,
-        material: baseColor.withAlpha(TRAIL_ALPHA),
-        // The locked rule (round 6): a segment below the photoreal
-        // mesh renders dimmed — it must never disappear into the ground.
-        depthFailMaterial: baseColor.withAlpha(TRAIL_OCCLUDED_ALPHA),
-        // Round 8: NONE draws straight 3D chords between waypoints — over a
-        // sparse trans-oceanic trace a single segment spans hundreds of km
-        // and tunnels through the planet. GEODESIC subdivides each segment
-        // along the curved surface (heights interpolated), so long legs hug
-        // the globe instead of chording through it.
-        arcType: Cesium.ArcType.GEODESIC,
-      },
-    });
+  const data = () => ({
+    type: 'FeatureCollection',
+    features: coords.length >= 2
+      ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }]
+      : [],
+  });
+
+  function ensureLayer() {
+    const map = mapOf(engine);
+    if (!map || destroyed) return null;
+    try {
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, { type: 'geojson', data: data() });
+      }
+      if (!map.getLayer(layerId)) {
+        // Faixa das linhas do anfitrião (sob pontos e rótulos) quando existir.
+        const before = map.getLayer('dg-slot-line') ? 'dg-slot-line' : undefined;
+        map.addLayer({
+          id: layerId,
+          type: 'line',
+          source: sourceId,
+          layout: { 'line-cap': 'round', 'line-join': 'round', visibility: visible ? 'visible' : 'none' },
+          paint: { 'line-color': color || '#ffffff', 'line-width': width, 'line-opacity': TRAIL_ALPHA },
+        }, before);
+      }
+      added = true;
+      return map;
+    } catch {
+      // Estilo ainda carregando (troca de mapa base): tenta de novo no próximo setPositions.
+      return null;
+    }
+  }
+
+  function push() {
+    const map = ensureLayer();
+    if (!map) return;
+    try { map.getSource(sourceId)?.setData(data()); } catch { /* estilo trocando */ }
   }
 
   return {
+    id: layerId,
+    sourceId,
     /**
      * Replace the trail geometry with a chronological position list
      * (oldest first). Fewer than 2 distinct positions clears the trail.
-     * @param {Cesium.Cartesian3[]} cartesians - Positions, oldest -> newest.
+     * @param {Array<{lon:number, lat:number, alt?:number}>} positions
      */
-    setPositions(cartesians) {
-      if (destroyed || !viewer || viewer.isDestroyed()) return;
-      // Drop consecutive near-duplicates: zero-length segments add nothing.
-      const positions = [];
-      for (const position of Array.isArray(cartesians) ? cartesians : []) {
-        if (!position) continue;
-        const last = positions[positions.length - 1];
-        if (last && Cesium.Cartesian3.distanceSquared(last, position) < MIN_SEGMENT_DISTANCE_SQ) continue;
-        positions.push(position);
-      }
-      current = positions.length >= 2 ? positions : [];
-      ensureEntity();
+    setPositions(positions) {
+      if (destroyed) return;
+      coords = trailCoordinates(positions);
+      push();
     },
 
     /** Temporarily hide/show the trail without discarding accumulated history. */
     setVisible(nextVisible) {
       visible = nextVisible !== false;
-      if (entity) entity.show = visible;
+      const map = mapOf(engine);
+      if (added && map?.getLayer(layerId)) {
+        try { map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none'); } catch { /* */ }
+      }
     },
 
-    /** Empty the trail without removing the entity (cheap re-arm). */
+    /** Empty the trail without removing the layer (cheap re-arm). */
     clear() {
-      current = [];
+      coords = [];
+      if (added) push();
     },
 
-    /** Remove the trail entity permanently (layer disable/teardown). */
+    /** Coordenadas atuais [[lon, lat], ...] (teste e depuração). */
+    getCoordinates() {
+      return coords.map((c) => c.slice());
+    },
+
+    get visible() {
+      return visible;
+    },
+
+    /** Remove the layer and source permanently (layer disable/teardown). */
     destroy() {
       destroyed = true;
-      current = [];
-      if (entity && viewer && !viewer.isDestroyed()) {
-        try { viewer.entities.remove(entity); } catch { /* torn down */ }
-      }
-      entity = null;
+      coords = [];
+      const map = mapOf(engine);
+      if (!map) return;
+      try {
+        if (map.getLayer(layerId)) map.removeLayer(layerId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+      } catch { /* mapa destruído */ }
+      added = false;
     },
   };
 }

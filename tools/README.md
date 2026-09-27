@@ -1,6 +1,6 @@
 # Tools
 
-CLI scripts for fetching, rendering, and reprojecting geospatial imagery. All tools read the Google Maps API key from `.env` automatically.
+CLI scripts for fetching and reprojecting geospatial imagery (Google satellite tiles and Street View). They are standalone helpers, independent of the app's map engine. All tools read the Google Maps API key from `.env` automatically.
 
 Output files go to `output/` by default (gitignored).
 
@@ -127,38 +127,9 @@ Reports horizontal, vertical, and diagonal FOV plus equivalent focal length.
 
 ---
 
-## cesium-render.mjs
+## Retired: cesium-render.mjs
 
-Renders a CesiumJS 3D view to JPEG via headless Chromium with Google Photorealistic 3D tiles. Requires SwiftShader (no GPU).
-
-```sh
-# Look-at mode: camera looks at a target point from above
-node tools/cesium-render.mjs --lookat-lat 30.266476 --lookat-lon -97.73719 --heading 180 --pitch -30 --height 25
-
-# Top-down view at 80m
-node tools/cesium-render.mjs --lookat-lat 30.266476 --lookat-lon -97.73719 --pitch -90 --height 80 --fov 90
-
-# 2K output
-node tools/cesium-render.mjs --lookat-lat 30.266476 --lookat-lon -97.73719 --heading 180 --pitch -30 --height 25 --width 2560 --height-px 1440
-
-# Direct mode: camera placed at coordinates
-node tools/cesium-render.mjs --lat 30.266476 --lon -97.73719 --heading 270 --pitch -15 --height 8
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--lat/--lon` | — | Camera position (direct mode) |
-| `--lookat-lat/--lookat-lon` | — | Target to look at (lookat mode) |
-| `--heading` | 0 | Compass heading |
-| `--pitch` | -10 | Camera pitch (must be negative in lookat mode) |
-| `--height` | 8 | Meters above ground |
-| `--fov` | 60 | Vertical field of view |
-| `--width` | 1280 | Image width |
-| `--height-px` | 720 | Image height |
-| `--sse` | 2 | Screen-space error (lower = sharper, slower) |
-| `--timeout` | 30 | Max wait in seconds |
-
-Uses progressive SSE refinement and automatic ground-height sampling. Street-level views are limited by Google's photogrammetry tile resolution.
+`cesium-render.mjs` / `cesium-render.html` rendered a CesiumJS view with Google Photorealistic 3D Tiles in headless Chromium. The app no longer uses CesiumJS (it runs on MapLibre GL JS, see `docs/MIGRACAO_MAPLIBRE.md`) and has no 3D-tiles view to reproduce, so the tool was removed. For a screenshot of the app itself, drive the dev server with the QA harness helpers in `scripts/lib/qaBrowser.mjs`.
 
 ---
 
@@ -176,7 +147,4 @@ node tools/pano-pinhole.mjs --input output/panorama_30.266476_-97.73719.jpg --al
 
 # 4. Also grab the Street View static API versions for comparison
 node tools/streetview-headings.mjs --lat 30.266476 --lon -97.73719
-
-# 5. Render a 3D view of the same location from above
-node tools/cesium-render.mjs --lookat-lat 30.266476 --lookat-lon -97.73719 --pitch -90 --height 50 --fov 90 --width 2560 --height-px 1440
 ```

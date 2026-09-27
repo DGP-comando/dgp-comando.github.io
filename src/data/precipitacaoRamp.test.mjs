@@ -128,30 +128,24 @@ test('a camada está registrada, com token próprio, e o registro continua váli
 });
 
 test('a camada de chuva fica abaixo das partículas de vento, e as duas dividem uma requisição', () => {
-  // Estas duas invariantes são o "associada à camada de vento" do pedido, e
-  // cada uma mora num arquivo diferente — então elas são fixadas juntas, ou
-  // mexer numa sozinha inverte a leitura (chuva por cima do vento) ou dobra o
-  // tráfego contra a Open-Meteo.
-  const precip = fs.readFileSync(path.join(ROOT, 'src', 'data', 'datageoPrecipitacao.js'), 'utf8');
-  const ventos = fs.readFileSync(path.join(ROOT, 'src', 'data', 'datageoVentos.js'), 'utf8');
+  // Estas duas invariantes são o "associada à camada de vento" do pedido. No
+  // MapLibre a chuva é um raster DENTRO do mapa e o vento um canvas 2D inserido
+  // logo depois do canvas do mapa (src/maplibre/windParticles.js), então a
+  // ordem sai da estrutura do DOM; as duas grades vêm da mesma requisição.
+  const grades = fs.readFileSync(path.join(ROOT, 'src', 'maplibre', 'layers', 'gradesClima.js'), 'utf8');
+  const particles = fs.readFileSync(path.join(ROOT, 'src', 'maplibre', 'windParticles.js'), 'utf8');
   const client = fs.readFileSync(path.join(ROOT, 'src', 'data', 'datageoClient.js'), 'utf8');
 
-  const fieldHeight = Number(/PRECIP_FIELD_HEIGHT_M = (\d+)/.exec(precip)?.[1]);
-  const particleHeight = Number(/particleHeight: (\d+)/.exec(ventos)?.[1]);
-  assert.ok(Number.isFinite(fieldHeight) && Number.isFinite(particleHeight));
-  assert.ok(fieldHeight > 0, 'o plano precisa ficar acima da superfície do globo');
-  assert.ok(fieldHeight < particleHeight,
-    `a chuva (${fieldHeight} m) tem que ficar abaixo do vento (${particleHeight} m)`);
+  assert.match(grades, /type: 'raster',\s+source: 'dg-precipitacao'/, 'a chuva é um raster do próprio mapa');
+  assert.match(particles, /insertBefore\(c, mapCanvas\.nextSibling\)/,
+    'o canvas do vento fica por cima do canvas do mapa (e da chuva)');
+  assert.match(particles, /pointer-events:none/, 'o vento não pode roubar o hover da chuva');
 
   // Uma requisição para as duas: a precipitação viaja na mesma lista `current=`.
   assert.match(client, /current=wind_speed_10m,wind_direction_10m,precipitation/);
   assert.match(client, /export function fetchWeatherGrid\(\)/);
+  assert.match(client, /export function fetchWindGrid\(\) \{\s+return fetchWeatherGrid\(\);/);
   assert.match(client, /_weatherGridCache/, 'sem memoização as duas camadas dobrariam o tráfego');
-  assert.match(precip, /fetchWeatherGrid/);
-
-  // E o campo é estático: segurar o render governor como o vento faz queimaria
-  // bateria à toa.
-  assert.doesNotMatch(precip, /holdContinuousRender/,
-    'um campo estático não pode prender o render governor em contínuo');
-  assert.match(precip, /governorRequestRender/);
+  assert.match(grades, /await fetchWeatherGrid\(\)/);
+  assert.match(grades, /await fetchWindGrid\(\)/);
 });

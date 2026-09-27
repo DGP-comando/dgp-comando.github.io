@@ -22,6 +22,22 @@ function assertClaimsBefore(block, mutation, label) {
   assert.ok(claimIndex < mutationIndex, `${label} must claim before mutation`);
 }
 
+/**
+ * Adapta um stub no formato antigo (camera.flyTo/setView, scene.requestRender)
+ * ao motor MapLibre que o ShareLinkManager usa agora (flyToCamera,
+ * setCameraView, requestRender, getCameraView, on).
+ */
+function asEngine(v = {}) {
+  return {
+    on: () => () => {},
+    getCameraView: () => ({ lat: 0, lon: 0, alt: 1000, heading: 0, pitch: -90, roll: 0 }),
+    flyToCamera(view, options = {}) { v.camera?.flyTo?.({ view, ...options }); },
+    setCameraView(view) { v.camera?.setView?.(view); },
+    requestRender() { v.scene?.requestRender?.(); },
+    cancelFlight() {},
+  };
+}
+
 function makeManager(hash = '') {
   globalThis.window = { location: { hash, href: `http://localhost/${hash}` } };
   globalThis.history = {
@@ -29,16 +45,7 @@ function makeManager(hash = '') {
       window.location.hash = nextHash;
     },
   };
-  const viewer = {
-    camera: {
-      changed: { addEventListener() {} },
-      positionCartographic: { latitude: 0, longitude: 0, height: 1000 },
-      heading: 0,
-      pitch: -Math.PI / 2,
-      roll: 0,
-    },
-  };
-  return new ShareLinkManager(viewer);
+  return new ShareLinkManager(asEngine());
 }
 
 function installClipboard(writeText) {
@@ -332,7 +339,7 @@ test('serialization writes only in-band sce values, and omits an adaptive one', 
     'adaptive stays ABSENT so a shared link never freezes the ramp');
 });
 
-test('share-link restore forces a final stationary render for Google 3D Tiles', () => {
+test('share-link restore re-applies the exact final pose and forces a render', () => {
   const calls = { flyTo: null, setView: null, renders: 0 };
   const viewer = {
     camera: {
@@ -346,7 +353,7 @@ test('share-link restore forces a final stationary render for Google 3D Tiles', 
     },
     scene: { requestRender() { calls.renders += 1; } },
   };
-  const manager = new ShareLinkManager(viewer);
+  const manager = new ShareLinkManager(asEngine(viewer));
   manager.applyState({
     lat: 40.7669,
     lon: -73.9909,
@@ -359,10 +366,9 @@ test('share-link restore forces a final stationary render for Google 3D Tiles', 
   assert.ok(calls.flyTo, 'restore must start a camera flight');
   assert.equal(typeof calls.flyTo.complete, 'function');
   calls.flyTo.complete();
-  assert.deepEqual(calls.setView, {
-    destination: calls.flyTo.destination,
-    orientation: calls.flyTo.orientation,
-  });
+  // Ao fim do voo a pose final é reaplicada exatamente (setCameraView).
+  assert.deepEqual(calls.setView, calls.flyTo.view);
+  assert.deepEqual(calls.setView, { lat: 40.7669, lon: -73.9909, alt: 396, heading: 206, pitch: -22, roll: 0 });
   assert.equal(calls.renders, 1);
 });
 
@@ -375,7 +381,7 @@ test('newer navigation suppresses delayed share camera while non-camera state st
       flyTo() { flights += 1; },
     },
   };
-  const manager = new ShareLinkManager(viewer, {
+  const manager = new ShareLinkManager(asEngine(viewer), {
     onRestore: (state) => { restored = state; },
     isNavigationCurrent: () => false,
   });
@@ -620,7 +626,7 @@ test('share apply completion waits for both callback work and camera settlement'
     },
     scene: { requestRender() {} },
   };
-  const manager = new ShareLinkManager(viewer, { onRestore: () => restoreGate });
+  const manager = new ShareLinkManager(asEngine(viewer), { onRestore: () => restoreGate });
   let settled = false;
   const applying = manager.applyState({
     lat: 40, lon: -74, alt: 500, heading: 0, pitch: -30, roll: 0,
@@ -649,7 +655,7 @@ test('a later navigation prevents share completion from resetting the final pose
     },
     scene: { requestRender() {} },
   };
-  const manager = new ShareLinkManager(viewer, {
+  const manager = new ShareLinkManager(asEngine(viewer), {
     isNavigationCurrent: (token) => token === generation,
   });
   manager.applyState({
@@ -673,7 +679,7 @@ test('destroy cancels only a still-owned share flight and ignores delayed comple
     },
     scene: { requestRender() {} },
   };
-  const manager = new ShareLinkManager(viewer, {
+  const manager = new ShareLinkManager(asEngine(viewer), {
     isNavigationCurrent: (token) => token === generation,
     cancelOwnedNavigation: () => { cancellations += 1; flight?.cancel?.(); },
   });
@@ -685,7 +691,7 @@ test('destroy cancels only a still-owned share flight and ignores delayed comple
   assert.equal(cancellations, 1);
   assert.equal(setViews, 0);
 
-  const newerManager = new ShareLinkManager(viewer, {
+  const newerManager = new ShareLinkManager(asEngine(viewer), {
     isNavigationCurrent: (token) => token === generation,
     cancelOwnedNavigation: () => { cancellations += 1; },
   });

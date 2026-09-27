@@ -35,8 +35,8 @@ const MUTATIONS = [
   },
   {
     defect: 'heading lerps in Cartesian space and cannot cross a U-turn',
-    from: '    const turned = Cesium.Matrix3.multiplyByVector(rotation, state.headingDir, _frameDir);',
-    to: '    const turned = Cesium.Cartesian3.lerp(state.headingDir, gaze, k, _frameDir);',
+    from: '    const turned = rotateAboutAxis(state.headingDir, up, -turnToGaze * k, _frameDir);',
+    to: '    const turned = Cartesian3.lerp(state.headingDir, gaze, k, _frameDir);',
   },
   {
     defect: 'the exact-180° bank direction becomes a floating-point coin toss',
@@ -110,8 +110,8 @@ const MUTATIONS = [
   },
   {
     defect: 'levelling also RE-FRAMES the camera (destination passed with the HPR)',
-    from: '    cam.setView({ orientation: { heading: cam.heading, pitch: cam.pitch, roll: 0 } });',
-    to: '    cam.setView({ destination: Cesium.Cartesian3.fromDegrees(0, 0, 5000), orientation: { heading: cam.heading, pitch: cam.pitch, roll: 0 } });',
+    from: '    map.jumpTo({ roll: 0 });',
+    to: '    map.jumpTo({ center: [0, 0], zoom: 12, roll: 0 });',
   },
   {
     defect: 'the OS reduced-motion preference is never consulted',

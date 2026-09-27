@@ -13,7 +13,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 
 const argv = process.argv.slice(2);
 const getFlag = (name) => argv.includes(name);
@@ -35,8 +35,12 @@ const MIN_SYNTHETIC_SOLVES = 20;
 const MIN_SYNTHETIC_SPAN_MS = SYNTHETIC_SAMPLE_MS;
 const MIN_NORMAL_FRAMES = 20;
 const SETTLED_SOLVE_COUNT = 3;
-const GLOBAL_CAMERA_MIN_HEIGHT_M = 20_000_000;
-const GLOBAL_CAMERA_MAX_HEIGHT_M = 30_000_000;
+// The global measurement camera asks for 25,000 km; the engine converts that
+// to a MapLibre zoom (clamped at the world view), so the accepted band is
+// taken around what the engine actually reports after the jump.
+const GLOBAL_CAMERA_REQUEST_M = 25_000_000;
+let GLOBAL_CAMERA_MIN_HEIGHT_M = 20_000_000;
+let GLOBAL_CAMERA_MAX_HEIGHT_M = 30_000_000;
 const FIELD_COUNTS = Object.freeze({
   flights: 7200,
   military: 1000,
@@ -47,31 +51,6 @@ const NORMAL_COUNTS = Object.freeze({
   military: 70,
   satellites: 830,
 });
-
-const CHROME_EXECUTABLE_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  // Prefer puppeteer's version-pinned Chrome-for-Testing over the system
-  // Chrome: /Applications auto-updates underneath the harnesses, and its
-  // software-GL behavior shifts across majors (system Chrome 150 blew the
-  // tile-gated drain budget under SwiftShader on 2026-07-30 — six
-  // false-negative qa-cctv-v2 runs against a healthy build). A deterministic
-  // pinned browser beats the newest one for regression harnesses.
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-
-function findChromeExecutable() {
-  for (const candidate of CHROME_EXECUTABLE_CANDIDATES) {
-    try {
-      if (fs.existsSync(candidate)) return candidate;
-    } catch {
-      // Let Puppeteer use its bundled browser.
-    }
-  }
-  return null;
-}
 
 const results = [];
 function record(name, ok, detail) {
@@ -214,37 +193,12 @@ async function main() {
   }
 
   fs.mkdirSync(SHOT_DIR, { recursive: true });
-  const executablePath = findChromeExecutable();
-  const browser = await puppeteer.launch({
-    headless: HEADFUL ? false : 'new',
-    ...(executablePath ? { executablePath } : {}),
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--disable-dev-shm-usage',
-      '--disable-web-security',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--window-size=1280,800',
-    ],
+  const { browser, page, errors: consoleErrors } = await launchQaBrowser({
+    headful: HEADFUL,
+    viewport: { width: 1280, height: 800 },
   });
-
-  const consoleErrors = [];
   const failedResponses = [];
   try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
-    page.on('console', (message) => {
-      if (message.type() !== 'error') return;
-      const text = message.text();
-      const sourceUrl = message.location()?.url || '';
-      if (!/Failed to load resource.*404/i.test(text)) {
-        consoleErrors.push(sourceUrl ? `${text} [${sourceUrl}]` : text);
-      }
-    });
-    page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
     page.on('response', (response) => {
       if (response.status() >= 500) {
         failedResponses.push(`HTTP ${response.status()} ${response.url()}`);
@@ -269,17 +223,18 @@ async function main() {
       };
     }, STORAGE_KEY, APP_ORIGIN);
 
-    await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(appUrl(APP_URL), { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForFunction(
-      () => window.__godsEyeView?.viewer && window.__godsEyeView?.styleManager,
-      { timeout: 60000, polling: 100 },
+      () => window.__godsEyeView?.engine && window.__godsEyeView?.styleManager,
+      { timeout: 120000, polling: 100 },
     );
+    await page.evaluate(() => window.__godsEyeView.engine.ready);
 
-    // flyToAustin schedules its 600 m arrival 500 ms after initialization.
+    // flyToParana schedules its overview flight 400 ms after initialization.
     // Let that callback start, then cancel it before establishing the global
     // measurement camera so startup motion cannot invalidate the sample.
     await new Promise((resolve) => setTimeout(resolve, 600));
-    await page.evaluate(() => window.__godsEyeView.viewer.camera.cancelFlight());
+    await page.evaluate(() => window.__godsEyeView.engine.cancelFlight());
 
     const stateChecks = await page.evaluate((storageKey) => {
       const manager = window.__godsEyeView.styleManager;
@@ -305,10 +260,12 @@ async function main() {
       `OFF=${stateChecks.off.densityPct}%, restore=${stateChecks.restoredFromOff.detectionMode}/${stateChecks.restoredFromOff.densityPct}%`,
     );
 
-    const injected = await page.evaluate(({ fieldCounts, normalCounts }) => {
-      const { viewer, dataManager, styleManager } = window.__godsEyeView;
-      viewer.camera.cancelFlight();
-      const Cartesian3 = viewer.camera.position.constructor;
+    const injected = await page.evaluate(async ({ fieldCounts, normalCounts, requestAlt }) => {
+      const { engine, dataManager, styleManager } = window.__godsEyeView;
+      engine.cancelFlight();
+      // Detection reads neutral points ({lon, lat, height, x, y, z}); the dev
+      // server hands back the app's own module instance.
+      const { geoPoint } = await import('/src/data/geoPoint.js');
       const field = { flights: [], military: [], satellites: [] };
       const layerIds = Object.keys(field);
       const goldenAngle = Math.PI * (3 - Math.sqrt(5));
@@ -325,7 +282,7 @@ async function main() {
             sourceId,
             id: sourceId.toUpperCase(),
             metric: layerId === 'satellites' ? 'LEO' : `${250 + (localIndex % 450)}KT`,
-            position: Cartesian3.fromDegrees(lon, lat, layerId === 'satellites' ? 550000 : 9000),
+            position: geoPoint(lon, lat, layerId === 'satellites' ? 550000 : 9000),
             type: layerId === 'satellites' ? 'SAT' : 'AIR',
             tier: layerId === 'military' ? 'military' : (layerId === 'satellites' ? 'space' : 'civil'),
           });
@@ -339,10 +296,8 @@ async function main() {
         entry.module.getDetectableObjects = () => window.__LABEL_QA_FIELD[layerId];
       }
 
-      viewer.camera.setView({
-        destination: Cartesian3.fromDegrees(-97, 30, 25000000),
-        orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
-      });
+      engine.setCameraView({ lat: 30, lon: -97, alt: requestAlt, heading: 0, pitch: -90, roll: 0 });
+      const globalAlt = engine.getCameraView().alt;
       styleManager.setDetection({
         enabled: true,
         densityPct: 100,
@@ -356,16 +311,22 @@ async function main() {
         lastFrameNumber: -1,
         startedAt: performance.now(),
       };
+      // Map frame counter (the old scene.frameState.frameNumber).
+      window.__LABEL_QA_FRAME = 0;
+      engine.on('render', () => { window.__LABEL_QA_FRAME += 1; });
+      // Slow orbit: the old camera.rotateRight(1.2e-6 rad/ms) is ~6.9e-5°/ms
+      // of longitude around the globe.
       let lastOrbitAt = performance.now();
       window.__LABEL_QA_ORBIT = setInterval(() => {
         const now = performance.now();
-        viewer.camera.rotateRight((now - lastOrbitAt) * 0.0000012);
+        const center = engine.map.getCenter();
+        engine.map.jumpTo({ center: [center.lng + (now - lastOrbitAt) * 0.0000687, center.lat] });
         lastOrbitAt = now;
-        viewer.scene.requestRender();
+        engine.requestRender();
       }, 100);
       const sample = () => {
         const diagnostics = styleManager.getDetectionDiagnostics();
-        const frameNumber = viewer.scene.frameState?.frameNumber ?? -1;
+        const frameNumber = window.__LABEL_QA_FRAME;
         if (diagnostics && frameNumber !== window.__LABEL_QA.lastFrameNumber) {
           window.__LABEL_QA.lastFrameNumber = frameNumber;
           window.__LABEL_QA.frames.push({
@@ -395,7 +356,7 @@ async function main() {
             observationCount: Number(dataset.observationCount),
             selectedCount: Number(dataset.selectedCount),
             fadingCount: Number(dataset.fadingCount),
-            cameraHeight: viewer.camera.positionCartographic.height,
+            cameraHeight: engine.getCameraView().alt,
             demandByLayer: JSON.parse(dataset.demandByLayer || '{}'),
             cohortByLayer: JSON.parse(dataset.cohortByLayer || '{}'),
             entitlementByLayer: JSON.parse(dataset.entitlementByLayer || '{}'),
@@ -405,13 +366,18 @@ async function main() {
         requestAnimationFrame(sample);
       };
       requestAnimationFrame(sample);
-      return Object.fromEntries(layerIds.map((layerId) => [layerId, field[layerId].length]));
-    }, { fieldCounts: FIELD_COUNTS, normalCounts: NORMAL_COUNTS });
+      return {
+        counts: Object.fromEntries(layerIds.map((layerId) => [layerId, field[layerId].length])),
+        globalAlt,
+      };
+    }, { fieldCounts: FIELD_COUNTS, normalCounts: NORMAL_COUNTS, requestAlt: GLOBAL_CAMERA_REQUEST_M });
+    GLOBAL_CAMERA_MIN_HEIGHT_M = injected.globalAlt * 0.75;
+    GLOBAL_CAMERA_MAX_HEIGHT_M = injected.globalAlt * 1.25;
 
     record(
       'deterministic field contains exactly 12,000 observations',
-      Object.values(injected).reduce((sum, count) => sum + count, 0) === OBSERVATION_COUNT,
-      JSON.stringify(injected),
+      Object.values(injected.counts).reduce((sum, count) => sum + count, 0) === OBSERVATION_COUNT,
+      `${JSON.stringify(injected.counts)}; global camera ${Math.round(injected.globalAlt / 1000)} km`,
     );
 
     // Warm-up before steady-state p95: the first solves after field
@@ -420,12 +386,11 @@ async function main() {
     // -samples gates supersede it — same fix, deterministic instead of timed.)
     await waitForSettledSyntheticField(page);
     await page.evaluate(() => {
-      const viewer = window.__godsEyeView.viewer;
       const revision = Number(document.querySelector('#world-overlay-canvas')?.dataset?.solveRevision || 0);
       window.__LABEL_QA.solve = [];
       window.__LABEL_QA.frames = [];
       window.__LABEL_QA.lastRevision = revision;
-      window.__LABEL_QA.lastFrameNumber = viewer.scene.frameState?.frameNumber ?? -1;
+      window.__LABEL_QA.lastFrameNumber = window.__LABEL_QA_FRAME;
       window.__LABEL_QA.startedAt = performance.now();
     });
     const syntheticSampling = await waitForConclusiveSamples(page, {
@@ -460,12 +425,11 @@ async function main() {
       { timeout: SAMPLE_TIMEOUT_MS, polling: 100 },
     );
     await page.evaluate(() => {
-      const viewer = window.__godsEyeView.viewer;
       const revision = Number(document.querySelector('#world-overlay-canvas')?.dataset?.solveRevision || 0);
       window.__LABEL_QA.solve = [];
       window.__LABEL_QA.frames = [];
       window.__LABEL_QA.lastRevision = revision;
-      window.__LABEL_QA.lastFrameNumber = viewer.scene.frameState?.frameNumber ?? -1;
+      window.__LABEL_QA.lastFrameNumber = window.__LABEL_QA_FRAME;
       window.__LABEL_QA.startedAt = performance.now();
     });
     const normalSampling = await waitForConclusiveSamples(page, {
@@ -496,7 +460,7 @@ async function main() {
     const normalFrames = normalFieldFrames.filter((sample) => !sample.didSolve);
     const solveP95 = percentile(solveSamples.map((sample) => sample.solveMs), 0.95);
     const renderP95 = percentile(normalFrames.map((sample) => sample.frameTotalMs), 0.95);
-    // SwiftShader can render the complete Cesium scene below 8 FPS, making
+    // SwiftShader can render the complete map scene below 8 FPS, making
     // every sampled overlay frame eligible for the 125 ms solve tick. Paint is
     // timed separately from solve, so it remains the deterministic frame-lane
     // measurement even when there are no non-solve frames in this backend.

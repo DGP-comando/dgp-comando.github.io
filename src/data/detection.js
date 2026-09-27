@@ -1,4 +1,3 @@
-import * as Cesium from 'cesium';
 import { governorRequestRender } from '../renderGovernor.js';
 import {
   DETECTION_ENABLE_FADE_MS,
@@ -19,13 +18,14 @@ import {
   getKeyholeFadeTuning,
   keyholeLabelAlphaFromGeometry,
 } from '../celestialRing.js';
+import { resolveWorldPosition } from '../overlays/worldGeometry.js';
+import { createMapDetectionSources } from './detectionMapSources.js';
 import { registerWorldOverlayPaintLane } from '../overlays/worldOverlay.js';
 import {
   DETECTION_STYLE,
   DETECTION_THEME_MAP,
   SKY_PLATE_SCALE,
 } from '../overlays/worldOverlayTokens.js';
-import { skyBackdropFactor } from './iconOrientation.js';
 import { paintDetectionCallout } from '../overlays/worldOverlayDraw.js';
 import { allocateLayerQuotas, LabelArbiter } from './labelArbiter.js';
 import {
@@ -61,6 +61,33 @@ import { detectionBracketOpacity } from './detectionPresentation.js';
  * Theming is driven by THEME_MAP presets (retro, surveillance, thermal, default).
  * Density tuning and suspension allow external callers (scene transitions, UI)
  * to throttle or pause rendering without tearing down the overlay.
+ *
+ * MOTOR: MapLibre. `initDetection(engine, layers, onModeChange)` recebe o motor
+ * (src/maplibre/engine.js) no lugar do Cesium.Viewer e pinta pelas lanes do
+ * world overlay, projetando cada alvo com `frame.projector` (a projeção do
+ * próprio mapa; horizonte do globo pelo oclusor do quadro).
+ *
+ * CONTRATO DAS FONTES DE ALVOS (inalterado no nome, neutro no tipo):
+ *
+ *   layer.id                                  id da camada (quota/pesos)
+ *   layer.getDetectableObjects({mode, maxCount, seed}) -> DetectableObject[]
+ *
+ *   DetectableObject = {
+ *     position,        // WorldPosition: {lon, lat, height?} em graus/m (preferida;
+ *                      // `alt` vale como height) ou ECEF {x,y,z} legado. Sem
+ *                      // `position`, o próprio objeto pode trazer lon/lat/alt.
+ *     id,              // texto do card (callsign, "FIRE 12 MW"…)
+ *     type,            // 'AIR' | 'SAT' | 'SEA' | 'VEH' | 'CAM' | 'FIRE' | …
+ *     sourceId?,       // identidade estável (senão `id`)
+ *     metric?,         // segunda linha fraca (FL350, severidade…)
+ *     tier?,           // cor explícita ('military', 'veh_jam'…)
+ *     skipLabel?,      // alvo rastreado: caixa maior, sem card
+ *   }
+ *
+ * Além das camadas passadas por ui.js, a detecção lê sozinha as camadas de
+ * ESTILO do mapa que não têm módulo próprio (detectionMapSources.js): hoje os
+ * focos de calor `local-firms` (fonte `dg-firms`). Outras fontes podem entrar
+ * com `registerDetectionSource(layerLike)`.
  */
 
 /** @constant {number} MODE_OFF - Detection disabled */
@@ -182,11 +209,18 @@ export function countFadingRenderEntries(renderEntries) {
   return count;
 }
 // ---------------------------------------------------------------------------
-// Module-level state — singleton lifecycle tied to the Cesium viewer
+// Module-level state — singleton lifecycle tied to the map engine
 // ---------------------------------------------------------------------------
 
-/** @type {Cesium.Viewer|null} */
-let _viewer = null;
+/** @type {object|null} Motor MapLibre (src/maplibre/engine.js). */
+let _engine = null;
+/** Fontes lidas do próprio mapa (detectionMapSources.js). */
+let _mapSources = [];
+/** Fontes extras registradas por `registerDetectionSource`. */
+const _extraSources = [];
+/** Scratch reaproveitado de posição resolvida e de tela (sem alocação por alvo). */
+const _resolved = { lon: 0, lat: 0, height: 0, x: 0, y: 0, z: 0 };
+const _screen = { x: 0, y: 0 };
 /** @type {number} Current mode index into MODE_LABELS */
 let _mode = MODE_OFF;
 /** @type {HTMLCanvasElement|null} Shared host canvas used for QA diagnostics. */
@@ -269,18 +303,20 @@ let _cockpitModeListener = null;
 /**
  * Initializes detection inside the shared world-overlay host and stores
  * references to data layers. The host owns the canvas and render listener.
- * @param {Cesium.Viewer} viewer - The active Cesium viewer instance.
+ * @param {object} engine - Motor MapLibre (src/maplibre/engine.js).
  * @param {Array} layers - Data layer modules that may implement getDetectableObjects().
  * @param {Function} onModeChange - Callback invoked with the new mode label string on mode changes.
  */
-export function initDetection(viewer, layers, onModeChange) {
+export function initDetection(engine, layers, onModeChange) {
   if (_cockpitModeListener && typeof window !== 'undefined') {
     window.removeEventListener('gev:cockpit-mode-changed', _cockpitModeListener);
   }
   _hostLane?.unregister?.();
   _calloutLane?.unregister?.();
-  _viewer = viewer;
-  _layers = layers;
+  for (const source of _mapSources) source.destroy?.();
+  _engine = engine;
+  _layers = Array.isArray(layers) ? layers : [];
+  _mapSources = createMapDetectionSources(engine);
   _onModeChange = onModeChange;
   _debugBanner = detectionDebugRequested(
     typeof window !== 'undefined' ? window.location?.search : '',
@@ -330,7 +366,9 @@ export function destroyDetection() {
   _calloutLane?.unregister?.();
   _calloutLane = null;
   _calloutCount = 0;
-  _viewer = null;
+  for (const source of _mapSources) source.destroy?.();
+  _mapSources = [];
+  _engine = null;
   _layers = [];
   _onModeChange = null;
   _hostCanvas = null;
@@ -513,6 +551,26 @@ export function markDetectionSourcesChanged(reason = 'sources-changed') {
   if (_mode === MODE_OFF) return;
   _labelSolveDirty = true;
   if (_lastDiagnostics) _lastDiagnostics.lastSourceChangeReason = reason;
+}
+
+/**
+ * Acrescenta uma fonte de alvos além das camadas passadas a `initDetection`
+ * (mesmo contrato: `{id, getDetectableObjects(options)}`). Idempotente por
+ * objeto; devolve uma função que remove a fonte.
+ * @param {{id: string, getDetectableObjects: Function}} layerLike
+ * @returns {function(): void}
+ */
+export function registerDetectionSource(layerLike) {
+  if (!layerLike || typeof layerLike.getDetectableObjects !== 'function') return () => {};
+  if (!_extraSources.includes(layerLike)) _extraSources.push(layerLike);
+  _labelSolveDirty = true;
+  _hostLane?.requestPaint();
+  return () => {
+    const index = _extraSources.indexOf(layerLike);
+    if (index >= 0) _extraSources.splice(index, 1);
+    _labelSolveDirty = true;
+    _hostLane?.requestPaint();
+  };
 }
 
 /** Read-only diagnostics for unit/browser QA. */
@@ -720,9 +778,12 @@ function _paintDetectionLane(frame) {
 function _collectDetectableObjects() {
   const label = MODE_LABELS[_mode];
   const objects = [];
+  const sources = _mapSources.length || _extraSources.length
+    ? _layers.concat(_mapSources, _extraSources)
+    : _layers;
 
-  for (let i = 0; i < _layers.length; i++) {
-    const layer = _layers[i];
+  for (let i = 0; i < sources.length; i++) {
+    const layer = sources[i];
     if (typeof layer.getDetectableObjects !== 'function') continue;
     try {
       const maxCount = ['flights', 'military'].includes(layer.id)
@@ -1006,7 +1067,7 @@ function _plateScaleForBackdrop(skyFactor) {
 }
 
 /** Materialize one bounded rich-callout candidate for the existing arbiter. */
-function _materializeCandidate(obj, width, height, keyhole, occlusionRects, cameraPosition) {
+function _materializeCandidate(obj, width, height, keyhole, occlusionRects) {
   const primary = obj._candidatePrimary;
   const micro = obj._candidateMicro;
   const card = measureTrackLabel(primary, micro, _charWidth);
@@ -1045,10 +1106,10 @@ function _materializeCandidate(obj, width, height, keyhole, occlusionRects, came
     keyholeAlpha,
     placements,
     color: obj._candidateColor,
-    // Costed here rather than in the object sweep: the sweep walks every
-    // observation in view, while this runs only for callouts that actually
-    // placed — a budgeted handful per frame.
-    plateScale: _plateScaleForBackdrop(skyBackdropFactor(cameraPosition, obj.position)),
+    // MapLibre projects every target onto the ground (where its symbol is
+    // drawn), so what sits behind a callout is always ground: full plate.
+    // (The Cesium build feathered the plate over open sky.)
+    plateScale: _plateScaleForBackdrop(0),
     primary,
     micro,
     hasMicro: card.hasMicro,
@@ -1100,7 +1161,7 @@ function _drawOverlay(frame) {
       profile: MODE_LABELS[_mode],
       densityPct: _densityPct,
       allocationStrategy: _allocationStrategy,
-      viewScale: viewScaleForAltitude(_viewer?.camera?.positionCartographic?.height),
+      viewScale: viewScaleForAltitude(frame.cameraAltitude),
       candidateCount: 0,
       observationCount: 0,
       visibleCount: 0,
@@ -1133,26 +1194,12 @@ function _drawOverlay(frame) {
 
   // Horizon culling, keyhole geometry, and camera transforms are shared with
   // every host lane. Detection retains the manual scalar projection below.
-  const occluder = frame.occluder;
-  const camPos = frame.cameraPosition;
+  const projector = frame.projector;
   const keyhole = frame.keyhole;
   // Read the OUTSIDE setting ONCE per paint, from the same module state the
   // host's own keyhole alpha comes from, so a bracket and its callout can never
   // disagree about the operator's setting within a frame.
   const keyholeOutsideOpacity = getKeyholeFadeTuning().outsideOpacity;
-  const viewProjection = frame.viewProjectionMatrix;
-  const vp0 = viewProjection[0];
-  const vp1 = viewProjection[1];
-  const vp3 = viewProjection[3];
-  const vp4 = viewProjection[4];
-  const vp5 = viewProjection[5];
-  const vp7 = viewProjection[7];
-  const vp8 = viewProjection[8];
-  const vp9 = viewProjection[9];
-  const vp11 = viewProjection[11];
-  const vp12 = viewProjection[12];
-  const vp13 = viewProjection[13];
-  const vp15 = viewProjection[15];
 
   // Brackets stay broad inside the keyhole, fade outside it, and batch by tier
   // color plus a 32-step alpha band. Text candidates are projected once and
@@ -1187,22 +1234,13 @@ function _drawOverlay(frame) {
   let placementBuildCount = 0;
   for (let i = 0; i < objects.length; i++) {
     const obj = objects[i];
-    if (!obj.position) continue;
-    // Skip objects occluded by the ellipsoid (behind the horizon)
-    if (!occluder.isPointVisible(obj.position)) continue;
-
-    // This product renders in Cesium's 3D scene mode. Multiplying by the
-    // once-per-frame view-projection matrix is equivalent to the general
-    // SceneTransforms helper here, without repeating its mode/viewport setup
-    // for every observation.
-    const px = obj.position.x;
-    const py = obj.position.y;
-    const pz = obj.position.z;
-    const clipW = vp3 * px + vp7 * py + vp11 * pz + vp15;
-    if (clipW <= 0) continue;
-    const invW = 1 / clipW;
-    const sx = ((vp0 * px + vp4 * py + vp8 * pz + vp12) * invW * 0.5 + 0.5) * width;
-    const sy = (0.5 - (vp1 * px + vp5 * py + vp9 * pz + vp13) * invW * 0.5) * height;
+    // WorldPosition neutra ({lon,lat,height} ou ECEF legado); sem `position`
+    // o próprio objeto pode trazer lon/lat/alt.
+    if (!resolveWorldPosition(obj.position || obj, _resolved)) continue;
+    // Behind the globe's horizon (globe view only) or unprojectable: skip.
+    if (!projector || !projector.project(_resolved, _screen, true)) continue;
+    const sx = _screen.x;
+    const sy = _screen.y;
 
     // Tracked objects (skipLabel) get larger boxes. AIR reticles scale with the
     // plane's on-screen size (same scaleByDistance curve as the billboards) so
@@ -1212,7 +1250,7 @@ function _drawOverlay(frame) {
     let halfH;
     if (obj.type === 'AIR') {
       const bscale = nearFarScale(
-        Cesium.Cartesian3.distance(camPos, obj.position),
+        projector.distanceTo(_resolved),
         BILL_NEAR, BILL_NEAR_SCALE, BILL_FAR, BILL_FAR_SCALE,
       );
       halfW = _clamp((isTracked ? 14 : 9) * bscale, 7, 48);
@@ -1279,13 +1317,12 @@ function _drawOverlay(frame) {
         height,
         keyhole,
         calloutOcclusionRects,
-        camPos,
       );
       if (candidate && !candidateMap.has(candidate.key)) candidateMap.set(candidate.key, candidate);
     }
   }
 
-  const altitude = _viewer?.camera?.positionCartographic?.height ?? 1e9;
+  const altitude = Number.isFinite(frame.cameraAltitude) ? frame.cameraAltitude : 1e9;
   const collectiveBudget = labelBudgetFor(altitude, _densityPct);
   const ambientBudget = Math.max(0, collectiveBudget - Math.min(collectiveBudget, protectedVisibleCount));
   let didSolve = false;
@@ -1312,7 +1349,6 @@ function _drawOverlay(frame) {
             height,
             keyhole,
             calloutOcclusionRects,
-            camPos,
           );
           if (candidate) candidateMap.set(candidate.key, candidate);
         }

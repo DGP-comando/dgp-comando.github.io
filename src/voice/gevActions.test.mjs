@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import * as Cesium from 'cesium';
+import { geoPoint } from './geo3d.js';
 import { CCTV_FOCUS_RESULT } from '../data/cctv.js';
 import { getContextStore, registerEntityContext } from '../data/contextStore.js';
 import { DataLayerManager } from '../data/manager.js';
@@ -13,6 +13,7 @@ import {
   createGevActionRunner,
   cctvVoiceFocusOutcome,
   formatTrackedEntityLabel,
+  getBasemapLabelContext,
   knownRadioLocation,
 } from './gevActions.js';
 
@@ -67,36 +68,82 @@ test('track_entity runner narrates a callsign-less aircraft by its registration'
   }
 });
 
+/**
+ * Motor MapLibre falso (a superfície de src/maplibre/engine.js que a voz usa):
+ * câmera em semântica Cesium (graus, alt em m), projeção linear em torno da
+ * câmera, voos que só registram a chamada em `order`.
+ */
+function fakeMapEngine({ order = null, lat = 30.26, lon = -97.74, alt = 500, heading = 28, pitch = -45 } = {}) {
+  const PX_PER_DEG = 10_000;
+  const engine = {
+    kind: 'maplibre',
+    trackedTarget: null,
+    container: { clientWidth: 1200, clientHeight: 800 },
+    view: { lat, lon, alt, heading, pitch, roll: 0, zoom: 14 },
+    moving: false,
+    flights: [],
+    map: {
+      getCanvasContainer: () => ({ addEventListener() {}, removeEventListener() {} }),
+      getContainer: () => engine.container,
+      getZoom: () => engine.view.zoom,
+      getMinZoom: () => 0,
+      getMaxZoom: () => 22,
+      getBearing: () => engine.view.heading,
+      getPitch: () => 90 + engine.view.pitch,
+      getRoll: () => 0,
+      unproject: ([x, y]) => ({ lng: engine.view.lon + (x - 600) / PX_PER_DEG, lat: engine.view.lat - (y - 400) / PX_PER_DEG }),
+      jumpTo(options) {
+        if (Number.isFinite(options.zoom)) {
+          engine.view.alt *= 2 ** (engine.view.zoom - options.zoom);
+          engine.view.zoom = options.zoom;
+        }
+        if (options.center) {
+          const [cLon, cLat] = Array.isArray(options.center) ? options.center : [options.center.lng, options.center.lat];
+          engine.view.lon = cLon;
+          engine.view.lat = cLat;
+        }
+        if (Number.isFinite(options.bearing)) engine.view.heading = options.bearing;
+      },
+    },
+    on: () => () => {},
+    getCameraView: () => ({ ...engine.view }),
+    setCameraView(view) { Object.assign(engine.view, view); },
+    isMoving: () => engine.moving,
+    hasTerrain: () => false,
+    getBasemap: () => 'esri',
+    project: (pLon, pLat) => ({
+      x: 600 + (pLon - engine.view.lon) * PX_PER_DEG,
+      y: 400 - (pLat - engine.view.lat) * PX_PER_DEG,
+      visible: true,
+    }),
+    unproject: (x, y) => ({ lon: engine.view.lon + (x - 600) / PX_PER_DEG, lat: engine.view.lat - (y - 400) / PX_PER_DEG }),
+    track(target) { engine.trackedTarget = target || null; },
+    cancelFlight() { order?.push('cancel'); },
+    flyToTarget(target, options = {}) {
+      engine.flights.push({ target, options });
+      engine.onFlight?.(options);
+      order?.push(`fly:${engine.trackedTarget ? 'owned' : 'released'}`);
+    },
+    flyToCamera(view, options = {}) {
+      engine.flights.push({ view, options });
+      engine.onFlight?.(options);
+      order?.push(`fly:${engine.trackedTarget ? 'owned' : 'released'}`);
+    },
+    flyToBounds(bbox, options = {}) {
+      engine.flights.push({ bbox, options });
+      engine.onFlight?.(options);
+      order?.push(`fly:${engine.trackedTarget ? 'owned' : 'released'}`);
+    },
+    requestRender() {},
+  };
+  return engine;
+}
+
 function createVoiceNavigationHarness({ cockpitActive = false } = {}) {
   const order = [];
   let generation = 0;
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.26, 500);
-  const viewer = {
-    trackedEntity: { id: 'prior-aircraft' },
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: {
-      canvas: {
-        clientWidth: 1200,
-        clientHeight: 800,
-        addEventListener() {},
-        removeEventListener() {},
-      },
-      globe: { getHeight: () => 0 },
-      tweens: [],
-    },
-    camera: {
-      moveEnd: { addEventListener() {} },
-      positionWC: position,
-      positionCartographic: Cesium.Cartographic.fromCartesian(position),
-      heading: Cesium.Math.toRadians(28),
-      pitch: Cesium.Math.toRadians(-45),
-      cancelFlight() { order.push('cancel'); },
-      flyToBoundingSphere() {
-        order.push(`fly:${viewer.trackedEntity === undefined ? 'released' : 'owned'}`);
-      },
-      lookAtTransform() {},
-    },
-  };
+  const viewer = fakeMapEngine({ order });
+  viewer.trackedTarget = { id: 'prior-aircraft' };
   const styleManager = {
     runImmediateNavigation(noun, navigate, releaseOptions = undefined) {
       return runExplicitNavigation({
@@ -109,9 +156,9 @@ function createVoiceNavigationHarness({ cockpitActive = false } = {}) {
         },
         release: () => {
           order.push('release');
-          viewer.trackedEntity = undefined;
+          viewer.track(null);
           interruptCameraMotion('test-release');
-          if (!releaseOptions?.preserveCameraFlight) viewer.camera.cancelFlight();
+          if (!releaseOptions?.preserveCameraFlight) viewer.cancelFlight();
         },
         navigate,
       });
@@ -128,11 +175,7 @@ function createVoiceNavigationHarness({ cockpitActive = false } = {}) {
 
 test('zoom to globe adopts the shared visible reset route and returns its result', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const expected = {
     ok: true,
     action: 'zoom_to_globe',
@@ -159,7 +202,7 @@ test('dependent voice navigation waits for the destination viewport to arrive', 
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
   const { viewer, styleManager } = createVoiceNavigationHarness();
   let completeFlight = null;
-  viewer.camera.flyTo = (options) => { completeFlight = options.complete; };
+  viewer.onFlight = (options) => { completeFlight = options.complete; };
   styleManager.runImmediateLocationNavigation = (navigate) => (
     styleManager.runImmediateNavigation('location', navigate)
   );
@@ -170,7 +213,7 @@ test('dependent voice navigation waits for the destination viewport to arrive', 
   });
   let settled = false;
   const resultPromise = runner('fly_to_location', {
-    locationId: 'austin',
+    locationId: 'curitiba',
     waitForArrival: true,
   }).then((result) => {
     settled = true;
@@ -190,7 +233,7 @@ test('nearest-aircraft voice action serializes layer enable, arrival, refresh, a
   const { viewer, styleManager } = createVoiceNavigationHarness();
   const order = [];
   let completeFlight = null;
-  viewer.camera.flyTo = (options) => {
+  viewer.onFlight = (options) => {
     order.push('fly');
     completeFlight = options.complete;
   };
@@ -235,7 +278,7 @@ test('nearest-aircraft voice action serializes layer enable, arrival, refresh, a
   const runner = createGevActionRunner({ viewer, styleManager, dataManager });
   const resultPromise = runner('select_nearest_aircraft', {
     layerId: 'flights',
-    locationId: 'austin',
+    locationId: 'curitiba',
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(order, ['enable', 'fly'], 'Flights must turn on before navigation begins');
@@ -255,7 +298,7 @@ test('nearest-aircraft voice action refreshes an already-enabled viewport layer 
   const { viewer, styleManager } = createVoiceNavigationHarness();
   const order = [];
   let completeFlight = null;
-  viewer.camera.flyTo = (options) => {
+  viewer.onFlight = (options) => {
     order.push('fly');
     completeFlight = options.complete;
   };
@@ -292,7 +335,7 @@ test('nearest-aircraft voice action refreshes an already-enabled viewport layer 
   const runner = createGevActionRunner({ viewer, styleManager, dataManager });
   const resultPromise = runner('select_nearest_aircraft', {
     layerId: 'flights',
-    locationId: 'austin',
+    locationId: 'curitiba',
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(order, ['enable-same-state', 'fly']);
@@ -312,7 +355,7 @@ test('fallback with zero airborne records reports enabled fallback without selec
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
   const { viewer, styleManager } = createVoiceNavigationHarness();
   let completeFlight = null;
-  viewer.camera.flyTo = (options) => { completeFlight = options.complete; };
+  viewer.onFlight = (options) => { completeFlight = options.complete; };
   styleManager.runImmediateLocationNavigation = (navigate) => (
     styleManager.runImmediateNavigation('location', navigate)
   );
@@ -342,7 +385,7 @@ test('fallback with zero airborne records reports enabled fallback without selec
   const runner = createGevActionRunner({ viewer, styleManager, dataManager });
   const resultPromise = runner('select_nearest_aircraft', {
     layerId: 'flights',
-    locationId: 'austin',
+    locationId: 'curitiba',
   });
   await new Promise((resolve) => setImmediate(resolve));
   completeFlight();
@@ -407,14 +450,7 @@ test('voice Stop Tracking clears all durable tracker IDs even without active tra
     getAll: () => [],
   };
   const runner = createGevActionRunner({
-    viewer: {
-      scene: {
-        canvas: { addEventListener() {}, removeEventListener() {} },
-        preRender: { addEventListener() {} },
-      },
-      camera: { moveEnd: { addEventListener() {} } },
-      clock: { onTick: { addEventListener() {} } },
-    },
+    viewer: fakeMapEngine(),
     styleManager: {},
     dataManager,
   });
@@ -441,15 +477,8 @@ test('voice Stop Tracking reports exact layers whose active or durable clear fai
     setLayerParams(layerId) { return layerId !== 'military'; },
     getAll: () => [],
   };
-  const viewer = {
-    trackedEntity: { gevTrackedId: 'flights:active' },
-    scene: {
-      canvas: { addEventListener() {}, removeEventListener() {} },
-      preRender: { addEventListener() {} },
-    },
-    camera: { moveEnd: { addEventListener() {} } },
-    clock: { onTick: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
+  viewer.trackedTarget = { gevTrackedId: 'flights:active' };
   const runner = createGevActionRunner({ viewer, styleManager: {}, dataManager });
 
   assert.deepEqual(await runner('stop_tracking'), {
@@ -459,14 +488,13 @@ test('voice Stop Tracking reports exact layers whose active or durable clear fai
     failedLayerIds: ['flights', 'military'],
     error: 'Tracking could not be cleared for: flights, military',
   });
-  assert.equal(viewer.trackedEntity, undefined, 'camera ownership still releases after partial failure');
+  assert.equal(viewer.trackedTarget, null, 'camera ownership still releases after partial failure');
 });
 
 test('successful voice overhead framing stamps and releases the old owner before flight', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
   const { order, viewer, styleManager } = createVoiceNavigationHarness();
-  const position = viewer.camera.positionWC;
-  viewer.camera.pickEllipsoid = () => position;
+  const position = geoPoint(-97.74, 30.26, 500);
   const flights = { getNearby: () => [{ id: 'abc123', position }] };
   const dataManager = {
     layers: new Map([['flights', { module: flights }]]),
@@ -534,7 +562,7 @@ test('move_camera and fly_route validate first, then use the shared camera autho
   assert.deepEqual(order.splice(0), ['stamp:camera', 'release', 'cancel']);
   assert.equal(getActiveCameraMotion()?.kind, 'pan');
 
-  viewer.trackedEntity = { id: 'replacement-owner' };
+  viewer.trackedTarget = { id: 'replacement-owner' };
   assert.equal((await runner('fly_route', { label: 'harbor' })).ok, true);
   assert.deepEqual(order, ['stamp:route', 'release', 'cancel']);
   assert.equal(getActiveCameraMotion()?.kind, 'route');
@@ -544,8 +572,8 @@ test('move_camera and fly_route validate first, then use the shared camera autho
 test('a chained orbit preserves its current destination flight while still stamping authority', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
   const { order, viewer, styleManager } = createVoiceNavigationHarness();
-  viewer.trackedEntity = undefined;
-  viewer.scene.tweens.push({ id: 'destination-flight' });
+  viewer.trackedTarget = null;
+  viewer.moving = true; // um voo de destino em curso
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -555,7 +583,7 @@ test('a chained orbit preserves its current destination flight while still stamp
   assert.equal(result.ok, true);
   assert.equal(result.armed, 'waiting-for-arrival');
   assert.deepEqual(order, ['stamp:camera', 'release']);
-  assert.equal(viewer.scene.tweens.length, 1);
+  assert.equal(viewer.moving, true, 'the destination flight was not cancelled');
   interruptCameraMotion('test-cleanup');
 });
 
@@ -572,7 +600,7 @@ test('invalid named voice navigation never releases the current camera owner', a
   assert.equal((await runner('fly_route')).ok, false);
   assert.equal((await runner('frame_overhead', { target: 'flights' })).ok, false);
   assert.deepEqual(order, []);
-  assert.equal(viewer.trackedEntity?.id, 'prior-aircraft');
+  assert.equal(viewer.trackedTarget?.id, 'prior-aircraft');
 
   const invalidRouteRunner = createGevActionRunner({
     viewer,
@@ -597,7 +625,7 @@ test('invalid named voice navigation never releases the current camera owner', a
   });
   assert.equal((await outOfRangeRouteRunner('fly_route')).ok, false);
   assert.deepEqual(order, []);
-  assert.equal(viewer.trackedEntity?.id, 'prior-aircraft');
+  assert.equal(viewer.trackedTarget?.id, 'prior-aircraft');
 });
 
 test('Cockpit refuses every named voice camera route before camera or selection mutation', async () => {
@@ -613,7 +641,7 @@ test('Cockpit refuses every named voice camera route before camera or selection 
   for (const [name, args] of cases) {
     const { order, viewer, styleManager } = createVoiceNavigationHarness({ cockpitActive: true });
     let selected = 0;
-    const position = viewer.camera.positionWC;
+    const position = geoPoint(-97.74, 30.26, 500);
     const modules = new Map([
       ['flights', { module: { getNearby: () => [{ id: 'flight-1', position }] } }],
       ['local-firms', { module: { getStrongestFire: () => ({ latitude: 37.77, longitude: -122.42, frp: 900 }) } }],
@@ -639,7 +667,7 @@ test('Cockpit refuses every named voice camera route before camera or selection 
     assert.equal(result.ok, false, `${name}:${args.query || args.target || args.motion}`);
     assert.deepEqual(order, []);
     assert.equal(selected, 0);
-    assert.equal(viewer.trackedEntity?.id, 'prior-aircraft');
+    assert.equal(viewer.trackedTarget?.id, 'prior-aircraft');
     if (args.motion === 'stop') {
       assert.equal(getActiveCameraMotion()?.kind, 'pan');
       interruptCameraMotion('test-cleanup');
@@ -689,14 +717,7 @@ test('Data Layers voice inventory hides the Context coordinator while current-vi
     getContextModeState: () => ({ mode: 'flights', active: true }),
     getCockpitState: () => ({ active: false, entryAllowed: true }),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: {
-      moveEnd: { addEventListener() {} },
-      positionWC: Cesium.Cartesian3.fromDegrees(-97.7, 30.2, 1000),
-    },
-  };
+  const viewer = fakeMapEngine({ lat: 30.2, lon: -97.7, alt: 1000 });
   const runner = createGevActionRunner({ viewer, styleManager, dataManager });
   const menu = await runner('show_data_layers_menu');
   assert.deepEqual(menu.layers.map(({ id }) => id), ['flights']);
@@ -711,11 +732,7 @@ test('Data Layers voice inventory hides the Context coordinator while current-vi
 
 test('generic layer visibility forwards cancellation and reports semantic failure', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   let enabled = false;
   let lifecycle = { enabled: false, lifecycleState: 'disabled', uncertain: false };
   let releaseEnable;
@@ -761,11 +778,7 @@ test('generic layer visibility forwards cancellation and reports semantic failur
 
 test('generic voice visibility preserves a manager resource-cancellation envelope', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const dataManager = {
     layers: new Map([['rocket-launches', { module: {} }]]),
     getAll: () => [{ id: 'rocket-launches', name: 'Space Missions' }],
@@ -807,11 +820,7 @@ test('generic voice visibility preserves a manager resource-cancellation envelop
 
 test('generic voice visibility preserves caller-abort phase before the stale-turn fallback', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const controller = new AbortController();
   const dataManager = {
     layers: new Map([['rocket-launches', { module: {} }]]),
@@ -847,11 +856,7 @@ test('generic voice visibility preserves caller-abort phase before the stale-tur
 
 test('generic voice visibility preserves an exact commit when a newer turn arrives during Context settlement', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const controller = new AbortController();
   let releaseSettlement;
   let settlementStarted;
@@ -900,11 +905,7 @@ test('generic voice visibility preserves an exact commit when a newer turn arriv
 
 test('late voice abort cannot revoke a committed manager event and leaves the intent lane reusable', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const dataManager = new DataLayerManager(viewer);
   const lifecycleCalls = [];
   dataManager.register({
@@ -954,11 +955,7 @@ test('late voice abort cannot revoke a committed manager event and leaves the in
 
 test('generic layer visibility exposes lifecycle truth for every manager phase and thrown failure', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const lifecycleCases = [
     { enabled: false, lifecycleState: 'disabled', uncertain: false },
     { enabled: false, lifecycleState: 'enabling', uncertain: false },
@@ -1046,11 +1043,7 @@ test('generic layer visibility exposes lifecycle truth for every manager phase a
 
 test('generic voice visibility maps Space Missions to the explicit mission layer', async () => {
   globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const calls = [];
   let contextSettled = false;
   const dataManager = {
@@ -1122,11 +1115,7 @@ test('control_cockpit forwards schema-valid navigation filters', async () => {
       return { ok: true, state: { active: true, navigation: { canNext: true, canPrevious: true, canFocus: true } } };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1155,11 +1144,7 @@ test('control_cockpit resolves spoken TR-3B spellings to the tr3b class id', asy
       return { ok: true, state: { active: true, navigation: { canNext: true, canPrevious: true, canFocus: true } } };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1202,11 +1187,7 @@ test('control_cockpit delegates selected-flight adoption to the canonical cockpi
       return { ok: true, state: { active: true, navigation: { canNext: true, canPrevious: true, canFocus: true } } };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const recordCarrier = { __gevContextId: 'selected-flight-for-cockpit-enter' };
   const record = registerEntityContext(recordCarrier, {
     id: 'abc123',
@@ -1248,11 +1229,7 @@ test('control_cockpit does not mutate selection when Contacts entry fails', asyn
     controlCockpit: () => assert.fail('Cockpit must not run after failed Contacts entry'),
     getCockpitState: () => ({ active: false }),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1275,11 +1252,7 @@ test('control_cockpit cancellation is inert when Contacts is already active', as
     controlCockpit: () => assert.fail('cancelled Cockpit entry must not mutate state'),
     getCockpitState: () => ({ active: false }),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1310,11 +1283,7 @@ test('control_cockpit rolls Contacts back when the turn becomes stale at commit'
     controlCockpit: () => assert.fail('stale turn must not enter Cockpit'),
     getCockpitState: () => ({ active: false }),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1372,11 +1341,7 @@ test('control_cockpit adopts the newest selection after Contacts settles', async
       return { ok: true, state: { active: true } };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const dataManager = {
     layers: new Map([['flights', { module: { trackById() { return true; } } }]]),
     isEnabled: (layerId) => layerId === 'flights',
@@ -1410,11 +1375,7 @@ test('control_cockpit restores the prior Context mode after Cockpit entry fails'
       return { ok: false, action: 'control_cockpit', error: 'Cockpit entry was unavailable' };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1450,11 +1411,7 @@ test('control_cockpit contains entry exceptions and still restores the prior Con
     },
     getCockpitState: () => ({ active: false }),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1486,11 +1443,7 @@ test('set_context_mode forwards cancellation authority and reports a stale turn'
       return { ok: false, mode: null };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1538,11 +1491,7 @@ test('opening Contacts expands Context before activation and returns its settled
       };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1566,11 +1515,7 @@ test('set_context_mode pre-dispatch cancellation includes authoritative Context 
     getContextModeState: () => ({ mode: 'flights', active: true, changing: false }),
     setContextMode: () => assert.fail('cancelled request must not dispatch'),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -1612,11 +1557,7 @@ test('control_cockpit enter skips selected non-flight context', async () => {
       return { ok: true, state: { active: true, navigation: { canNext: true, canPrevious: true, canFocus: true } } };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const recordCarrier = { __gevContextId: 'selected-non-flight-cockpit-enter' };
   const record = registerEntityContext(recordCarrier, {
     id: 'poi-001',
@@ -1733,10 +1674,11 @@ test('voice CCTV coverage writes the canonical durable coverage mode', async () 
   ]);
 });
 
-test('voice Radio resolves Austin and exposes semantic selection, volume, pause, and stop', async () => {
-  const austin = knownRadioLocation('', 'austin');
-  assert.ok(Math.abs(austin.lat - 30.31) < 0.1);
-  assert.ok(Math.abs(austin.lon + 97.75) < 0.1);
+test('voice Radio resolves Curitiba and exposes semantic selection, volume, pause, and stop', async () => {
+  // Curitiba é um preset do fork DataGeo (Austin saiu de CITY_POIS).
+  const austin = knownRadioLocation('', 'curitiba');
+  assert.ok(Math.abs(austin.lat + 25.46) < 0.1);
+  assert.ok(Math.abs(austin.lon + 49.285) < 0.1);
 
   let enabled = false;
   const calls = [];
@@ -1788,13 +1730,13 @@ test('voice Radio resolves Austin and exposes semantic selection, volume, pause,
   let result = await controlRadio({}, dataManager, {
     action: 'play',
     category: 'news',
-    locationId: 'austin',
+    locationId: 'curitiba',
   });
   assert.equal(result.ok, true);
   assert.equal(result.radioAction, 'select');
   assert.equal(result.stationId, 'aus-news');
   assert.equal('station' in result, false);
-  assert.equal(result.requestedLocation, 'Austin');
+  assert.equal(result.requestedLocation, 'Curitiba');
   assert.equal(result.radioPlaybackRequested, true);
   assert.equal(result.audioState, 'stopped');
   assert.equal(result.lifecycleState, 'enabled');
@@ -2468,11 +2410,7 @@ function contextClaimProbe({ entrySucceeds = true, cockpitSucceeds = true } = {}
     getCockpitState: () => ({ active: false }),
     getAircraftTrackingTarget: () => null,
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -2524,48 +2462,23 @@ test('a genuine set_context_mode request DOES claim the visual lane', async () =
 });
 
 /**
- * Viewer stub for the moveEnd prewarm: enough scene graph for
- * `createGevActionRunner` to install its listeners, with every pick under the
- * test's control.
+ * Motor falso para o prewarm de 'moveend': o bastante para `createGevActionRunner`
+ * instalar o ouvinte, com o unproject (o "pick" do MapLibre) sob controle do teste.
  */
-function createPrewarmHarness({ pickPosition, positionCartographic } = {}) {
-  const calls = { pickPosition: 0, pickEllipsoid: 0, getPickRay: 0 };
-  const position = Cesium.Cartesian3.fromDegrees(-97.74, 30.26, 900_000);
-  const surface = Cesium.Cartesian3.fromDegrees(-97.74, 30.26, 0);
+function createPrewarmHarness({ unproject, getCameraView } = {}) {
+  const calls = { unproject: 0 };
   let moveEndListener = null;
-  const camera = {
-    moveEnd: { addEventListener(listener) { moveEndListener = listener; } },
-    positionWC: position,
-    heading: Cesium.Math.toRadians(28),
-    pitch: Cesium.Math.toRadians(-45),
-    pickEllipsoid() { calls.pickEllipsoid += 1; return surface; },
-    getPickRay() { calls.getPickRay += 1; return null; },
-    cancelFlight() {},
-    flyToBoundingSphere() {},
-    lookAtTransform() {},
+  const viewer = fakeMapEngine({ alt: 900_000 });
+  viewer.on = (type, listener) => {
+    if (type === 'moveend') moveEndListener = listener;
+    return () => {};
   };
-  Object.defineProperty(camera, 'positionCartographic', {
-    get: positionCartographic || (() => Cesium.Cartographic.fromCartesian(position)),
-  });
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    camera,
-    scene: {
-      canvas: {
-        clientWidth: 1200,
-        clientHeight: 800,
-        addEventListener() {},
-        removeEventListener() {},
-      },
-      globe: undefined,
-      tweens: [],
-      pickPositionSupported: true,
-      pickPosition(...args) {
-        calls.pickPosition += 1;
-        return pickPosition ? pickPosition(...args) : surface;
-      },
-    },
+  const baseUnproject = viewer.unproject;
+  viewer.unproject = (...args) => {
+    calls.unproject += 1;
+    return unproject ? unproject(...args) : baseUnproject(...args);
   };
+  if (getCameraView) viewer.getCameraView = getCameraView;
   return { viewer, calls, fireMoveEnd: () => moveEndListener?.(), hasListener: () => !!moveEndListener };
 }
 
@@ -2611,9 +2524,9 @@ test('a degenerate depth pick does not escape the view-target prewarm', () => {
   // `DeveloperError: normalized result is not a number` from inside
   // requestIdleCallback, where nothing could catch it — a red console error on
   // first impression.
-  const degenerate = new Cesium.Cartesian3(Number.NaN, Number.NaN, Number.NaN);
+  const degenerate = { lon: Number.NaN, lat: Number.NaN };
   withCapturedTimers(({ flush, debugLines }) => {
-    const harness = createPrewarmHarness({ pickPosition: () => degenerate });
+    const harness = createPrewarmHarness({ unproject: () => degenerate });
     createGevActionRunner({
       viewer: harness.viewer,
       styleManager: {},
@@ -2624,11 +2537,9 @@ test('a degenerate depth pick does not escape the view-target prewarm', () => {
     harness.fireMoveEnd();
     assert.doesNotThrow(flush, 'a degenerate pick must not throw out of the idle callback');
 
-    assert.equal(harness.calls.pickPosition, 1, 'the prewarm must actually have picked');
-    // A degenerate pick is a MISSED pick, so the cascade continues instead of
-    // carrying nonsense forward. Before the fix the NaN Cartesian was truthy
-    // and short-circuited every fallback.
-    assert.equal(harness.calls.pickEllipsoid, 1, 'a degenerate pick must fall through to the ellipsoid');
+    assert.equal(harness.calls.unproject, 1, 'the prewarm must actually have picked');
+    // A degenerate pick is a MISSED pick (no view target), never a NaN point
+    // carried forward into geocoding.
     assert.deepEqual(debugLines, [], 'the guard handles this — the backstop must stay quiet');
   });
 });
@@ -2639,7 +2550,7 @@ test('an unexpected prewarm failure is logged once at debug level, never thrown'
   // swallowed — and must not spam the console when its cause repeats.
   withCapturedTimers(({ flush, debugLines }) => {
     const harness = createPrewarmHarness({
-      positionCartographic: () => { throw new Error('scene graph is mid-teardown'); },
+      unproject: () => { throw new Error('scene graph is mid-teardown'); },
     });
     createGevActionRunner({
       viewer: harness.viewer,
@@ -2681,11 +2592,7 @@ test('a lost cross-mode switch reports every mode field in the shared vocabulary
       };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -2714,11 +2621,7 @@ test('an absent secondary mode stays absent instead of claiming to be off', asyn
       return { ok: true, action: 'set_context_mode', mode: 'flights', active: true, entering: null };
     },
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -2751,11 +2654,7 @@ test('a nested Cockpit rollback result is translated too', async () => {
     },
     controlCockpit: () => ({ ok: false, error: 'Cockpit entry failed', state: { active: false } }),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: { moveEnd: { addEventListener() {} } },
-  };
+  const viewer = fakeMapEngine();
   const runner = createGevActionRunner({
     viewer,
     styleManager,
@@ -2782,7 +2681,7 @@ test('a nested Cockpit rollback result is translated too', async () => {
  * analyst's 2 000-record last-fix slice). These pin the unified engine.
  */
 function awarenessSubjectHarness({ subject, flights = [], military = [] }) {
-  const position = subject ? { __subject: true } : null;
+  const position = subject ? geoPoint(-97.9, 29.9, 9000) : null;
   return {
     snapshot: subject ? { subject: { ...subject, position }, radiusM: 250_000, cohorts: [] } : null,
     flights,
@@ -2798,23 +2697,16 @@ async function withAwareness(harness, run) {
     snapshot: awareness.getContextSnapshot,
     flightsNearby: flightsLayer.getNearby,
     militaryNearby: militaryLayer.getNearby,
-    cartoFrom: Cesium.Cartographic.fromCartesian,
   };
   awareness.getContextSnapshot = () => harness.snapshot;
   flightsLayer.getNearby = () => harness.flights.slice();
   militaryLayer.getNearby = () => harness.military.slice();
-  Cesium.Cartographic.fromCartesian = (value) => (
-    value?.__subject
-      ? { latitude: Cesium.Math.toRadians(29.9), longitude: Cesium.Math.toRadians(-97.9), height: 9000 }
-      : originals.cartoFrom(value)
-  );
   try {
     return await run();
   } finally {
     awareness.getContextSnapshot = originals.snapshot;
     flightsLayer.getNearby = originals.flightsNearby;
     militaryLayer.getNearby = originals.militaryNearby;
-    Cesium.Cartographic.fromCartesian = originals.cartoFrom;
   }
 }
 
@@ -2828,14 +2720,7 @@ function analystRunner() {
       { id: 'STALE1', icao24: 'aaa001', lat: 29.9, lon: -97.9 },
     ]),
   };
-  const viewer = {
-    clock: { onTick: { addEventListener: () => () => {} } },
-    scene: { canvas: { addEventListener() {}, removeEventListener() {} } },
-    camera: {
-      moveEnd: { addEventListener() {} },
-      positionCartographic: { height: 300_000, latitude: 0.52, longitude: -1.71 },
-    },
-  };
+  const viewer = fakeMapEngine({ lat: 29.79, lon: -97.98, alt: 300_000 });
   return createGevActionRunner({
     viewer,
     styleManager: {},
@@ -2989,4 +2874,46 @@ test('front5: 0.99 km due EAST is the subject, though a degree box rejects it', 
     assert.equal(result.count, 116, 'and gets the window number the panel shows');
     assert.equal(result.window.centeredOn, 'N546PC');
   });
+});
+
+test('basemap label context reads the labels the MapLibre basemap is drawing', async () => {
+  globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
+  const engine = fakeMapEngine();
+  engine.unproject = () => null; // sem alvo no centro: só os rótulos desenhados
+  const queried = [];
+  engine.map.getStyle = () => ({
+    layers: [
+      { id: 'background', type: 'background' },
+      { id: 'place_city', type: 'symbol' },
+      { id: 'highway-name-major', type: 'symbol' },
+      { id: 'dg-annotations-dot', type: 'circle' },
+      { id: 'dg-flights-label', type: 'symbol' },
+    ],
+  });
+  engine.map.queryRenderedFeatures = (_geometry, options) => {
+    queried.push(options.layers);
+    return [
+      { properties: { name: 'Curitiba', 'name:pt': 'Curitiba' }, sourceLayer: 'place', layer: { id: 'place_city' } },
+      { properties: { name: 'Rua XV de Novembro' }, sourceLayer: 'transportation_name', layer: { id: 'highway-name-major' } },
+      { properties: { name: 'Curitiba' }, sourceLayer: 'place', layer: { id: 'place_city' } },
+      { properties: {}, sourceLayer: 'place', layer: { id: 'place_city' } },
+    ];
+  };
+  const context = await getBasemapLabelContext(engine);
+  assert.deepEqual(queried, [['place_city', 'highway-name-major']], 'only the basemap symbol layers, never the app dg-* ones');
+  assert.deepEqual(context.placeLabels, ['Curitiba']);
+  assert.deepEqual(context.streetLabels, ['Rua XV de Novembro']);
+  assert.deepEqual(context.nearbyPlaceLabels, []);
+});
+
+test('adjust_camera_zoom moves the MapLibre camera by the requested share of the target distance', async () => {
+  globalThis.window = globalThis.window || { clearTimeout, setTimeout, requestIdleCallback: null };
+  const engine = fakeMapEngine({ alt: 4000, pitch: -90 });
+  const runner = createGevActionRunner({ viewer: engine, styleManager: {}, dataManager: { layers: new Map(), getAll: () => [] } });
+  const zoomIn = await runner('adjust_camera_zoom', { direction: 'in', amount: 'medium' });
+  assert.equal(zoomIn.ok, true);
+  assert.ok(Math.abs(zoomIn.afterHeightM - 4000 * 0.45) < 5, `in: ${zoomIn.afterHeightM}`);
+  const zoomOut = await runner('adjust_camera_zoom', { direction: 'out', amount: 'lot' });
+  assert.equal(zoomOut.ok, true);
+  assert.ok(zoomOut.afterHeightM > zoomOut.beforeHeightM * 1.9, `out: ${zoomOut.afterHeightM}`);
 });

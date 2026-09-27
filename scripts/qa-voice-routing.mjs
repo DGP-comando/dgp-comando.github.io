@@ -24,7 +24,10 @@
  *   node scripts/qa-voice-routing.mjs --layer routing --budget 120
  *   node scripts/qa-voice-routing.mjs --layer behavior --url http://localhost:4173
  *
- * House gotchas honored: camera.cancelFlight() before every teleport; puppeteer
+ * Camera reads go through the MapLibre engine (`__godsEyeView.engine`:
+ * getCameraView() in degrees/metres, trackedTarget, cancelFlight()).
+ *
+ * House gotchas honored: engine.cancelFlight() before every teleport; puppeteer
  * suites must run sequentially with other harnesses (SwiftShader saturation);
  * routing assertions pin tool NAMES (model wording varies, tool choice must not).
  */
@@ -33,19 +36,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import puppeteer from 'puppeteer';
+import { appUrl, launchQaBrowser } from './lib/qaBrowser.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const CHROME_CANDIDATES = [
-  process.env.PUPPETEER_EXECUTABLE_PATH,
-  (() => { try { return puppeteer.executablePath(); } catch { return null; } })(),
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/Applications/Chromium.app/Contents/MacOS/Chromium',
-].filter(Boolean);
-const CHROME_EXECUTABLE = CHROME_CANDIDATES.find((candidate) => {
-  try { return fs.existsSync(candidate); } catch { return false; }
-});
 
 // ── CLI ─────────────────────────────────────────────────────
 function getOpt(flag, fallback) {
@@ -373,34 +367,17 @@ async function runBehaviorLayer() {
     return;
   }
 
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    ...(CHROME_EXECUTABLE ? { executablePath: CHROME_EXECUTABLE } : {}),
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--disable-dev-shm-usage',
-      '--disable-web-security',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-      '--window-size=1500,950',
-    ],
-    protocolTimeout: 180000,
-  });
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1500, height: 950 });
+  const { browser, page } = await launchQaBrowser({ viewport: { width: 1500, height: 950 } });
   page.on('pageerror', (e) => console.log(`  [page error] ${String(e).slice(0, 140)}`));
 
   try {
-    await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(appUrl(APP_URL), { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForFunction(
-      () => window.__godsEyeView?.viewer && window.__gevVoiceCommands?.runner && window.__gevAnnotations,
+      () => window.__godsEyeView?.engine && window.__gevVoiceCommands?.runner && window.__gevAnnotations,
       { timeout: 120000, polling: 250 },
     );
     // House rule: the intro flight clobbers teleports issued mid-flight.
-    await page.evaluate(() => window.__godsEyeView.viewer.camera.cancelFlight());
+    await page.evaluate(() => window.__godsEyeView.engine.cancelFlight());
 
     const run = (name, args) => page.evaluate(
       (n, a) => Promise.resolve(window.__gevVoiceCommands.runner(n, a))
@@ -408,9 +385,8 @@ async function runBehaviorLayer() {
       name, args,
     );
     const camState = () => page.evaluate(() => {
-      const c = window.__godsEyeView.viewer.camera;
-      const p = c.positionCartographic;
-      return { lat: p.latitude * 180 / Math.PI, lon: p.longitude * 180 / Math.PI, altKm: p.height / 1000, pitchDeg: c.pitch * 180 / Math.PI };
+      const v = window.__godsEyeView.engine.getCameraView();
+      return { lat: v.lat, lon: v.lon, altKm: v.alt / 1000, pitchDeg: v.pitch };
     });
     const settle = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -427,10 +403,10 @@ async function runBehaviorLayer() {
     // Radio voice control selects by semantic category + place without moving
     // the just-established Austin camera, then preserves explicit volume and
     // transport commands through the public layer surface.
-    // `fly_to_location` may finish its promise just before Cesium drains the
+    // `fly_to_location` may finish its promise just before the map drains the
     // final tween frame. Cancel that already-arrived flight so the assertion
     // measures Radio's camera ownership, not residual navigation motion.
-    await page.evaluate(() => window.__godsEyeView.viewer.camera.cancelFlight());
+    await page.evaluate(() => window.__godsEyeView.engine.cancelFlight());
     await settle(250);
     const radioCameraBefore = await camState();
     r = await run('control_radio', { action: 'select', category: 'news', locationId: 'austin' });
@@ -494,7 +470,9 @@ async function runBehaviorLayer() {
     const ownerTransfer = await page.evaluate(async () => {
       const app = window.__godsEyeView;
       const runner = window.__gevVoiceCommands?.runner;
-      const { viewer, dataManager, styleManager } = app || {};
+      const { engine, dataManager, styleManager } = app || {};
+      // A stand-in "previously tracked" subject for engine.track().
+      const makeSentinel = (id) => ({ id, getPosition: () => ({ lon: -97.7431, lat: 30.2672, alt: 0 }), releaseOnDrag: false });
       const fireEntry = dataManager?.layers?.get('local-firms');
       const vesselEntry = dataManager?.layers?.get('ais-live-vessels');
       const flightsEntry = dataManager?.layers?.get('flights');
@@ -507,15 +485,15 @@ async function runBehaviorLayer() {
         fireModule: fireEntry.module,
         vesselModule: vesselEntry.module,
         flightsModule: flightsEntry.module,
-        flyToBoundingSphere: viewer.camera.flyToBoundingSphere,
+        flyToTarget: engine.flyToTarget,
         cockpitActive: styleManager.cockpitView?.active,
       };
       const flightStarts = [];
       let currentKind = null;
       let vesselSelections = 0;
-      viewer.camera.flyToBoundingSphere = function (...args) {
-        flightStarts.push({ kind: currentKind, trackingReleased: !viewer.trackedEntity });
-        return original.flyToBoundingSphere.apply(this, args);
+      engine.flyToTarget = function (...args) {
+        flightStarts.push({ kind: currentKind, trackingReleased: !engine.trackedTarget });
+        return original.flyToTarget.apply(this, args);
       };
       dataManager.isEnabled = function (id) {
         if (['local-firms', 'ais-live-vessels', 'flights'].includes(id)) return true;
@@ -540,7 +518,10 @@ async function runBehaviorLayer() {
         ...original.flightsModule,
         getNearby: () => [{
           id: 'qa-aircraft',
-          position: viewer.camera.positionWC.clone(),
+          position: (() => {
+            const v = engine.getCameraView();
+            return { lon: v.lon, lat: v.lat, height: v.alt };
+          })(),
         }],
       };
 
@@ -550,26 +531,26 @@ async function runBehaviorLayer() {
           ['fire', { query: 'strongest fire', layerId: 'local-firms' }],
           ['vessel', { query: 'QA synthetic vessel', layerId: 'ais-live-vessels' }],
         ]) {
-          const sentinel = viewer.entities.add({ id: `qa-prior-${kind}` });
-          viewer.trackedEntity = sentinel;
+          const sentinel = makeSentinel(`qa-prior-${kind}`);
+          engine.track(sentinel);
           const generationBefore = styleManager._navigationGeneration;
           currentKind = kind;
           const result = await runner('track_entity', args);
           results[kind] = {
             ok: result?.ok === true,
             generationAdvanced: styleManager._navigationGeneration > generationBefore,
-            trackingReleased: !viewer.trackedEntity,
+            trackingReleased: !engine.trackedTarget,
           };
-          viewer.camera.cancelFlight();
-          viewer.entities.remove(sentinel);
+          engine.cancelFlight();
+          if (engine.trackedTarget === sentinel) engine.track(null);
         }
 
         await runner('move_camera', { motion: 'stop' });
         const seededMotion = await runner('move_camera', {
           motion: 'pan', direction: 'right', mode: 'continuous',
         });
-        const cockpitSentinel = viewer.entities.add({ id: 'qa-cockpit-owner' });
-        viewer.trackedEntity = cockpitSentinel;
+        const cockpitSentinel = makeSentinel('qa-cockpit-owner');
+        engine.track(cockpitSentinel);
         const generationBefore = styleManager._navigationGeneration;
         const flightsBefore = flightStarts.length;
         const selectionsBefore = vesselSelections;
@@ -588,18 +569,17 @@ async function runBehaviorLayer() {
         results.cockpit = {
           allRefused: refused.every(Boolean),
           generationUnchanged: styleManager._navigationGeneration === generationBefore,
-          trackingUnchanged: viewer.trackedEntity === cockpitSentinel,
+          trackingUnchanged: engine.trackedTarget === cockpitSentinel,
           noFlight: flightStarts.length === flightsBefore,
           noSelection: vesselSelections === selectionsBefore,
         };
         styleManager.cockpitView.active = false;
         results.cockpit.motionUnchanged = seededMotion?.ok === true
           && (await runner('move_camera', { motion: 'stop' }))?.stopped === true;
-        viewer.trackedEntity = undefined;
-        viewer.entities.remove(cockpitSentinel);
+        engine.track(null);
       } finally {
         styleManager.cockpitView.active = original.cockpitActive;
-        viewer.camera.flyToBoundingSphere = original.flyToBoundingSphere;
+        engine.flyToTarget = original.flyToTarget;
         dataManager.isEnabled = original.isEnabled;
         fireEntry.module = original.fireModule;
         vesselEntry.module = original.vesselModule;
@@ -635,7 +615,7 @@ async function runBehaviorLayer() {
     // (5) zoom_to_globe is ABSOLUTE full-earth (>12,000 km band)
     r = await run('zoom_to_globe', {});
     await page.waitForFunction(
-      () => window.__godsEyeView.viewer.camera.positionCartographic.height / 1000 > 12000,
+      () => window.__godsEyeView.engine.getCameraView().alt / 1000 > 12000,
       { timeout: 30_000, polling: 250 },
     ).catch(() => {});
     cam = await camState();
@@ -644,7 +624,7 @@ async function runBehaviorLayer() {
     // (6) natural-region swath: overview of the Alps must CAP the range
     r = await run('fly_to_location', { query: 'the Alps', viewMode: 'overview' });
     await page.waitForFunction(
-      () => window.__godsEyeView.viewer.camera.positionCartographic.height / 1000 < 900,
+      () => window.__godsEyeView.engine.getCameraView().alt / 1000 < 900,
       { timeout: 40_000, polling: 250 },
     ).catch(() => {});
     cam = await camState();
@@ -693,7 +673,7 @@ async function runBehaviorLayer() {
     await settle(1500);
 
     // (6c) move_camera orbit ONCE: bounded eased ~30° heading advance.
-    const heading = () => page.evaluate(() => window.__godsEyeView.viewer.camera.heading * 180 / Math.PI);
+    const heading = () => page.evaluate(() => window.__godsEyeView.engine.getCameraView().heading);
     let h0 = await heading();
     r = await run('move_camera', { motion: 'orbit', mode: 'once' });
     await settle(5000);
@@ -739,7 +719,7 @@ async function runBehaviorLayer() {
     h0 = await heading();
     h1 = h0;
     let chainMoving = false;
-    // Multi-stage Cesium flights can settle later under SwiftShader even
+    // Multi-stage flights can settle later under SwiftShader even
     // after reaching the destination. Poll for actual heading motion instead
     // of sampling exactly one frame five seconds after arrival.
     for (let i = 0; i < 20 && !chainMoving; i += 1) {
@@ -781,7 +761,7 @@ async function runBehaviorLayer() {
     r = trackId ? await run('track_entity', { query: trackId, layerId: 'flights' }) : { ok: false, error: 'no contacts in view' };
     if (r?.ok) {
       const orbitRes = await run('move_camera', { motion: 'orbit', mode: 'continuous' });
-      const trackingReleased = await page.evaluate(() => !window.__godsEyeView.viewer.trackedEntity);
+      const trackingReleased = await page.evaluate(() => !window.__godsEyeView.engine.trackedTarget);
       const orbitStop = await run('move_camera', { motion: 'stop' });
       report(orbitRes?.ok === true && trackingReleased && orbitStop?.stopped === true,
         'behavior: move_camera releases tracking before taking the camera',
@@ -800,7 +780,7 @@ async function runBehaviorLayer() {
       await settle(2000);
       await run('fly_to_location', { query: 'Austin, Texas' });
       await settle(6000);
-      const stillTracked = await page.evaluate(() => Boolean(window.__godsEyeView.viewer.trackedEntity));
+      const stillTracked = await page.evaluate(() => Boolean(window.__godsEyeView.engine.trackedTarget));
       const camHere = await camState();
       const nearAustin = Math.hypot(camHere.lat - 30.2672, camHere.lon + 97.7431) < 1.5;
       report(!stillTracked && nearAustin,
@@ -812,8 +792,8 @@ async function runBehaviorLayer() {
 
     // (6e5) tilt at the clamp answers honestly instead of silently no-oping.
     await page.evaluate(() => {
-      const c = window.__godsEyeView.viewer.camera;
-      c.setView({ orientation: { heading: c.heading, pitch: -5.2 * Math.PI / 180, roll: 0 } });
+      const { engine } = window.__godsEyeView;
+      engine.setCameraView({ ...engine.getCameraView(), pitch: -5.2, roll: 0 });
     });
     r = await run('move_camera', { motion: 'tilt', direction: 'up', mode: 'once' });
     report(r?.ok === false && /limit/i.test(r?.error || ''),

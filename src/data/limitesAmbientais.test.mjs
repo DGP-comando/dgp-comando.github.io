@@ -5,13 +5,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  DATAGEO_TERRITORIOS_LAYERS,
-  datageoAssentamentosLayer,
-  datageoUcsEstaduaisLayer,
-  datageoUcsFederaisLayer,
-  tituloUc,
-} from './datageoTerritorios.js';
+import { tituloUc } from './territoriosSpec.js';
+import DATAGEO_TERRITORIOS_LAYERS from '../maplibre/layers/territorios.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -67,6 +62,10 @@ test('tituloUc deixa o nome do CNUC legível no rótulo', () => {
 });
 
 test('camadas nas categorias pedidas e registradas no share link', () => {
+  const byId = (id) => DATAGEO_TERRITORIOS_LAYERS.find((l) => l.id === id);
+  const datageoAssentamentosLayer = byId('datageo-assentamentos');
+  const datageoUcsFederaisLayer = byId('datageo-ucs-federais');
+  const datageoUcsEstaduaisLayer = byId('datageo-ucs-estaduais');
   assert.equal(datageoAssentamentosLayer.category, 'Limites');
   assert.equal(datageoUcsFederaisLayer.category, 'Ambiente');
   assert.equal(datageoUcsEstaduaisLayer.category, 'Ambiente');

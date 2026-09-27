@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bancada de cenas e cockpit (dev)</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #0a0a0f; color: #e8eaed; font: 12px 'JetBrains Mono', monospace; overflow: hidden; }
+    #map { position: absolute; inset: 0; }
+    #log { position: absolute; left: 8px; bottom: 8px; max-width: 45%; max-height: 30%; overflow: auto; background: rgba(0,0,0,.7); padding: 6px 8px; white-space: pre-wrap; z-index: 10; }
+    #scene-panel.bench { position: absolute; top: 12px; right: 12px; width: 330px; z-index: 20; }
+    #cockpit-bench-hud { position: absolute; top: 12px; left: 12px; z-index: 30; background: rgba(0,0,0,.6); padding: 6px 10px; border: 1px solid rgba(0,212,255,.4); display: none; }
+    body.cockpit-mode #cockpit-bench-hud { display: block; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="toast" role="status"></div>
+  <div id="safe-frame-overlay"><div id="safe-frame-box"></div></div>
+  <div id="cockpit-bench-hud"></div>
+  <div id="scene-panel" class="panel-collapsible bench" data-panel-id="scene-panel">
+    <div class="panel-glow"></div>
+    <div class="scene-panel-inner">
+      <div class="panel-header"><span class="panel-title">CENAS (bancada)</span><span class="panel-divider"></span></div>
+      <div class="scene-controls">
+        <select id="scene-select" aria-label="Scene recipe"></select>
+        <button id="scene-new-btn" class="scene-btn">NOVA</button>
+        <button id="scene-delete-btn" class="scene-btn scene-btn-danger">DEL</button>
+      </div>
+      <div class="scene-controls">
+        <button id="scene-capture-btn" class="scene-btn">CAPTURAR</button>
+        <button id="scene-update-shot-btn" class="scene-btn">ATUALIZAR</button>
+      </div>
+      <div id="scene-shot-list" class="scene-shot-list"></div>
+      <div class="scene-controls">
+        <button id="scene-start-btn" class="scene-btn">INICIAR</button>
+        <button id="scene-stop-btn" class="scene-btn scene-btn-danger">PARAR</button>
+        <button id="scene-next-btn" class="scene-btn">PRÓXIMA</button>
+      </div>
+      <div class="scene-controls">
+        <button id="scene-export-btn" class="scene-btn">EXPORTAR</button>
+        <button id="scene-import-btn" class="scene-btn">IMPORTAR</button>
+        <button id="scene-download-btn" class="scene-btn">REGISTRO</button>
+        <input type="file" id="scene-import-file" accept="application/json,.json" hidden />
+      </div>
+      <div class="scene-progress"><div id="scene-progress-fill">0%</div></div>
+      <div id="scene-status">Pronto</div>
+      <div id="scene-runtime"></div>
+    </div>
+  </div>
+  <pre id="log"></pre>
+  <script type="module" src="./cenas.js"></script>
+</body>
+</html>
