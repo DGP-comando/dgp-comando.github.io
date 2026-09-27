@@ -10,36 +10,13 @@ of the public release.
 
 ---
 
+## Resolved during the MapLibre migration (2026-09-27)
+
+- Base-map switch now resolves (`engine.setBasemap` subscribes to `style.load` before `setStyle`); status, active tile and `map=` in the link update.
+- MAPA BASE tray stays inside the viewport at ≤620 px (aligned to the dock's usable width; measured at 620/480/390 px).
+- The optional `GOOGLE_MAPS_API_KEY` is published again as `window.__GOOGLE_MAPS_API_KEY__` at boot, so HUD reverse geocoding, free-text search and Places lookups work when a key is configured.
+
 ## Open
-
-### Switching the base map leaves the MAPA BASE status on "..."
-Status: Open (found by `npm run qa:map-source-tray`, 2026-09-26)
-
-Context:
-- `engine.setBasemap()` (`src/maplibre/engine.js`) calls `map.setStyle(style, {transformStyle})`
-  and only then subscribes `map.once('style.load')`. With an object style MapLibre fires
-  `style.load` synchronously inside `setStyle`, so the promise never resolves: the map does
-  switch, but `MapStackController.setStack()` never commits — the status chip stays `...`,
-  the active tile does not move and the share link keeps the old `map=`.
-- Fix direction: subscribe before calling `setStyle` (or resolve when `map.isStyleLoaded()`
-  right after it).
-
-### MAPA BASE tray overflows the viewport at narrow widths
-Status: Open (found by `npm run qa:map-source-tray`, 2026-09-26)
-
-Context:
-- With the three sources plus the three toggles (Rótulos, Globo/2D, Relevo 3D) the tray grid
-  wraps to two columns at ≤620 px and the popover's left edge lands off-screen
-  (measured `left: -165px` at 620 px, `-95px` at 480 px).
-
-### HUD place names from Google reverse geocoding never run
-Status: Open (2026-09-26)
-
-Context:
-- `src/basemapLabelContext.js` (and `reverseGeocode` in `src/voice/gevActions.js`) read the key
-  only from `window.__GOOGLE_MAPS_API_KEY__`, which nothing sets any more; the forward geocoders
-  also fall back to `import.meta.env.GOOGLE_MAPS_API_KEY`. Even with the key configured, that
-  lookup is skipped.
 
 ### Street traffic can be slow/uneven when panning across dense city blocks
 Status: Open (partially mitigated)

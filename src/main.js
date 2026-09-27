@@ -79,6 +79,12 @@ async function init() {
   try {
     loaderStatus.textContent = 'Configurando o mapa...';
 
+    // Chave Google opcional: sem ela o app sobe normalmente (o mapa não
+    // depende dela); com ela, geocodificação de texto livre, rótulos
+    // reversos do HUD e buscas de lugares da voz/anotações passam a responder.
+    const googleApiKey = import.meta.env.GOOGLE_MAPS_API_KEY || '';
+    if (googleApiKey) window.__GOOGLE_MAPS_API_KEY__ = googleApiKey;
+
     const engine = createEngine({
       container: 'map',
       basemap: 'esri',

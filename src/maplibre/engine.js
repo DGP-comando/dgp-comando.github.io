@@ -330,6 +330,14 @@ export function createEngine({
     if (!BASEMAPS.some((b) => b.id === id)) return Promise.resolve(false);
     state.basemap = id;
     state.esriLabels = esriLabels;
+    // Assinar ANTES do setStyle: com estilo em objeto o MapLibre dispara o
+    // style.load de forma síncrona dentro do setStyle.
+    const loaded = new Promise((resolve) =>
+      map.once('style.load', () => {
+        emit('basemapchange', { id });
+        resolve(true);
+      }),
+    );
     map.setStyle(buildBaseStyle(id, { esriLabels }), {
       // Transplanta tudo que é do app (fontes e layers `dg-`, relevo) para o estilo novo.
       transformStyle: (prev, style) => {
@@ -339,12 +347,7 @@ export function createEngine({
         return { ...style, sources, layers, terrain: prev?.terrain };
       },
     });
-    return new Promise((resolve) =>
-      map.once('style.load', () => {
-        emit('basemapchange', { id });
-        resolve(true);
-      }),
-    );
+    return loaded;
   }
 
   function setEsriLabels(visible) {

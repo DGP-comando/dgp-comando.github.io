@@ -9422,3 +9422,18 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-right,
 body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
   bottom: 26px;
 }
+
+/* Bandeja ESTILOS/MAPA BASE em telas ≤ 620 px: com os três mapas base e os
+   chips de rótulos, globo/2D e relevo, a fórmula de centralização por `right`
+   empurrava a bandeja para fora da borda esquerda (left −165 px em 620 px).
+   O bloco de referência dela é o #control-panel, que nessa faixa começa depois
+   dos dois cartões compactos do dock (lado compacto + voz + 13 px de folgas);
+   descontar isso alinha a bandeja à largura útil do dock (8 px de cada lado).
+   Medido em 620, 480 e 390 px; ver scripts/qa-map-source-tray.mjs. */
+@media (max-width: 620px) {
+  #command-dock #control-panel .dock-popover-content {
+    left: calc(8px - (var(--dock-side-compact) + var(--dock-voice-width) + 13px));
+    right: auto;
+    width: calc(100vw - 16px);
+  }
+}
