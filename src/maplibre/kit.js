@@ -40,7 +40,7 @@
 //         na feição sob o cursor dessa fonte (exige id nas feições/promoteId)
 //     tooltip: (props, feature, ctx) => html   // tipCard({...}) de tooltipCard.js
 //     click:   (props, feature, ctx) => void   // opcional
-//     underlay: true    // opcional: camada-base (municípios) que cede hover,
+//     underlay: true    // opcional: camada-base (municípios, grades) que cede hover,
 //                       // tooltip e clique às camadas ligadas sob o cursor
 //     clickWithUnderlay: true  // opcional: o clique desta camada abre por cima
 //                       // do clique da camada-base (card regional sobre a ficha)

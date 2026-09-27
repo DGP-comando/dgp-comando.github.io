@@ -301,6 +301,8 @@ const climaHistorico = (() => {
       { id: 'dg-clima-historico-pick', type: 'fill', source: 'dg-clima-historico-pick', paint: PICK_PAINT },
     ],
     interactive: ['dg-clima-historico-pick'],
+    // Grade cobre o estado todo: cede o hover às camadas pontuais (layerHost).
+    underlay: true,
     // Série histórica: nada a atualizar na sessão (o app usa 24 h).
     refreshMs: 24 * 3600_000,
     onEnable(ctx) {
@@ -357,6 +359,8 @@ const precipitacao = (() => {
       { id: 'dg-precipitacao-pick', type: 'fill', source: 'dg-precipitacao-pick', paint: PICK_PAINT },
     ],
     interactive: ['dg-precipitacao-pick'],
+    // Grade cobre o estado todo: cede o hover às camadas pontuais (layerHost).
+    underlay: true,
     refreshMs: 1_800_000,
     onEnable(ctx) {
       trackCursor(ctx.map);
@@ -408,6 +412,8 @@ const ventos = (() => {
     // desta grade de quadrados invisíveis, um por nó.
     layers: [{ id: 'dg-ventos-pick', type: 'fill', source: 'dg-ventos-pick', paint: PICK_PAINT }],
     interactive: ['dg-ventos-pick'],
+    // Grade cobre o estado todo: cede o hover às camadas pontuais (layerHost).
+    underlay: true,
     tooltip: (p, _f, ctx) => (grid ? ventoTooltip(grid, Number(p.k), { cur: cursorContext(ctx) }) : ''),
     refreshMs: 1_800_000,
     onEnable(ctx) {

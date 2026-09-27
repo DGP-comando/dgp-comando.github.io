@@ -132,10 +132,14 @@ export function createLayerHost(engine) {
     return hits;
   }
 
-  /** Quem responde ao hover: a camada mais alta que não é base e tem tooltip; senão a base. */
+  /**
+   * Quem responde ao hover: a camada mais alta que não é base e tem tooltip;
+   * senão uma base com tooltip (grades de clima); senão a mais alta.
+   */
   function hoverHit(hits) {
     return hits.find((h) => !h.def.underlay && h.def.tooltip)
       ?? hits.find((h) => !h.def.underlay)
+      ?? hits.find((h) => h.def.tooltip)
       ?? hits[0]
       ?? null;
   }
