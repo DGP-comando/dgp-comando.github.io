@@ -8,6 +8,11 @@
 // montadas pelos builders puros de src/data/datageoMonitoramento.js (testados
 // em monitoramento.test.mjs) a partir dos MESMOS fetchers de datageoClient.js.
 //
+// Tooltips: todas as camadas têm hover no formato único tipCard, montado por
+// builders puros de datageoMonitoramento.js (climaTooltip ... maritimoTooltip)
+// a partir das properties escalares das feições. Pontos pequenos ganham um
+// círculo invisível `dg-<key>-hit` (raio mín. 8 px) só para o pick.
+//
 // Equivalências com a fábrica createDatageoLayer do app:
 // - refresh incremental por id estável: a fonte usa promoteId 'fid' e, a cada
 //   poll, os ids que não estavam no poll anterior ganham feature-state
@@ -38,7 +43,6 @@ import {
 } from '../../data/datageoClient.js';
 import { validLineup } from '../../data/portLineup.js';
 import { SHIP_ICON_URI, VESSEL_METERS_MAX_DISTANCE } from '../../data/vesselIcon.js';
-import { vesselTooltipHtml } from '../../data/vesselTooltip.js';
 import { NEW_ARRIVAL_MS } from '../../data/newArrivalHighlight.js';
 import {
   LABEL_MAX_DISTANCE,
@@ -58,6 +62,16 @@ import {
   buildIrtc,
   buildMaritimo,
   buildRios,
+  anomaliasTooltip,
+  arTooltip,
+  cemadenTooltip,
+  climaTooltip,
+  dengueTooltip,
+  incidentesTooltip,
+  infohidroTooltip,
+  irtcTooltip,
+  maritimoTooltip,
+  riosTooltip,
 } from '../../data/datageoMonitoramento.js';
 import { EMPTY_FC, LABEL_PAINT, TEXT_FONT, defineLayer, fc, zoomForHeight } from '../kit.js';
 
@@ -91,7 +105,7 @@ function labelLayer(key, source, maxDistance, extra = {}) {
  * app). `kind` 'point' desenha pontos em pixels (com destaque de chegada) e
  * 'disc' discos em metros.
  */
-function datageoLayer({ key, id, name, category, icon, source, refreshMs, fetcher, build, kind = 'point' }) {
+function datageoLayer({ key, id, name, category, icon, source, refreshMs, fetcher, build, tooltip, kind = 'point' }) {
   const src = `dg-${key}`;
   const st = { prevIds: new Set(), refreshes: 0, newCount: 0, lastUpdate: 0, lit: [], timer: null };
 
@@ -133,6 +147,23 @@ function datageoLayer({ key, id, name, category, icon, source, refreshMs, fetche
           },
         };
 
+  // Pontos de 2-7 px são difíceis de apontar: um círculo invisível mais largo
+  // (mín. 8 px de raio) recebe o hover. Discos em metros já são grandes.
+  const hit =
+    kind === 'point'
+      ? {
+          id: `dg-${key}-hit`,
+          type: 'circle',
+          source: src,
+          paint: {
+            'circle-radius': ['max', ['+', ['get', 'radius'], 3], 8],
+            'circle-color': '#000000',
+            'circle-opacity': 0.01,
+            'circle-stroke-width': 0,
+          },
+        }
+      : null;
+
   return defineLayer({
     id,
     name,
@@ -141,7 +172,9 @@ function datageoLayer({ key, id, name, category, icon, source, refreshMs, fetche
     source,
     defaultOn: false,
     sources: { [src]: { type: 'geojson', data: EMPTY_FC, promoteId: 'fid' } },
-    layers: [circle, labelLayer(key, src, LABEL_MAX_DISTANCE[key])],
+    layers: [circle, ...(hit ? [hit] : []), labelLayer(key, src, LABEL_MAX_DISTANCE[key])],
+    interactive: [hit ? hit.id : circle.id],
+    tooltip: (p) => tooltip(p),
     refreshMs,
     async load(ctx) {
       const data = await fetcher();
@@ -176,6 +209,7 @@ const clima = datageoLayer({
   refreshMs: 900_000,
   fetcher: fetchClimateStations,
   build: buildClima,
+  tooltip: climaTooltip,
 });
 
 const rios = datageoLayer({
@@ -188,6 +222,7 @@ const rios = datageoLayer({
   refreshMs: 900_000,
   fetcher: fetchRiverStations,
   build: buildRios,
+  tooltip: riosTooltip,
   kind: 'disc',
 });
 
@@ -201,6 +236,7 @@ const cemaden = datageoLayer({
   refreshMs: 300_000,
   fetcher: fetchCemadenAlerts,
   build: buildCemaden,
+  tooltip: cemadenTooltip,
 });
 
 const irtc = datageoLayer({
@@ -213,6 +249,7 @@ const irtc = datageoLayer({
   refreshMs: 1_800_000,
   fetcher: fetchIrtcScores,
   build: buildIrtc,
+  tooltip: irtcTooltip,
   kind: 'disc',
 });
 
@@ -226,6 +263,7 @@ const dengue = datageoLayer({
   refreshMs: 3_600_000,
   fetcher: fetchDengueLatestWeek,
   build: buildDengue,
+  tooltip: dengueTooltip,
 });
 
 const ar = datageoLayer({
@@ -238,6 +276,7 @@ const ar = datageoLayer({
   refreshMs: 1_800_000,
   fetcher: fetchAirQuality,
   build: buildAr,
+  tooltip: arTooltip,
 });
 
 const anomalias = datageoLayer({
@@ -250,6 +289,7 @@ const anomalias = datageoLayer({
   refreshMs: 900_000,
   fetcher: fetchAnomalies,
   build: buildAnomalias,
+  tooltip: anomaliasTooltip,
 });
 
 const incidentes = datageoLayer({
@@ -262,6 +302,7 @@ const incidentes = datageoLayer({
   refreshMs: 300_000,
   fetcher: fetchActiveIncidents,
   build: buildIncidentes,
+  tooltip: incidentesTooltip,
 });
 
 const infohidro = datageoLayer({
@@ -274,6 +315,7 @@ const infohidro = datageoLayer({
   refreshMs: 3_600_000,
   fetcher: fetchInfohidroStations,
   build: buildInfohidro,
+  tooltip: infohidroTooltip,
 });
 
 // ------------------------------------------------------------------ marítimo
@@ -351,26 +393,6 @@ function hookShipImages(map) {
   });
 }
 
-// Estilos do tooltip de navio (classes .vt-* de vesselTooltip.js), os mesmos
-// do tooltip de entidade do app (entityHoverTooltip.js).
-function injectVesselTooltipStyle() {
-  if (typeof document === 'undefined' || document.getElementById('dg-vt-style')) return;
-  const style = document.createElement('style');
-  style.id = 'dg-vt-style';
-  style.textContent = `
-    #dg-tooltip .vt { font: 11px/1.5 'JetBrains Mono', monospace; color: #cbd5e1; max-width: 340px; white-space: normal; }
-    #dg-tooltip .vt span { color: inherit; }
-    #dg-tooltip .vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
-    #dg-tooltip .vt .vt-status { margin-bottom: 4px; }
-    #dg-tooltip .vt .vt-berco { color: #fbbf24; }
-    #dg-tooltip .vt .vt-fundeio { color: #94a3b8; }
-    #dg-tooltip .vt .vt-ais { color: #7dd3fc; }
-    #dg-tooltip .vt .vt-dim { color: #64748b; }
-    #dg-tooltip .vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
-  `;
-  document.head.appendChild(style);
-}
-
 const SHIP_ICON_LAYOUT = {
   'icon-rotate': ['get', 'rotate'],
   'icon-rotation-alignment': 'map',
@@ -433,7 +455,6 @@ const maritimo = defineLayer({
   ],
   refreshMs: 600_000,
   async onEnable(ctx) {
-    injectVesselTooltipStyle();
     hookShipImages(ctx.map);
     await loadShipImages();
     for (const name of shipImages.keys()) addShipImage(ctx.map, name);
@@ -448,10 +469,7 @@ const maritimo = defineLayer({
     return { count, info: a.highlight ? `+${a.newIds.length} novos` : '' };
   },
   interactive: ['dg-maritimo-far', 'dg-maritimo-near'],
-  tooltip: (p) => {
-    const html = vesselTooltipHtml(p);
-    return html ? `<div class="vt">${html}</div>` : '';
-  },
+  tooltip: (p) => maritimoTooltip(p),
 });
 
 export default [clima, rios, cemaden, irtc, dengue, ar, anomalias, incidentes, infohidro, maritimo];
