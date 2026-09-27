@@ -10,10 +10,13 @@ import layers, {
   buildFireCells,
   buildFireFeatures,
   buildLocalInfraFeatures,
+  cableTooltip,
   EARTHQUAKE_LABEL_CAP,
   earthquakeTooltip,
   FIRMS_ZOOM,
   fireTooltip,
+  lineLengthKm,
+  localInfraTooltip,
   metricRadiusExpression,
   parseGeoJsonLines,
   radiusPxAtZ0,
@@ -74,8 +77,23 @@ test('terremotos: corte M2.5, cor por profundidade, disco 2^mag km e rótulo nos
   const labelled = many.features.filter((f) => f.properties.lab).map((f) => f.properties.mag);
   assert.equal(labelled.length, EARTHQUAKE_LABEL_CAP);
   assert.ok(Math.min(...labelled) > 2.5 + 23 * 0.01 - 1e-9);
-  assert.match(earthquakeTooltip(c), /M5\.1 · lugar c/);
-  assert.match(earthquakeTooltip(c), /100\.0 km/);
+  const tip = earthquakeTooltip(c, [10, 20]);
+  assert.match(tip, /class="tt"/);
+  assert.match(tip, /tt-title">lugar c</);
+  assert.match(tip, /tt-badge tt-warn">M5,1</);
+  assert.match(tip, /100,0 km · intermediária/);
+  assert.match(tip, /20,000°, 10,000°/);
+  assert.match(tip, /USGS · feed de 24 h/);
+  const rich = buildEarthquakeFeatures({ features: [{ id: 'us1', geometry: { coordinates: [-70, -30, 20] }, properties: { mag: 6.4, place: 'Chile', time: Date.now() - 600_000, magType: 'mww', tsunami: 1, alert: 'orange', felt: 1234, status: 'reviewed' } }] }).features[0];
+  const richTip = earthquakeTooltip(rich.properties, rich.geometry.coordinates);
+  assert.match(richTip, /tt-badge tt-alert">M6,4</);
+  assert.match(richTip, /6,4 \(mww\)/);
+  assert.match(richTip, /alerta de tsunami emitido/);
+  assert.match(richTip, /Alerta PAGER<\/dt><dd class="tt-alert">laranja/);
+  assert.match(richTip, /1\.234/);
+  assert.match(richTip, /revisado/);
+  assert.match(richTip, /atualizado há 10 min/);
+  assert.doesNotMatch(tip, /Tsunami|PAGER/);
 });
 
 test('raio métrico dobra por nível de zoom com piso em pixels', () => {
@@ -113,6 +131,40 @@ test('infraestrutura local: um ponto por ponto/polígono, card do app, linhas s�
   assert.equal(dams.points.features[0].properties.detail, 'Paraná');
 });
 
+test('infraestrutura local: tooltip com os campos úteis do OSM', () => {
+  const itaipu = buildLocalInfraFeatures([{
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [-54.59, -25.41] },
+    properties: {
+      name: 'Usina Hidrelétrica de Itaipu', osm_id: -19685440, output: '14000 MW', source: 'hydro', source_layer: 'power_plant',
+      tags: { power: 'plant', operator: 'Itaipú Binacional', 'plant:method': 'water-storage', start_date: '1984', wikipedia: 'es:Represa de Itaipú', river: 'Rio Paraná', height: '196' },
+    },
+  }], 'local-dams').points.features[0];
+  const tip = localInfraTooltip('local-dams', itaipu.properties, itaipu.geometry.coordinates);
+  assert.match(tip, /tt-title">Usina Hidrelétrica de Itaipu</);
+  assert.match(tip, /Barragem · usina hidrelétrica/);
+  assert.match(tip, /Itaipú Binacional/);
+  assert.match(tip, /14\.000 MW/);
+  assert.match(tip, /reservatório/);
+  assert.match(tip, /Rio Paraná/);
+  assert.match(tip, /196 m/);
+  assert.match(tip, /-25,4100°, -54,5900°/);
+  assert.match(tip, /OpenStreetMap/);
+  const dc = buildLocalInfraFeatures([{
+    type: 'Feature', geometry: { type: 'Point', coordinates: [1, 2] },
+    properties: { osm_id: 9, tags: { name: 'DC Um', operator: 'Op', capacity: '5 MW', website: 'https://dc.example', 'building:levels': '3' } },
+  }], 'local-datacenters').points.features[0];
+  const dtip = localInfraTooltip('local-datacenters', dc.properties, dc.geometry.coordinates);
+  assert.match(dtip, /tt-sub">Datacenter</);
+  assert.match(dtip, /Carga de TI<\/dt><dd class="">5 MW/);
+  assert.match(dtip, /https:\/\/dc\.example/);
+  assert.doesNotMatch(dtip, /Potência instalada/);
+  // Tudo plano: nada de objeto/array nas propriedades (queryRenderedFeatures).
+  for (const v of Object.values(dc.properties)) assert.ok(v === null || typeof v !== 'object');
+  const lyr = layers.find((l) => l.id === 'local-dams');
+  assert.equal(lyr.tooltip(itaipu.properties, itaipu), tip);
+});
+
 test('cabos: linhas com a cor do cabo, referências de cabo e de estação, rótulo cortado', () => {
   const cables = {
     features: [
@@ -133,6 +185,23 @@ test('cabos: linhas com a cor do cabo, referências de cabo e de estação, rót
   assert.equal(built.refs.features[0].properties.label.length, 34);
   assert.ok(built.refs.features[0].properties.label.endsWith('...'));
   assert.equal(built.refs.features[2].properties.tbd, true);
+  // Extensão: ~310 km do trecho (-41,-21)->(-39,-19).
+  const km = built.lines.features[0].properties.km;
+  assert.ok(km > 290 && km < 320, `km ${km}`);
+  assert.ok(Math.abs(lineLengthKm({ type: 'LineString', coordinates: [[0, 0], [1, 0]] }) - 111.2) < 0.2);
+  const lineTip = cableTooltip(built.lines.features[0].properties);
+  assert.match(lineTip, /Cabo submarino de telecomunicações/);
+  assert.match(lineTip, new RegExp(`Extensão aprox\\.</dt><dd class="">${km.toLocaleString('pt-BR')} km`));
+  assert.match(lineTip, /TeleGeography/);
+  const landTip = cableTooltip(built.refs.features[2].properties);
+  assert.match(landTip, /tt-title">Santos, Brazil</);
+  assert.match(landTip, /Estação de ancoragem/);
+  assert.match(landTip, /tt-badge tt-warn">A DEFINIR</);
+  assert.match(landTip, /-23,900°, -46,300°/);
+  const lyr = layers.find((l) => l.id === 'telegeography-submarine-cables');
+  assert.ok(lyr.interactive.includes('dg-cables-hit'));
+  const hit = lyr.layers.find((l) => l.id === 'dg-cables-hit');
+  assert.ok(hit.paint['line-width'] >= 10 && hit.paint['line-opacity'] < 0.05);
 });
 
 const NOW = Date.UTC(2026, 8, 25, 12, 0);
@@ -184,9 +253,29 @@ test('focos: payload aplicado às fontes, município no tooltip, faixas de zoom 
   assert.equal(data['dg-firms'].features.length, 3);
   assert.equal(data['dg-firms-lbl'], data['dg-firms']);
   assert.ok(data['dg-firms-cells2'].features.length >= 1);
-  const tip = fireTooltip(data['dg-firms'].features[1].properties);
-  assert.match(tip, /FIRE · 200 MW/);
-  assert.match(tip, /Ivaí/);
+  const firmsLayer = layers.find((l) => l.id === 'local-firms');
+  const f1 = data['dg-firms'].features[1];
+  const tip = firmsLayer.tooltip(f1.properties, f1);
+  assert.match(tip, /tt-title">Ivaí</);
+  assert.match(tip, /tt-badge tt-alert">ALTA</, 'com FRP, selo = severidade');
+  assert.match(tip, /200 MW/);
+  assert.match(tip, /24\/09\/2026 12:00 \(Brasília\)/);
+  assert.match(tip, /nominal/);
+  assert.match(tip, /340,0 K/);
+  assert.match(tip, /VIIRS · Suomi NPP/);
+  assert.match(tip, /NASA FIRMS · DataGeo PR/);
+  const fires = adaptFirmsRecords(raw);
+  fires[0].municipality = 'Pitanga';
+  const t0 = fireTooltip(fires[0], NOW);
+  assert.match(t0, /tt-title">Pitanga</);
+  assert.match(t0, /tt-badge tt-alert">ÚLTIMAS 6 H</, 'sem FRP, selo = recência');
+  assert.doesNotMatch(t0, /Intensidade/);
+  assert.match(t0, /VIIRS · NOAA-20/);
+  assert.match(t0, /Confiança<\/dt><dd class="tt-ok">alta/);
+  assert.doesNotMatch(t0, /Potência radiativa/, 'FRP 0 = não gravada, some');
+  assert.match(t0, /atualizado há 2 h/);
+  assert.match(fireTooltip(fires[2], NOW), /município não informado/);
+  assert.equal(fireTooltip(undefined), '');
   assert.ok(FIRMS_ZOOM.global < FIRMS_ZOOM.regional && FIRMS_ZOOM.regional < FIRMS_ZOOM.detections);
   assert.ok(Math.abs(FIRMS_ZOOM.detections - Math.log2(1e8 / 750000)) < 1e-9);
 });

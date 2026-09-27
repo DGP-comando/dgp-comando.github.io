@@ -108,7 +108,7 @@ bikeshare, lançamentos) e desenham no MapLibre por fontes GeoJSON próprias.
    `defineLayer`:
 
    ```js
-   import { defineLayer, EMPTY_FC, fc, point, row } from '../kit.js';
+   import { defineLayer, EMPTY_FC, fc, point, tipCard } from '../kit.js';
 
    export const minhaCamada = defineLayer({
      id: 'datageo-minha-camada',        // id estável: vai para o painel e o link
@@ -126,10 +126,16 @@ bikeshare, lançamentos) e desenham no MapLibre por fontes GeoJSON próprias.
      },
      refreshMs: 0,                      // >0 para recarregar enquanto ligada
      interactive: ['dg-minha-pt'],      // layers com hover/clique
-     tooltip: (p) => `<strong>${p.nome}</strong>${row('Município', p.municipio)}`,
+     tooltip: (p) => tipCard({ title: p.nome, subtitle: 'Tipo', rows: [['Município', p.municipio]], source: 'Fonte' }),
    });
    ```
 
+   Tooltip: sempre `tipCard` (src/maplibre/tooltipCard.js) — título, selo de
+   status (`badge`), linhas rótulo/valor (vazias somem), seções, nota, fonte e
+   `updated` ("atualizado há X"); o desenho é só o do style.css, nenhuma
+   camada injeta CSS de tooltip. Linhas usam uma camada de pick invisível mais
+   larga no `interactive`. Camadas que cobrem o estado (municípios, grades de
+   clima) são `underlay` e cedem o hover às de cima.
    Opcionais: `onEnable`/`onDisable` (camadas dinâmicas), `hoverState`,
    `click`, `rowControls`/`onChip` (chips e legenda na linha do painel),
    `focusOn` (município em foco), `analystRecords` (voz). Tetos de escala do

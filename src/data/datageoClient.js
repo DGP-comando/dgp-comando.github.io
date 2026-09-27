@@ -231,7 +231,7 @@ export async function fetchClimateStations() {
   const rows = await dgSelect(
     'climate_data',
     'select=station_code,station_name,municipality,ibge_code,latitude,longitude,' +
-      'temperature,humidity,precipitation,wind_speed,observed_at' +
+      'temperature,humidity,precipitation,wind_speed,wind_direction,pressure,observed_at' +
       `&observed_at=gte.${since}&order=observed_at.desc&limit=2000`,
     { ttlMs: DATAGEO_TTL.layer, cacheKey: 'layer:climate' },
   );
@@ -290,7 +290,7 @@ export async function fetchIrtcScores() {
 export async function fetchAirQuality() {
   const rows = await dgSelect(
     'air_quality',
-    'select=city,station_name,aqi,dominant_pollutant,pm25,pm10,o3,no2,observed_at' +
+    'select=city,station_name,aqi,dominant_pollutant,pm25,pm10,o3,no2,so2,co,observed_at' +
       '&order=observed_at.desc&limit=200',
     { ttlMs: DATAGEO_TTL.layer },
   );
@@ -309,7 +309,8 @@ export async function fetchAnomalies() {
   return dgSelect(
     'anomalies',
     'select=domain,indicator,station_code,municipality,observed_value,z_score,' +
-      `window_mean,detected_at&detected_at=gte.${cutoff}&order=detected_at.desc&limit=200`,
+      'window_mean,window_stddev,window_size,' +
+      `detected_at&detected_at=gte.${cutoff}&order=detected_at.desc&limit=200`,
     { ttlMs: DATAGEO_TTL.layer, cacheKey: 'layer:anomalies' },
   );
 }
@@ -318,7 +319,8 @@ export async function fetchAnomalies() {
 export async function fetchActiveIncidents() {
   return dgSelect(
     'incidents',
-    'select=id,title,type,severity,status,detected_at,affected_municipalities' +
+    'select=id,title,type,severity,status,detected_at,affected_municipalities,' +
+      'description,ooda_phase,updated_at' +
       '&status=not.in.(resolved,closed)&order=detected_at.desc&limit=200',
     { ttlMs: DATAGEO_TTL.layer },
   );
@@ -555,6 +557,7 @@ export async function fetchVessels() {
   const rows = await dgSelect(
     'maritime_traffic',
     'select=mmsi,vessel_name,ship_type_label,latitude,longitude,sog_knots,' +
+      'imo,callsign,length_m,width_m,draught_m,heading_deg,eta,' +
       `cog_deg,nav_status_label,destination,observed_at&observed_at=gte.${since}` +
       '&order=observed_at.desc&limit=2000',
     { ttlMs: DATAGEO_TTL.layer, cacheKey: 'layer:vessels' },
@@ -759,7 +762,8 @@ export async function fetchDengueLatestWeek() {
   const { year, epidemiological_week: week } = latest[0];
   const rows = await dgSelect(
     'dengue_data',
-    'select=ibge_code,municipality_name,cases,cases_est,alert_level,incidence_rate' +
+    'select=ibge_code,municipality_name,cases,cases_est,alert_level,incidence_rate,' +
+      'population,fetched_at' +
       `&year=eq.${year}&epidemiological_week=eq.${week}&limit=500`,
     { ttlMs: DATAGEO_TTL.layer },
   );

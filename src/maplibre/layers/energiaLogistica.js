@@ -13,7 +13,9 @@
 //     app), contorno preto, encolhendo de longe como o scaleByDistance do app,
 //     rótulo acima do ponto com o mesmo teto de distância (um layer de rótulo
 //     por teto, minzoom = zoomForHeight), legenda de cores com contagem por
-//     grupo e o tooltip do app (nos que não têm, o próprio rótulo).
+//     grupo e tooltip tipCard (energiaLogisticaEstilos.js).
+//   - Linhas (transmissão e distribuição) respondem ao hover por uma linha
+//     invisível larga na mesma fonte.
 //
 // Os arquivos /privado/ (agroindústrias) saem do bucket autenticado pelo
 // mesmo dgFetchData do app (JWT do usuário logado).
@@ -23,11 +25,12 @@ import {
   AGRO_LEGENDA, ARMAZEM_LEGENDA, CEASA_LEGENDA, DISTRIBUICAO_KV, ENERGIA_CORES, IDR_GRUPOS, ROTA_LEGENDA,
   SUBESTACAO_LEGENDA, USINA_LEGENDA,
   agroindustriaEstilo, agroindustriaIdrEstilo, agroindustriaIdrTooltipHtml, agroindustriaTooltipHtml,
-  armazemEstilo, ceasaEstilo, linhaTransmissaoClasse, rotaTuristicaEstilo, rotaTuristicaTooltipHtml,
-  subestacaoEstilo, usinaEstilo,
+  armazemEstilo, armazemTooltipHtml, ceasaEstilo, ceasaTooltipHtml, distribuicaoTooltipHtml, linhaTransmissaoClasse,
+  rotaTuristicaEstilo, rotaTuristicaTooltipHtml, subestacaoEstilo, subestacaoTooltipHtml, usinaEstilo, usinaTooltipHtml,
 } from '../../data/energiaLogisticaEstilos.js';
 import { createSlicedLinesLayer } from '../slicedLines.js';
-import { EMPTY_FC, TEXT_FONT, defineLayer, esc, fc, row, zoomForHeight } from '../kit.js';
+import { EMPTY_FC, TEXT_FONT, defineLayer, fc, fmtNum, tipCard, zoomForHeight } from '../kit.js';
+import { createCursorMunicipio } from './territoriosFeatures.js';
 
 const LOGISTICA = 'Logística agro';
 const INFRA = 'Infraestrutura';
@@ -85,34 +88,6 @@ export function legendWithCounts(legend, counts) {
   return legend.map((g) => ({ label: g.label, color: g.color, count: counts?.[g.grupo] ?? 0 }));
 }
 
-// Classes vt-* dos tooltips do app (entityHoverTooltip.js), só dentro de .dg-vt.
-// `tooltipWidth` do app vira max-width do #dg-tooltip enquanto ele mostra o nosso.
-const VT_STYLE_ID = 'dg-energia-logistica-vt';
-function ensureVtStyle() {
-  if (typeof document === 'undefined' || document.getElementById(VT_STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = VT_STYLE_ID;
-  style.textContent = `
-    #dg-tooltip .dg-vt { font: 11px/1.5 'JetBrains Mono', monospace; color: #cbd5e1; white-space: normal; }
-    #dg-tooltip .dg-vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
-    #dg-tooltip .dg-vt .vt-berco { color: #fbbf24; }
-    #dg-tooltip .dg-vt .vt-dim, #dg-tooltip .dg-vt span.vt-dim { color: #64748b; }
-    #dg-tooltip .dg-vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
-    #dg-tooltip:has(.dg-vt-w420) { max-width: 420px; }
-    #dg-tooltip:has(.dg-vt-w720) { max-width: 720px; }
-  `;
-  document.head.appendChild(style);
-}
-
-/** Envolve o HTML (já escapado) do tooltip do app. */
-export function vtWrap(html, width) {
-  ensureVtStyle();
-  return html ? `<div class="dg-vt${width ? ` dg-vt-w${width}` : ''}">${html}</div>` : '';
-}
-
-/** Tooltip padrão dos pontos sem tooltip no app: o rótulo do ponto. */
-const labelTooltip = (label) => (label ? `<div class="vt-nome">${esc(label)}</div>` : '');
-
 // ------------------------------------------------------------------ pontos
 
 /**
@@ -121,7 +96,7 @@ const labelTooltip = (label) => (label ? `<div class="vt-nome">${esc(label)}</di
  * de rótulo por teto; o teste confere contra os dados reais).
  */
 export function makePointsLayer({
-  id, name, category = LOGISTICA, icon, source, url, estilo, legend, labelDists, tooltip, tooltipWidth,
+  id, name, category = LOGISTICA, icon, source, url, estilo, legend, labelDists, tooltip,
 }) {
   const slug = id.replace(/^datageo-/, '');
   const sourceId = `dg-${slug}`;
@@ -186,8 +161,8 @@ export function makePointsLayer({
     },
     tooltip: (p, feature) => {
       const original = props[feature?.id];
-      if (tooltip) return vtWrap(original ? tooltip(original) : '', tooltipWidth);
-      return vtWrap(labelTooltip(p.__label));
+      if (tooltip && original) return tooltip(original);
+      return p.__label ? tipCard({ title: p.__label, source }) : '';
     },
     rowControls: () => ({ legend: legendWithCounts(legend, counts) }),
   });
@@ -225,10 +200,48 @@ export function transmissaoFeatures(gj) {
   return { features, count };
 }
 
+const LT_CLASSE = {
+  kv525: { text: '≥ 500 kV', tone: 'alert' },
+  kv230: { text: '230–440 kV', tone: 'warn' },
+  baixa: { text: '< 230 kV', tone: 'info' },
+  planejada: { text: 'Planejada', tone: 'warn' },
+};
+
+/**
+ * "SECC LT 230 kV Curitiba - Joinville Norte, C2 (CD), na SE Joinville Norte 2"
+ * -> {trecho: 'Curitiba – Joinville Norte', circuito: 'C2 · circuito duplo',
+ *     secc: 'na SE Joinville Norte 2'}. Nome fora do padrão: tudo vazio.
+ */
+export function parseNomeLt(nome) {
+  const m = /^(SECC\s+)?LT\s+[\d.,]+\s*kV\s+(.+?),\s*(C\d+(?:\s+e\s+C\d+)?)(\s*\(CD\))?,?\s*(.*)$/i.exec(String(nome ?? '').trim());
+  if (!m) return { trecho: '', circuito: '', secc: '' };
+  return {
+    trecho: m[2].replace(/\s+-\s+/g, ' – '),
+    circuito: `${m[3]}${m[4] ? ' · circuito duplo' : ''}`,
+    secc: m[1] ? `Seccionamento ${m[5] || ''}`.trim() : (m[5] || ''),
+  };
+}
+
 export function transmissaoTooltipHtml(p) {
-  const kv = p.tensao != null && p.tensao !== '' ? `${p.tensao} kV` : '';
-  const situacao = p.planejada ? `Planejada${p.ano ? ` (${p.ano})` : ''}` : `Em operação${p.ano ? ` desde ${p.ano}` : ''}`;
-  return `<strong>${esc(p.nome || 'Linha de transmissão')}</strong>${row('Tensão', kv)}${row('Situação', situacao)}`;
+  const kv = Number(p.tensao);
+  const kvS = Number.isFinite(kv) && kv > 0 ? `${fmtNum(kv, 0)} kV` : '';
+  const ano = Number(p.ano) > 1900 ? String(p.ano) : '';
+  const { trecho, circuito, secc } = parseNomeLt(p.nome);
+  const classe = p.__classe ?? linhaTransmissaoClasse(p);
+  return tipCard({
+    icon: '⚡',
+    title: trecho || p.nome || 'Linha de transmissão',
+    subtitle: `Linha de transmissão${kvS ? ` ${kvS}` : ''}${p.planejada ? ' · planejada' : ''}`,
+    badge: p.planejada ? { text: ano ? `Prevista ${ano}` : 'Planejada', tone: 'warn' } : LT_CLASSE[classe],
+    rows: [
+      ['Tensão', kvS],
+      ['Situação', p.planejada ? `Planejada${ano ? ` (entrada prevista em ${ano})` : ''}` : `Em operação${ano ? ` desde ${ano}` : ''}`, p.planejada ? 'warn' : 'ok'],
+      ['Circuito', circuito],
+      ['Obra', secc],
+      ['Designação', trecho ? p.nome : ''],
+    ],
+    source: 'EPE · DataGeo PR',
+  });
 }
 
 const ltColor = ['match', ['get', '__classe'],
@@ -264,8 +277,16 @@ const transmissaoLayer = defineLayer({
         'line-dasharray': [LT_DASH, LT_DASH],
       },
     },
+    {
+      // Linha fina demais para o hover: faixa invisível mais larga só para o pick.
+      id: 'dg-transmissao-hit',
+      type: 'line',
+      source: 'dg-transmissao',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': 12, 'line-opacity': 0.01 },
+    },
   ],
-  interactive: ['dg-transmissao-line', 'dg-transmissao-planejada'],
+  interactive: ['dg-transmissao-hit'],
   async load(ctx) {
     const resp = await fetch(LT_URL);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -278,7 +299,8 @@ const transmissaoLayer = defineLayer({
 
 // ---------------------------------------------------- linhas de distribuição
 
-const distribuicaoLayer = createSlicedLinesLayer({
+const DISTRIBUICAO_MAX_HEIGHT = 70_000;
+const distribuicaoBase = createSlicedLinesLayer({
   id: 'datageo-distribuicao',
   name: 'Linhas de distribuição',
   category: INFRA,
@@ -294,7 +316,56 @@ const distribuicaoLayer = createSlicedLinesLayer({
     width: DISTRIBUICAO_KV[kv].width,
     label: `${String(kv).replace('.', ',')} kV`,
   })),
-  maxHeight: 70_000,
+  maxHeight: DISTRIBUICAO_MAX_HEIGHT,
+});
+
+// A fábrica de linhas fatiadas não tem hover: por cima dela, uma linha
+// invisível larga na mesma fonte (mesmo teto e mesmo foco) responde o tooltip.
+const DIST_HIT = 'dg-distribuicao-hit';
+const DIST_MIN = zoomForHeight(DISTRIBUICAO_MAX_HEIGHT);
+const distCursor = createCursorMunicipio();
+let distFonte = '';
+const distHitRange = (ctx, focus) => {
+  if (ctx.map.getLayer(DIST_HIT)) ctx.map.setLayerZoomRange(DIST_HIT, focus ? 0 : DIST_MIN, 24);
+};
+
+const distribuicaoLayer = defineLayer({
+  ...distribuicaoBase,
+  layers: [
+    ...distribuicaoBase.layers,
+    {
+      id: DIST_HIT,
+      type: 'line',
+      source: 'dg-distribuicao',
+      minzoom: DIST_MIN,
+      layout: { 'line-join': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': 10, 'line-opacity': 0.01 },
+    },
+  ],
+  interactive: [DIST_HIT],
+  async onEnable(ctx) {
+    distCursor.attach(ctx.map);
+    distHitRange(ctx, ctx.focus);
+    return distribuicaoBase.onEnable(ctx);
+  },
+  focusOn(bbox, ctx) {
+    distHitRange(ctx, bbox);
+    return distribuicaoBase.focusOn(bbox, ctx);
+  },
+  async load(ctx) {
+    const out = await distribuicaoBase.load(ctx);
+    // Fonte/data da BDGD vêm do index.json (já em cache no navegador).
+    fetch('/data/distribuicao/index.json')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((ix) => {
+        distFonte = ix?.fonte ?? '';
+      })
+      .catch(() => {});
+    return out;
+  },
+  tooltip: (p) => distribuicaoTooltipHtml({
+    kv: p.grupo, municipio: distCursor.get(), trechos: p.trechos, fonte: distFonte,
+  }),
 });
 
 // ------------------------------------------------------------------ pontos
@@ -307,6 +378,7 @@ const subestacoesLayer = makePointsLayer({
   source: 'EPE',
   url: '/data/subestacoes-pr.geojson',
   estilo: subestacaoEstilo,
+  tooltip: subestacaoTooltipHtml,
   legend: SUBESTACAO_LEGENDA,
   labelDists: [900_000, 250_000],
 });
@@ -319,6 +391,7 @@ const geracaoLayer = makePointsLayer({
   source: 'SIGEL/ANEEL',
   url: '/data/usinas-pr.geojson',
   estilo: usinaEstilo,
+  tooltip: usinaTooltipHtml,
   legend: USINA_LEGENDA,
   labelDists: [1_500_000, 400_000, 130_000, 60_000],
 });
@@ -330,6 +403,7 @@ const armazensLayer = makePointsLayer({
   source: 'CONAB/CDA 2023',
   url: '/data/armazens-conab-pr.geojson',
   estilo: armazemEstilo,
+  tooltip: armazemTooltipHtml,
   legend: ARMAZEM_LEGENDA,
   labelDists: [2_000_000, 45_000],
 });
@@ -354,7 +428,6 @@ const agroindustriasIdrLayer = makePointsLayer({
   url: '/privado/agroindustrias-idr-pr.geojson',
   estilo: agroindustriaIdrEstilo,
   tooltip: agroindustriaIdrTooltipHtml,
-  tooltipWidth: 720,
   legend: IDR_GRUPOS,
   labelDists: [40_000],
 });
@@ -367,7 +440,6 @@ const rotasTuristicasLayer = makePointsLayer({
   url: '/data/rotas-turisticas-pr.geojson',
   estilo: rotaTuristicaEstilo,
   tooltip: rotaTuristicaTooltipHtml,
-  tooltipWidth: 420,
   legend: ROTA_LEGENDA,
   labelDists: [150_000],
 });
@@ -379,6 +451,7 @@ const ceasasLayer = makePointsLayer({
   source: 'CEASA/PR',
   url: '/data/ceasas-pr.geojson',
   estilo: ceasaEstilo,
+  tooltip: ceasaTooltipHtml,
   legend: CEASA_LEGENDA,
   labelDists: [2_500_000],
 });

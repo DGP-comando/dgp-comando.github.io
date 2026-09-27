@@ -9,9 +9,9 @@ import {
   buildTerritorioFeatures, cellFeatures, cellsInBbox, flatToCoords, wantedCells,
 } from './territoriosFeatures.js';
 import {
-  centroidOf, fichaRegionalIdr, TERRITORIO_SPECS, tituloUc, tooltipHtml,
+  agregadoMunicipal, centroidOf, dataBr, fichaRegionalIdr, fmtReais, listaNomes, TERRITORIO_SPECS, tituloProprio, tituloUc,
 } from '../../data/territoriosSpec.js';
-import { CAR_CLASSE_STYLES } from '../../data/carClasses.js';
+import { CAR_CLASSE_STYLES, carTooltip } from '../../data/carClasses.js';
 import layers, { carLayer } from './territorios.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -28,11 +28,13 @@ test('camadas na ordem e com os ids/categorias do app', () => {
   assert.equal(cat['datageo-terras-indigenas'], 'Limites');
   assert.equal(cat['datageo-ucs-federais'], 'Ambiente');
   assert.equal(cat['datageo-car'], 'Território');
-  // UCs não têm tooltip nem clique no app: não capturam o hover do município.
+  // Todas têm tooltip (UCs e CAR incluídos); o CAR responde por uma linha de pick larga.
   for (const l of layers) {
-    const hasTip = ['datageo-ucs-federais', 'datageo-ucs-estaduais', 'datageo-car'].includes(l.id);
-    assert.equal(l.interactive.length > 0, !hasTip, l.id);
+    assert.ok(l.interactive.length > 0 && typeof l.tooltip === 'function', l.id);
   }
+  assert.deepEqual(carLayer.interactive, ['dg-car-hit']);
+  const hit = carLayer.layers.find((l) => l.id === 'dg-car-hit');
+  assert.ok(hit.paint['line-width'] >= 10 && hit.paint['line-opacity'] < 0.05);
   assert.ok(layers.find((l) => l.id === 'datageo-regionais-idr').click);
   assert.ok(carLayer.focusOn && carLayer.onEnable && carLayer.onDisable);
 });
@@ -76,21 +78,74 @@ test('rótulos e tooltips iguais aos do app', () => {
   assert.equal(S.assentamentos.labelOf({ nome: 'PA X', familias: 12 }), 'PA X · 12 famílias');
 
   const tip = S.assentamentos.tooltipOf({
-    nome: 'PA <X>', municipio: 'Rio Bonito', area_ha: 1234.5, familias: 10, capacidade: 12, fase: '', codigo: 'PR0001',
-  });
-  assert.match(tip, /<div class="vt-nome">PA &lt;X&gt;<\/div>/);
-  assert.match(tip, /Área:<\/span> 1\.235 ha/);
-  assert.match(tip, /Famílias:<\/span> 10 de 12 de capacidade/);
-  assert.doesNotMatch(tip, /Fase/, 'linha vazia some');
-  assert.match(tip, /<div class="vt-fontes">INCRA\/SIPRA<\/div>$/);
+    nome: 'PA <X>', municipio: 'RIO BONITO DO IGUAÇU', area_ha: 1234.5, familias: 10, capacidade: 12, fase: '', codigo: 'PR0001',
+    criacao: '14/08/1996',
+  }, {});
+  assert.match(tip, /^<div class="tt">/);
+  assert.match(tip, /<span class="tt-title">PA &lt;x&gt;<\/span>/);
+  assert.match(tip, /Projeto de assentamento · Rio Bonito do Iguaçu/);
+  assert.match(tip, /<dt>Área<\/dt><dd class="">1\.235 ha · 12,3 km²<\/dd>/);
+  assert.match(tip, /<dd class="tt-warn">10 de 12 lotes \(83%\)<\/dd>/);
+  assert.match(tip, /123,5 ha por família/);
+  assert.match(tip, /14\/08\/1996 \(há \d+ anos\)/);
+  assert.doesNotMatch(tip, /Fase|tt-badge/, 'fase vazia: sem badge');
+  assert.match(tip, /<div class="tt-foot">INCRA\/SIPRA · DataGeo PR<\/div>/);
 
-  const reg = S.regionaisIdr.tooltipOf({ regional: 'Irati', municipios: ['4110706', '4128500'] });
-  assert.match(reg, /Regional Irati/);
-  assert.match(reg, /Municípios:<\/span> 2/);
+  const x = {
+    info: {
+      1: { pop: { ano: '2025', valor: 1000 }, areaKm2: 10, vbp: { anoB: '2025', valB: 2_500_000_000 } },
+      2: { pop: { ano: '2025', valor: 500 }, areaKm2: 5.4, vbp: { anoB: '2025', valB: 0 } },
+    },
+    nomes: { 1: 'Irati', 2: 'Imbituva' },
+  };
+  const reg = S.regionaisIdr.tooltipOf({ regional: 'Irati', municipios: ['1', '2'] }, x);
+  assert.match(reg, /tt-title">Regional Irati</);
+  assert.match(reg, /IDR-Paraná · 2 municípios/);
+  assert.match(reg, /<dt>População<\/dt><dd class="">1\.500 hab\. \(2025\)/);
+  assert.match(reg, /<dt>VBP agro 2025<\/dt><dd class="">R\$ 2,50 bi/);
+  assert.match(reg, /<dt>Municípios<\/dt><dd class="">Imbituva, Irati<\/dd>/);
+  assert.match(reg, /clique para abrir a ficha regional/i);
+  // Sem os dados municipais: só a contagem.
+  const regSem = S.regionaisIdr.tooltipOf({ regional: 'Irati', municipios: ['1', '2'] }, {});
+  assert.match(regSem, /<dt>Municípios<\/dt><dd class="">2<\/dd>/);
+  assert.doesNotMatch(regSem, /População/);
+
+  const assoc = S.associacoes.tooltipOf({ sigla: 'AMCG', nome: 'Associação X', municipios: ['1', '2'] }, x);
+  assert.match(assoc, /tt-title">AMCG</);
+  assert.match(assoc, /tt-sub">Associação X</);
+
+  const uc = S.ucsEstaduais.tooltipOf({
+    cnuc: '0000.41.0529', nome: 'PARQUE ESTADUAL DA ILHA DO MEL', categoria: 'Parque', grupo: 'Proteção Integral',
+    esfera: 'Estadual', area_ha: 394.72, criacao: '22-03-2002', gestor: 'INSTITUTO AMBIENTAL DO PARANÁ - PR',
+    plano_manejo: 'Não',
+  }, { municipio: { ibge: '4118204', nome: 'Paranaguá' } });
+  assert.match(uc, /tt-title">Parque Estadual da Ilha do Mel</);
+  assert.match(uc, /tt-sub">Parque · UC estadual</);
+  assert.match(uc, /tt-badge tt-ok">Proteção integral</);
+  assert.match(uc, /22\/03\/2002/);
+  assert.match(uc, /IAT \(Instituto Água e Terra/);
+  assert.match(uc, /<dt>Plano de manejo<\/dt><dd class="tt-warn">Não<\/dd>/);
+  assert.match(uc, /<dt>Município<\/dt><dd class="">Paranaguá<\/dd>/);
+  assert.match(uc, /0000\.41\.0529/);
+
+  const ti = S.terrasIndigenas.tooltipOf({ nome: 'TI Rio Areia', etapa: 'Regularizada', area_ha: 1363.89 }, {});
+  assert.match(ti, /tt-title">TI Rio Areia</);
+  assert.match(ti, /tt-badge tt-ok">Regularizada</);
+  assert.match(ti, /1\.364 ha · 13,6 km²/);
+
+  const tq = S.quilombolas.tooltipOf({ nome: 'Mamãs', municipio: '', fase: 'RTID' }, { municipio: { nome: 'Cerro Azul' } });
+  assert.match(tq, /tt-sub">Cerro Azul</);
+  assert.match(tq, /Relatório Técnico de Identificação/);
+
+  assert.equal(tituloProprio('PA FAZENDA ESTRELA II'), 'PA Fazenda Estrela II');
+  assert.equal(dataBr('21-03-2006'), '21/03/2006');
+  assert.equal(fmtReais(45_600_000), 'R$ 45,6 mi');
+  assert.equal(fmtReais(0), '');
+  assert.equal(listaNomes(['1', '2', '3'], { 1: 'C', 2: 'A', 3: 'B' }, 2), 'A, B e mais 1');
+  assert.equal(agregadoMunicipal(['9'], x.info), null);
   assert.deepEqual(fichaRegionalIdr({ regional: 'Irati', municipios: ['1'] }), {
     nome: 'Regional Irati', meta: 'IDR-Paraná · 1 município', ibges: ['1'],
   });
-  assert.equal(tooltipHtml('T', [['a', ' ']], 'F'), '<div class="vt-nome">T</div><div class="vt-fontes">F</div>');
   assert.equal(tituloUc('PARQUE ESTADUAL DE VILA VELHA'), 'Parque Estadual de Vila Velha');
 });
 
@@ -101,7 +156,12 @@ test('GeoJSONs reais: toda feição rende rótulo e tooltip sem erro', () => {
     assert.ok(out.count > 0, spec.id);
     assert.equal(out.labels.features.length, out.fills.features.length, `${spec.id}: rótulo por polígono`);
     for (const f of out.labels.features) assert.ok(f.properties.label.length > 0, `${spec.id}: rótulo vazio`);
-    if (spec.tooltipOf) for (const p of out.props) assert.ok(spec.tooltipOf(p).includes('vt-nome'));
+    assert.ok(spec.tooltipOf, `${spec.id}: sem tooltip`);
+    for (const p of out.props) {
+      const html = spec.tooltipOf(p, {});
+      assert.match(html, /^<div class="tt">.*tt-title">[^<]+</, spec.id);
+      assert.doesNotMatch(html, /undefined|NaN|null/, `${spec.id}: ${html}`);
+    }
   }
 });
 
@@ -122,6 +182,22 @@ test('CAR: célula real vira MultiLineString por classe, com todos os trechos', 
   assert.ok(Math.abs(lat - (i + 0.5) * index.cell_deg) < index.cell_deg);
   assert.ok(Math.abs(lon - (j + 0.5) * index.cell_deg) < index.cell_deg);
   assert.deepEqual(flatToCoords([1, 2, 3, 4]), [[1, 2], [3, 4]]);
+});
+
+test('CAR: tooltip pela classe, com o agregado do estado e do município sob o cursor', () => {
+  const stats = readJson('public/data/car-municipios.json');
+  const html = carTooltip('20-50', { stats, municipio: { ibge: '4100103', nome: 'Abatiá' } });
+  assert.match(html, /tt-title">Imóvel rural \(CAR\)</);
+  assert.match(html, /tt-badge tt-alert">Grande propriedade</);
+  assert.match(html, /20 a 50 módulos fiscais/);
+  assert.match(html, /tt-sec-title">Em Abatiá<\/div>.*<dt>Imóveis na classe<\/dt><dd class="">2 de 887 \(0,2%\)/);
+  assert.match(html, /tt-sec-title">No Paraná<\/div>.*<dt>Imóveis na classe<\/dt><dd class="">4\.512 de 532\.776/);
+  assert.match(html, /SICAR\/SFB · DataGeo PR · atualizado/);
+  // Sem agregado nem município: só a classe.
+  const nu = carTooltip('0-4');
+  assert.match(nu, /tt-badge tt-ok">Pequena propriedade</);
+  assert.doesNotMatch(nu, /tt-sec|undefined|NaN/);
+  for (const c of Object.keys(CAR_CLASSE_STYLES)) assert.doesNotMatch(carTooltip(c, { stats }), /undefined|NaN/);
 });
 
 test('CAR: células da vista e do município em foco', () => {

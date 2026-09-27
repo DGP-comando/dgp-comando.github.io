@@ -38,9 +38,9 @@
 //     interactive: ['dg-clima-pt']   // layers que respondem a hover/clique
 //     hoverState: 'dg-municipios'    // opcional: liga feature-state {hover:true}
 //         na feição sob o cursor dessa fonte (exige id nas feições/promoteId)
-//     tooltip: (props, feature, ctx) => html   // HTML já escapado (use esc/row)
+//     tooltip: (props, feature, ctx) => html   // tipCard({...}) de tooltipCard.js
 //     click:   (props, feature, ctx) => void   // opcional
-//     underlay: true    // opcional: camada-base (municípios) que cede hover,
+//     underlay: true    // opcional: camada-base (municípios, grades) que cede hover,
 //                       // tooltip e clique às camadas ligadas sob o cursor
 //     clickWithUnderlay: true  // opcional: o clique desta camada abre por cima
 //                       // do clique da camada-base (card regional sobre a ficha)
@@ -63,6 +63,9 @@
 // grafo. Quando precisar de uma função pura que mora num módulo Cesium
 // (tooltip, cores, parse), mova-a para um módulo novo sem Cesium e reexporte do
 // original, como src/data/slicedCells.js.
+
+// Tooltip: formato único (tooltipCard.js) e formatação pt-BR.
+export { tipCard, fmtNum, fmtInt, fmtPct, fmtDate, fmtDateTime, fmtAgo, fmtCoord } from './tooltipCard.js';
 
 export const EMPTY_FC = Object.freeze({ type: 'FeatureCollection', features: [] });
 

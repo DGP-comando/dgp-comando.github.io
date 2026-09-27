@@ -17,6 +17,9 @@
 //                       // cor CSS; `maxHeight` (m) é o teto próprio do grupo
 //     maxHeight,        // teto da camada (m de câmera no Cesium) -> minzoom
 //     maxCellsPerView = 9, maxLoadedCells = 24,
+//     tooltip, click,   // opcionais (contrato do kit): com um deles a camada ganha
+//                       // uma faixa invisível de pick por grupo (`dg-<slug>-hit-<k>`,
+//                       // mesmo filtro e minzoom, `hitWidth` px, padrão 12)
 //   }) -> objeto do contrato defineLayer (kit.js), com onEnable/onDisable/focusOn/
 //        rowControls (legenda com os trechos carregados por grupo).
 //
@@ -115,8 +118,11 @@ export function groupStyles({ grupos = [], styleFor, maxHeight }) {
   });
 }
 
-/** Source e layers de estilo da camada (um por grupo + reserva). */
-export function layerSpecs(slug, styles, layerMin) {
+/**
+ * Source e layers de estilo da camada (um por grupo + reserva). Com
+ * `hitWidth`, acrescenta por grupo uma faixa invisível para o pick.
+ */
+export function layerSpecs(slug, styles, layerMin, { hitWidth = 0 } = {}) {
   const sourceId = `dg-${slug}`;
   const layers = styles.map((st, k) => ({
     id: `dg-${slug}-${k}`,
@@ -135,7 +141,22 @@ export function layerSpecs(slug, styles, layerMin) {
     filter: ['!', ['in', ['get', 'grupo'], ['literal', styles.map((s) => s.value)]]],
     paint: { 'line-color': FALLBACK_STYLE.color, 'line-opacity': FALLBACK_STYLE.opacity, 'line-width': FALLBACK_STYLE.width },
   });
-  return { sourceId, layers };
+  const hitIds = [];
+  if (hitWidth > 0) {
+    styles.forEach((st, k) => {
+      const hid = `dg-${slug}-hit-${k}`;
+      hitIds.push(hid);
+      layers.push({
+        id: hid,
+        type: 'line',
+        source: sourceId,
+        minzoom: st.minzoom,
+        filter: ['==', ['get', 'grupo'], st.value],
+        paint: { 'line-color': '#000000', 'line-opacity': 0.01, 'line-width': hitWidth },
+      });
+    });
+  }
+  return { sourceId, layers, hitIds };
 }
 
 export function createSlicedLinesLayer(config) {
@@ -143,12 +164,16 @@ export function createSlicedLinesLayer(config) {
     id, name, category, icon, source, baseUrl, groupsKey, maxHeight,
     maxCellsPerView = 9,
     maxLoadedCells = 24,
+    tooltip,
+    click,
+    hitWidth = 12,
   } = config;
   const slug = id.replace(/^datageo-/, '');
   const log = `[maplibre:${id}]`;
   const styles = groupStyles(config);
   const layerMin = zoomForHeight(maxHeight);
-  const { sourceId, layers } = layerSpecs(slug, styles, layerMin);
+  const pickable = Boolean(tooltip || click);
+  const { sourceId, layers, hitIds } = layerSpecs(slug, styles, layerMin, { hitWidth: pickable ? hitWidth : 0 });
   const minzoomOf = new Map(layers.map((l) => [l.id, l.minzoom]));
 
   let index = null;
@@ -283,6 +308,9 @@ export function createSlicedLinesLayer(config) {
     source,
     sources: { [sourceId]: { type: 'geojson', data: EMPTY_FC } },
     layers,
+    ...(pickable ? { interactive: hitIds } : {}),
+    ...(tooltip ? { tooltip } : {}),
+    ...(click ? { click } : {}),
 
     async onEnable(ctx) {
       ctxRef = ctx;

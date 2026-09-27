@@ -171,3 +171,95 @@ test('pixelSize da lib: 1000 com a grade inteira, proporcional à fração visí
   assert.ok(Math.abs(v - 110) < 1e-6, `pixelSize ${v}`);
   assert.equal(libPixelSize({ west: 10, south: 10, east: 20, north: 20 }, BOUNDS), null);
 });
+
+// ------------------------------------------------------------- tooltips
+
+import gradesClima, {
+  climaTooltip, faixaVento, gridCellFeatures, gridNode, precipTooltip, ventoDe, ventoTooltip,
+} from './gradesClima.js';
+
+const text = (html) => html.replace(/<\/(dt|dd|div|span)>/g, '$& ').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+
+test('células de pick: um quadrado por nó, id = índice, linha 0 no sul, filtro', () => {
+  const g = { bounds: { west: -50, south: -26, east: -49, north: -25 }, width: 3, height: 2 };
+  const all = gridCellFeatures(g);
+  assert.equal(all.length, 6);
+  assert.deepEqual(all.map((f) => f.id), [0, 1, 2, 3, 4, 5]);
+  assert.equal(all[4].properties.k, 4);
+  // Nó 4 = (i 1, j 1): lon -49,5, lat -25; meio passo para cada lado.
+  assert.deepEqual(all[4].geometry.coordinates[0], [[-49.75, -25.5], [-49.25, -25.5], [-49.25, -24.5], [-49.75, -24.5], [-49.75, -25.5]]);
+  assert.deepEqual(gridNode(g, 4), { lon: -49.5, lat: -25 });
+  assert.deepEqual(gridCellFeatures(g, (k) => k % 2 === 0).map((f) => f.id), [0, 2, 4]);
+});
+
+test('vento: direção meteorológica (de onde vem), rumo pt-BR e faixa', () => {
+  // Vento que sopra PARA o norte (v > 0) vem do sul.
+  assert.equal(ventoDe(0, 5).rumo, 'S');
+  assert.equal(Math.round(ventoDe(0, 5).deg), 180);
+  // Soprando para oeste (u < 0) vem de leste: "L".
+  assert.equal(ventoDe(-3, 0).rumo, 'L');
+  assert.equal(ventoDe(3, 3).rumo, 'SO');
+  assert.ok(Math.abs(ventoDe(3, 4).kmh - 18) < 1e-9);
+  assert.equal(ventoDe(0, 0).deg, null);
+  assert.equal(ventoDe('x', 1), null);
+  assert.deepEqual(faixaVento(1), { text: 'CALMO', tone: 'muted' });
+  assert.equal(faixaVento(45).tone, 'warn');
+  assert.equal(faixaVento(70).text, 'VENDAVAL');
+});
+
+test('tooltips da grade Open-Meteo: chuva e vento no nó, município, hora do dado', () => {
+  const grid = gridOf(3, 2, () => -5, () => 0, (i, j) => (i === 1 && j === 1 ? 12.34 : 0));
+  grid.fetchedAt = Date.parse('2026-09-27T10:00:00Z');
+  const now = grid.fetchedAt + 12 * 60_000;
+  const cur = { municipio: 'Guarapuava', ibge: '4109401' };
+  const p = text(precipTooltip(grid, 4, { cur, now }));
+  assert.match(p, /Chuva forte FORTE Precipitação na última hora · Guarapuava/);
+  assert.match(p, /Chuva \(1 h\) 12,3 mm Faixa forte · 10–25 mm\/h Vento \(10 m\) 18 km\/h \(5,0 m\/s\) de L \(90°\)/);
+  assert.match(p, /Município Guarapuava \(IBGE 4109401\) Ponto da grade -22,30°, -51,50°/);
+  assert.match(p, /Open-Meteo \(modelo\) · DataGeo PR · atualizado há 12 min/);
+  assert.match(precipTooltip(grid, 4, { now }), /tt-badge tt-alert/);
+  assert.match(text(precipTooltip(grid, 0, { now })), /Sem chuva SECO .*Chuva \(1 h\) 0 mm/);
+  grid.stale = true;
+  assert.match(text(precipTooltip(grid, 4, { now })), /Grade salva/);
+  grid.stale = false;
+
+  const v = text(ventoTooltip(grid, 0, { cur, now }));
+  assert.match(v, /Vento de L FRACO Vento a 10 m, agora · Guarapuava/);
+  assert.match(v, /Velocidade 18 km\/h \(5,0 m\/s\) Direção \(de onde vem\) L · 90° Chuva \(1 h\) 0 mm/);
+  assert.match(v, /Resolução 3,50° × 4,70° \(3 × 2 pontos\)/);
+  assert.equal(ventoTooltip({ u: { array: [] }, v: { array: [] } }, 0), '');
+});
+
+test('tooltip do clima histórico: indicador do chip em destaque e todos os campos', () => {
+  const grade = {
+    bounds: { west: -50, south: -26, east: -49.9, north: -25.9 }, width: 2, height: 2, normal: [1990, 2019],
+    campos: {
+      pr: [null, 1650.4, null, null], tmed: [null, 18.46, null, null], eto: [null, 1100, null, null],
+      balanco: [null, -35, null, null], mesesDeficit: [null, 2, null, null], geada3: [null, 7.6, null, null],
+      geada0: [null, 1.2, null, null], calor35: [null, 0, null, null], chuva50: [null, 3, null, null],
+      tendTmed: [null, 0.234, null, null],
+    },
+  };
+  const html = climaTooltip(grade, 1, { ativo: 'tmed', cur: { municipio: 'Palmas', ibge: '4117602' } });
+  const t = text(html);
+  assert.match(t, /^📈 Palmas TEMP Normal climatológica 1990–2019 · célula de 0,1° \(~11 km\)/);
+  assert.match(t, /Temperatura média 18,5 °C Chuva anual 1.650 mm\/ano Evapotranspiração \(ETo\) 1.100 mm\/ano/);
+  assert.match(t, /Balanço hídrico \(P − ETo\) -35 mm\/ano Meses com déficit hídrico 2 meses\/ano/);
+  assert.match(t, /Extremos \(média de dias por ano\) Geada provável \(Tmín ≤ 3 °C\) 8 dias\/ano .*Calor \(Tmáx ≥ 35 °C\) 0 dias\/ano/);
+  assert.match(t, /Tendência Tendência da temperatura 1961–2019 \+0,23 °C\/década/);
+  assert.match(t, /IBGE 4117602 Centro da célula -26,00°, -49,90°/);
+  assert.match(t, /BR-DWGD · Xavier et al\. 2022 \(CC BY 4\.0\)/);
+  assert.match(html, /<dd class="tt-warn">-35 mm\/ano/, 'déficit em alerta');
+  assert.match(html, /<dd class="tt-info">18,5 °C/, 'indicador ativo destacado');
+  assert.equal(climaTooltip(grade, 0), '', 'célula fora do PR');
+  assert.match(text(climaTooltip(grade, 1)), /^📈 Clima histórico CHUVA/);
+});
+
+test('as três grades têm pick e tooltip', () => {
+  for (const l of gradesClima) {
+    assert.equal(l.interactive.length, 1, l.id);
+    assert.equal(typeof l.tooltip, 'function', l.id);
+    const pick = l.layers.find((x) => x.id === l.interactive[0]);
+    assert.equal(pick.type, 'fill');
+  }
+});

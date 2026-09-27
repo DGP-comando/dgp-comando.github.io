@@ -6,32 +6,44 @@
 //
 // Territórios: preenchimento translúcido + borda pelo anel externo + rótulo no
 // centroide com o alcance do app (labelMaxDist -> minzoom). Especificação
-// (cores, rótulos, tooltips) em src/data/territoriosSpec.js, compartilhada com
-// o app. O clique numa regional do IDR abre a ficha regional.
+// (cores, rótulos, tooltips tipCard) em src/data/territoriosSpec.js. O tooltip
+// recebe o município sob o cursor e, nas regionais/associações, a soma dos
+// indicadores municipais (municipios-info.json). O clique numa regional do IDR
+// abre a ficha regional.
 //
 // CAR: as mesmas células estáticas (public/data/car) carregadas pela vista:
 // com zoom >= teto (90 km de altura) as 9 mais próximas do centro; com um
 // município em foco, as que cruzam o bbox dele (até 24), em qualquer zoom.
+// Hover por uma linha invisível larga; o tooltip mostra a classe de módulos
+// fiscais do trecho e o agregado do CAR (car-municipios.json) do município sob
+// o cursor e do estado.
 
 import { openFichaRegiao } from '../../datageoFicha.js';
 import { fichaRegionalIdr, TERRITORIO_SPECS } from '../../data/territoriosSpec.js';
-import { CAR_CLASSE_STYLES, CAR_MAX_HEIGHT } from '../../data/carClasses.js';
+import { CAR_CLASSE_STYLES, CAR_MAX_HEIGHT, carTooltip } from '../../data/carClasses.js';
+import { loadCarMunicipios } from '../../data/carMunicipios.js';
 import { defineLayer, EMPTY_FC, TEXT_FONT, zoomForHeight } from '../kit.js';
-import { buildTerritorioFeatures, cellFeatures, wantedCells } from './territoriosFeatures.js';
+import { loadMunicipiosInfo, MUNICIPIOS_URL } from './municipios.js';
+import {
+  buildTerritorioFeatures, cellFeatures, createCursorMunicipio, wantedCells,
+} from './territoriosFeatures.js';
 
-// Classes .vt-* do tooltip do app (entityHoverTooltip.js), no #dg-tooltip do protótipo.
-const VT_STYLE_ID = 'dg-vt-tooltip-style';
-function injectTooltipStyles() {
-  if (typeof document === 'undefined' || document.getElementById(VT_STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = VT_STYLE_ID;
-  style.textContent = `
-    #dg-tooltip .vt { font: 11px/1.5 var(--font-mono, 'JetBrains Mono', monospace); color: #cbd5e1; white-space: normal; }
-    #dg-tooltip .vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
-    #dg-tooltip .vt .vt-dim { color: #64748b; }
-    #dg-tooltip .vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
-  `;
-  document.head.appendChild(style);
+// Contexto dos tooltips: município sob o cursor (UCs, TIs, CAR) e, nas
+// camadas que agregam municípios (regionais, associações), os indicadores de
+// municipios-info.json e os nomes do GeoJSON dos municípios.
+const cursor = createCursorMunicipio();
+
+let nomesPromise = null;
+/** {<CD_MUN>: NM_MUN} do GeoJSON dos municípios (o mesmo da camada-base, em cache). */
+function loadNomesMunicipios() {
+  nomesPromise ??= fetch(MUNICIPIOS_URL)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((gj) => Object.fromEntries((gj?.features ?? []).map((f) => [String(f.properties?.CD_MUN), f.properties?.NM_MUN])))
+    .catch(() => {
+      nomesPromise = null;
+      return null;
+    });
+  return nomesPromise;
 }
 
 const hexAlpha = (hex, alpha) => {
@@ -48,6 +60,8 @@ function territorioLayer(spec, { onClick = null } = {}) {
   const lid = { fill: `dg-${key}-fill`, border: `dg-${key}-line`, label: `dg-${key}-label` };
   let props = [];
   let loaded = null;
+  let info = null;
+  let nomes = null;
   const interactive = Boolean(tooltipOf || onClick);
 
   return defineLayer({
@@ -103,20 +117,25 @@ function territorioLayer(spec, { onClick = null } = {}) {
         loaded = null;
         throw err;
       });
-      const built = await loaded;
+      const [built, inf, nms] = await Promise.all([
+        loaded,
+        spec.agregaMunicipios ? loadMunicipiosInfo() : null,
+        spec.agregaMunicipios ? loadNomesMunicipios() : null,
+      ]);
+      info = inf?.municipios ?? null;
+      nomes = nms;
       props = built.props;
       ctx.setData(src.fill, built.fills);
       ctx.setData(src.border, built.borders);
       ctx.setData(src.label, built.labels);
       return built.count;
     },
+    onEnable: (ctx) => cursor.attach(ctx.map),
     ...(tooltipOf
       ? {
         tooltip: (_p, feature) => {
           const p = props[feature.id];
-          if (!p) return '';
-          injectTooltipStyles();
-          return `<div class="vt">${tooltipOf(p)}</div>`;
+          return p ? tooltipOf(p, { municipio: cursor.get(), info, nomes }) : '';
         },
       }
       : {}),
@@ -139,6 +158,8 @@ const CAR_MINZOOM = zoomForHeight(CAR_MAX_HEIGHT);
 const CAR_BASE = '/data/car';
 const CAR_SOURCE = 'dg-car';
 const CAR_LAYER = 'dg-car-line';
+// Divisa fina demais para o hover: linha invisível mais larga só para o pick.
+const CAR_HIT = 'dg-car-hit';
 const CAR_PER_VIEW = 9; // maxCellsPerView do app
 const CAR_MAX_LOADED = 24; // maxLoadedCells do app
 const CAR_CLASSES = Object.keys(CAR_CLASSE_STYLES);
@@ -257,7 +278,9 @@ function createCarLoader() {
     },
     setFocus(bbox, ctx) {
       focus = bbox ?? null;
-      if (ctx.map.getLayer(CAR_LAYER)) ctx.map.setLayerZoomRange(CAR_LAYER, focus ? 0 : CAR_MINZOOM, 24);
+      for (const lid of [CAR_LAYER, CAR_HIT]) {
+        if (ctx.map.getLayer(lid)) ctx.map.setLayerZoomRange(lid, focus ? 0 : CAR_MINZOOM, 24);
+      }
       onMove();
     },
     async count() {
@@ -274,6 +297,7 @@ function createCarLoader() {
 }
 
 const car = createCarLoader();
+let carStatsAgg = null; // car-municipios.json: imóveis e área por classe (estado e município)
 
 const carColor = ['match', ['get', 'classe']];
 const carWidth = ['match', ['get', 'classe']];
@@ -301,16 +325,30 @@ export const carLayer = defineLayer({
       layout: { 'line-join': 'round' },
       paint: { 'line-color': carColor, 'line-width': carWidth },
     },
+    {
+      id: CAR_HIT,
+      type: 'line',
+      source: CAR_SOURCE,
+      minzoom: CAR_MINZOOM,
+      layout: { 'line-join': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': 10, 'line-opacity': 0.01 },
+    },
   ],
+  interactive: [CAR_HIT],
   async load() {
+    carStatsAgg = await loadCarMunicipios().catch(() => null);
     const total = await car.count();
     // O app mostra os trechos carregados; aqui o total do índice (a contagem
     // do painel não se atualiza a cada movimento).
     return { count: total, info: 'carrega pela vista (zoom ≥ 10 ou município em foco)' };
   },
-  onEnable: (ctx) => car.enable(ctx),
+  onEnable: (ctx) => {
+    cursor.attach(ctx.map);
+    car.enable(ctx);
+  },
   onDisable: (ctx) => car.disable(ctx),
   focusOn: (bbox, ctx) => car.setFocus(bbox, ctx),
+  tooltip: (p) => (p.classe ? carTooltip(p.classe, { stats: carStatsAgg, municipio: cursor.get() }) : ''),
 });
 
 export const carStats = () => car.stats();

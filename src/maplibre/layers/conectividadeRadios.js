@@ -8,15 +8,15 @@
 //   NearFarScalar do app), legenda por geração e, no hover de uma torre, os
 //   anéis de alcance NOMINAL de cada geração (torreCobertura.js).
 // - Rádios: um ponto por município (tamanho pela raiz da contagem, verde se
-//   algo toca, cinza se só no dial), tooltip com contato, e o clique abre o
+//   algo toca, cinza se só no dial), tooltip (tipCard) com contato, e o clique abre o
 //   MESMO player do app (src/data/radioPlayer.js, DOM puro) já tocando.
 
 import { dgFetchData } from '../../data/datageoClient.js';
 import { centroidByIbge } from '../../data/prCentroids.js';
-import { isLive, placeTooltipHtml } from '../../data/radioContact.js';
+import { formatPhone, isLive, whatsappNumber } from '../../data/radioContact.js';
 import { GREEN, createPlayer, dotSize } from '../../data/radioPlayer.js';
-import { aneisDeCobertura, chaveDeSite, torreTooltipHtml } from '../../data/torreCobertura.js';
-import { EMPTY_FC, defineLayer, fc, point, zoomForHeight } from '../kit.js';
+import { ALCANCE_NOMINAL_KM, aneisDeCobertura, chaveDeSite, tecnologias } from '../../data/torreCobertura.js';
+import { EMPTY_FC, defineLayer, fc, fmtCoord, point, tipCard, zoomForHeight } from '../kit.js';
 
 // ------------------------------------------------------------ conectividade
 
@@ -102,6 +102,40 @@ export function aneisFc(t) {
     properties: { tec, km },
     geometry: { type: 'Polygon', coordinates: [circuloGraus(t.lat, t.lon, km)] },
   })));
+}
+
+const kmFmt = (km) => `${String(km).replace('.', ',')} km`;
+
+/** "2024-01" -> "01/2024" (mês do levantamento). */
+const mesAno = (v) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(v ?? ''));
+  return m ? `${m[2]}/${m[1]}` : String(v ?? '');
+};
+
+/**
+ * Tooltip de uma torre (props de buildTorres). O aviso de que os anéis são
+ * alcance ESTIMADO fica sempre (scripts/qa-torres.mjs confere 📡 e ESTIMADO).
+ */
+export function torreTooltip(t) {
+  const tecs = tecnologias(t.mask);
+  const topo = tecs[0];
+  const tone = topo === '5G' || topo === '4G' ? 'ok' : topo === '3G' ? 'info' : topo === '2G' ? 'warn' : 'muted';
+  const vintage = mesAno(t.vintage);
+  return tipCard({
+    icon: '📡',
+    title: t.operadora,
+    subtitle: ['Estação rádio base (ERB)', t.municipio ? `${t.municipio} - PR` : ''].filter(Boolean).join(' · '),
+    badge: { text: topo ?? 'SEM INFO', tone },
+    rows: [
+      ['Tecnologias', tecs.join(' · ') || 'sem tecnologia declarada'],
+      ['Só 2G', topo === '2G' ? 'sem dados móveis de banda larga' : '', 'warn'],
+      ['Mesma estrutura', t.vizinhas?.length ? t.vizinhas.join(', ') : ''],
+      ['Alcance nominal', tecs.map((tec) => `${tec} ${kmFmt(ALCANCE_NOMINAL_KM[tec])}`).join(' · ')],
+      ['Coordenadas', fmtCoord(t.lat, t.lon, 5)],
+    ],
+    note: 'Anéis = alcance ESTIMADO de macrocélula rural, não medição; a mancha cinza é a área sem 3G+ medida.',
+    source: `ANATEL · IDR-PR${vintage ? ` · levantamento ${vintage}` : ''}`,
+  });
 }
 
 // NearFarScalar(2e4 m -> 1,6; 1,2e6 m -> 0,45) sobre pixelSize 4 (diâmetro).
@@ -206,7 +240,7 @@ const conectividade = (() => {
 
     tooltip: (p, feature) => {
       const t = props[feature.id];
-      return t ? `<div class="dgx-vt">${torreTooltipHtml(t)}</div>` : '';
+      return t ? torreTooltip(t) : '';
     },
 
     rowControls: () => ({ chips: [], legend }),
@@ -232,6 +266,51 @@ export function radiosFc(places, lookup = centroidByIbge) {
 }
 
 export const stationCount = (places) => places.reduce((sum, p) => sum + p.stations.length, 0);
+
+const TOOLTIP_MAX_STATIONS = 4;
+
+/**
+ * Tooltip de um município com rádios: contagem ao vivo/dial e, por emissora,
+ * frequência, tipo, contato e endereço (a entidade outorgada quando não há
+ * contato: é o que distingue duas comunitárias do mesmo canal).
+ */
+export function radiosTooltip(place) {
+  const stations = place?.stations ?? [];
+  const live = stations.filter(isLive).length;
+  const dial = stations.length - live;
+  const sections = stations.slice(0, TOOLTIP_MAX_STATIONS).map((s) => {
+    const wa = whatsappNumber(s.whatsapp);
+    const tel = String(s.telefone ?? '').trim();
+    const waTxt = wa && !wa.endsWith(tel.replace(/\D/g, '') || '-') ? formatPhone(wa) : '';
+    const tipo = [s.comunitaria ? 'comunitária' : '', s.rural ? 'programa rural' : ''].filter(Boolean).join(' · ');
+    return {
+      title: `${isLive(s) ? '● ' : '○ '}${s.name}`,
+      rows: [
+        ['Frequência', [s.freq, tipo].filter(Boolean).join(' · ')],
+        ['Telefone', tel],
+        ['WhatsApp', waTxt],
+        ['E-mail', s.email],
+        ['Endereço', s.endereco],
+        ['Entidade', !tel && !waTxt && !s.endereco ? s.entidade : ''],
+      ],
+    };
+  });
+  const mais = stations.length - TOOLTIP_MAX_STATIONS;
+  return tipCard({
+    icon: '📻',
+    title: place?.nome ?? '',
+    subtitle: `${stations.length} ${stations.length === 1 ? 'emissora' : 'emissoras'} · IBGE ${place?.ibge ?? ''}`,
+    badge: live ? { text: `${live} AO VIVO`, tone: 'ok' } : { text: 'SÓ DIAL', tone: 'muted' },
+    rows: [
+      ['Ao vivo', live ? String(live) : '', 'ok'],
+      ['Só no dial', dial ? String(dial) : '', 'muted'],
+    ],
+    sections,
+    note: `● ao vivo · ○ só no dial. ${mais > 0 ? `+${mais} no player. ` : ''}Clique para abrir o player${live ? ' e ouvir' : ''}.`,
+    source: 'Anatel · radio.garden · Radio Browser',
+    wide: true,
+  });
+}
 
 const radios = (() => {
   let places = [];
@@ -302,7 +381,7 @@ const radios = (() => {
 
     tooltip: (p) => {
       const place = places.find((pl) => String(pl.ibge) === String(p.ibge));
-      return place ? `<div class="dgx-vt">${placeTooltipHtml(place)}</div>` : '';
+      return place ? radiosTooltip(place) : '';
     },
 
     click: (p) => {
@@ -312,20 +391,11 @@ const radios = (() => {
   });
 })();
 
-// Tooltip do protótipo: as classes vt-/rt- dos tooltips do app.
-if (typeof document !== 'undefined' && !document.getElementById('dgx-vt-style')) {
+// Player acima da barra LOCALIZAÇÃO/estilos do protótipo (bottom 42 px).
+if (typeof document !== 'undefined' && !document.getElementById('dgx-radio-pos-style')) {
   const style = document.createElement('style');
-  style.id = 'dgx-vt-style';
-  style.textContent = `
-    #dg-tooltip .dgx-vt { font: 11px/1.5 var(--font-mono, ui-monospace, monospace); color: #cbd5e1; white-space: normal; }
-    #dg-tooltip .dgx-vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
-    #dg-tooltip .dgx-vt .vt-dim { color: #64748b; font-size: 10px; }
-    #dg-tooltip .dgx-vt .rt-st { margin-top: 6px; }
-    #dg-tooltip .dgx-vt .rt-st b { color: #e2e8f0; }
-    #dg-tooltip .dgx-vt .rt-tag, #dg-tooltip .dgx-vt .rt-det { color: #94a3b8; font-size: 10px; }
-    /* Player acima da barra LOCALIZAÇÃO/estilos do protótipo (bottom 42 px). */
-    body #dg-radio { bottom: 116px; z-index: 120; }
-  `;
+  style.id = 'dgx-radio-pos-style';
+  style.textContent = 'body #dg-radio { bottom: 116px; z-index: 120; }';
   document.head.appendChild(style);
 }
 

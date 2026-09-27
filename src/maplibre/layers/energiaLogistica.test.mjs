@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import layers, {
-  legendWithCounts, pointFeatures, rgba, transmissaoFeatures, transmissaoTooltipHtml, vtWrap,
+  legendWithCounts, parseNomeLt, pointFeatures, rgba, transmissaoFeatures, transmissaoTooltipHtml,
 } from './energiaLogistica.js';
 import {
   ARMAZEM_LEGENDA, USINA_LEGENDA, agroindustriaIdrEstilo, agroindustriaIdrTooltipHtml, agroindustriaTooltipHtml,
-  armazemEstilo, ceasaEstilo, linhaTransmissaoClasse, rotaTuristicaEstilo, rotaTuristicaTooltipHtml,
-  subestacaoEstilo, usinaEstilo,
+  armazemEstilo, armazemTooltipHtml, ceasaEstilo, ceasaTooltipHtml, distribuicaoTooltipHtml, linhaTransmissaoClasse,
+  parseRotaDescricao, rotaTuristicaEstilo, rotaTuristicaTooltipHtml, subestacaoEstilo, subestacaoTooltipHtml,
+  usinaEstilo, usinaTooltipHtml,
 } from '../../data/energiaLogisticaEstilos.js';
 
 const data = (name) => JSON.parse(readFileSync(new URL(`../../../public/data/${name}`, import.meta.url), 'utf8'));
@@ -54,11 +55,42 @@ test('transmissaoFeatures conta trechos como o app e marca a classe', () => {
   assert.ok(real.count >= 297);
 });
 
-test('tooltip da transmissão escapa o nome', () => {
+test('tooltip da transmissão: trecho, tensão, situação e circuito (tipCard)', () => {
   const html = transmissaoTooltipHtml({ nome: 'LT <x>', tensao: 230, ano: 2019, planejada: false });
-  assert.match(html, /LT &lt;x&gt;/);
-  assert.match(html, /230 kV/);
-  assert.match(html, /Em operação desde 2019/);
+  assert.match(html, /^<div class="tt">/);
+  assert.match(html, /tt-title">LT &lt;x&gt;</);
+  assert.match(html, /<dt>Tensão<\/dt><dd class="">230 kV/);
+  assert.match(html, /<dt>Situação<\/dt><dd class="tt-ok">Em operação desde 2019/);
+  const real = transmissaoTooltipHtml({ nome: 'LT 230 kV Curitiba Centro - Uberaba, C2 (CD)', tensao: 230, ano: 0, planejada: false, __classe: 'kv230' });
+  assert.match(real, /tt-title">Curitiba Centro – Uberaba</);
+  assert.match(real, /tt-badge tt-warn">230–440 kV</);
+  assert.match(real, /C2 · circuito duplo/);
+  assert.doesNotMatch(real, /desde/, 'ano 0 some');
+  const plan = transmissaoTooltipHtml({ nome: 'SECC LT 230 kV Curitiba - Joinville Norte, C2 (CD), na SE Joinville Norte 2', tensao: 230, ano: 2034, planejada: true });
+  assert.match(plan, /tt-badge tt-warn">Prevista 2034</);
+  assert.match(plan, /Seccionamento na SE Joinville Norte 2/);
+  assert.deepEqual(parseNomeLt('xyz'), { trecho: '', circuito: '', secc: '' });
+  for (const f of data('linhas-transmissao-pr.geojson').features) {
+    assert.doesNotMatch(transmissaoTooltipHtml(f.properties), /undefined|NaN/);
+  }
+  const lt = layers.find((l) => l.id === 'datageo-transmissao');
+  assert.deepEqual(lt.interactive, ['dg-transmissao-hit']);
+});
+
+test('distribuição: linha de pick larga e tooltip pela tensão da célula', () => {
+  const dist = layers.find((l) => l.id === 'datageo-distribuicao');
+  assert.deepEqual(dist.interactive, ['dg-distribuicao-hit']);
+  const hit = dist.layers.find((l) => l.id === 'dg-distribuicao-hit');
+  assert.equal(hit.source, 'dg-distribuicao');
+  assert.ok(hit.paint['line-width'] >= 10 && hit.paint['line-opacity'] < 0.05);
+  assert.ok(dist.focusOn && dist.onEnable && dist.rowControls);
+  const html = distribuicaoTooltipHtml({ kv: 34.5, municipio: { nome: 'Castro' }, trechos: 1234, fonte: 'ANEEL · BDGD COPEL-DIS 2022-12-31 V11' });
+  assert.match(html, /tt-title">Rede de distribuição 34,5 kV</);
+  assert.match(html, /Copel Distribuição S\.A\./);
+  assert.match(html, /<dt>Município<\/dt><dd class="">Castro/);
+  assert.match(html, /1\.234 \(quadrícula/);
+  assert.match(html, /BDGD COPEL-DIS 2022-12-31 V11/);
+  assert.match(dist.tooltip({ grupo: 13.8, trechos: 5 }), /13,8 kV/);
 });
 
 test('pointFeatures: estilo, contagem por grupo e id para o tooltip', () => {
@@ -131,21 +163,86 @@ test('cada labelMaxDist dos dados reais tem layer de rótulo', () => {
   assert.ok(minz('datageo-ceasas', 'label-2500k') < 6);
 });
 
-test('tooltips do app escapam e vão embrulhados com a largura', () => {
+test('tooltips dos pontos no formato tipCard, escapados', () => {
   const agro = agroindustriaTooltipHtml({ kind: 'frigorifico', nome: '<b>F</b>', municipio: 'Toledo' });
-  assert.match(agro, /&lt;b&gt;F&lt;\/b&gt;/);
+  assert.match(agro, /tt-title">&lt;b&gt;F&lt;\/b&gt;</);
   assert.match(agro, /Frigorífico/);
   assert.match(agro, /Toledo - PR/);
+  assert.match(agro, /Inspeção Federal/);
   assert.equal(agroindustriaTooltipHtml({ kind: 'x' }), '');
-  const idr = agroindustriaIdrTooltipHtml({ id: 1, 'Agroindústria': 'Queijaria', 'Município': 'Castro', Produtos: 'Queijo & nata' });
-  assert.match(idr, /Queijaria/);
-  assert.match(idr, /Produtos:<\/span> Queijo &amp; nata/);
-  assert.doesNotMatch(idr, />id:/);
-  const rota = rotaTuristicaTooltipHtml({ rota: 'Rota da Uva e do Vinho', nome: 'Vinícola', descricao: 'a\nb' });
-  assert.match(rota, /🍇 Vinícola/);
-  assert.match(rota, /a<br>b/);
-  assert.equal(vtWrap('<i>x</i>', 720), '<div class="dg-vt dg-vt-w720"><i>x</i></div>');
-  assert.equal(vtWrap(''), '');
+
+  const idr = agroindustriaIdrTooltipHtml({
+    id: 1, 'Agroindústria': 'Queijaria', 'Município': 'Castro', Regional: 'Ponta Grossa', Produtos: 'Queijo & nata',
+    'Situação legal': 'Sim', 'Pessoas da família': '3', 'Contratados permanentes': '1', 'Venda direta': '60',
+    'Mercado institucional': '40', 'Necessidade: gestão': 'Alta', 'Necessidade: BPF': 'Baixa', 'Necessidade: rotulagem': 'Alta',
+    'Checagem da coordenada': 'FORA do município declarado', 'Observações': 'x'.repeat(400),
+  });
+  assert.match(idr, /^<div class="tt tt-wide">/);
+  assert.match(idr, /tt-sub">Castro - PR · Regional Ponta Grossa</);
+  assert.match(idr, /tt-badge tt-ok">Legalizada</);
+  assert.match(idr, /<dt>Mão de obra<\/dt><dd class="">3 da família · 1 contratado\(s\)/);
+  assert.match(idr, /<dt>Canais<\/dt><dd class="">direta 60% · institucional 40%/);
+  assert.match(idr, /<dt>Alta<\/dt><dd class="tt-warn">gestão, rotulagem<\/dd><dt>Baixa<\/dt><dd class="">BPF/);
+  assert.match(idr, /<dd class="tt-warn">FORA do município/);
+  assert.match(idr, /<dt>Produtos<\/dt><dd class="">Queijo &amp; nata/);
+  assert.match(idr, /tt-note">x{200,}…</);
+  assert.doesNotMatch(idr, />id</);
+
+  const rota = rotaTuristicaTooltipHtml({
+    rota: 'Rota do Queijo Paranaense', nome: 'Queijaria Cornelia - Arapoti - PR',
+    descricao: 'Queijos: Tipo Gouda.\nRegistro: SIM 0013/21\nExperiências turísticas:\n- Visita guiada;\n- Degustação.\n\nContato e horários de funcionamento:\nGezina (43) 98817-0172\n',
+  });
+  assert.match(rota, /🧀<\/span><span class="tt-title">Queijaria Cornelia</);
+  assert.match(rota, /tt-sub">Rota do Queijo Paranaense · Arapoti</);
+  assert.match(rota, /<dt>Produtos<\/dt><dd class="">Tipo Gouda/);
+  assert.match(rota, /<dt>Registro<\/dt><dd class="">SIM 0013\/21/);
+  assert.match(rota, /<dt>Experiências<\/dt><dd class="">Visita guiada; Degustação/);
+  assert.match(rota, /<dt>Telefone<\/dt><dd class="">\(43\) 98817-0172/);
+  const uva = parseRotaDescricao('Município:\nPiên\n\nProdutos comercializados:\nUva, Vinhos.\n\nQual a experiência turística que vai ofertar?\nColha e pague, Vindima\n\nTelefone: 47996067225\n@vinicolasocreppa\nE-mail: a@b.com');
+  assert.equal(uva.municipio, 'Piên');
+  assert.equal(uva.produtos, 'Uva, Vinhos');
+  assert.equal(uva.experiencias, 'Colha e pague, Vindima');
+  assert.equal(uva.email, 'a@b.com');
+  assert.match(uva.site, /@vinicolasocreppa/);
+  for (const f of data('rotas-turisticas-pr.geojson').features) {
+    const h = rotaTuristicaTooltipHtml(f.properties);
+    assert.doesNotMatch(h, /undefined|NaN/);
+    assert.match(h, /<dt>(Produtos|Experiências|Telefone)<\/dt>|tt-note/, f.properties.nome);
+  }
+
+  const se = subestacaoTooltipHtml({ nome: 'SE Areia', tensao: '525/230/138', ano: '1997', planejada: false });
+  assert.match(se, /tt-sub">Subestação · 525 kV</);
+  assert.match(se, /525\/230\/138 kV/);
+  assert.match(se, /Em operação desde<\/dt><dd class="">1997/);
+  assert.doesNotMatch(subestacaoTooltipHtml({ nome: 'SE X', tensao: '230', ano: '-', planejada: false }), /desde/);
+  assert.match(subestacaoTooltipHtml({ nome: 'SE P', tensao: '230/138/34,5', ano: '2030', planejada: true }), /Prevista.*34,5 kV|34,5 kV.*Prevista/s);
+
+  const usina = usinaTooltipHtml({ tipo: 'uhe', nome: 'Foz do Areia', pot_kw: 1676000 });
+  assert.match(usina, /tt-sub">Usina hidrelétrica \(UHE\)</);
+  assert.match(usina, /tt-badge tt-alert">UHE</);
+  assert.match(usina, /1\.676 MW/);
+  assert.match(usinaTooltipHtml({ tipo: 'cgh', nome: 'C', pot_kw: 450 }), /0,45 MW/);
+  assert.match(usinaTooltipHtml({ tipo: 'aerogerador', nome: 'Água Doce', pot_kw: 600, alt: 86.6 }), /600 kW.*86,6 m/s);
+  assert.equal(usinaTooltipHtml({ tipo: 'x' }), '');
+
+  const arm = armazemTooltipHtml({ kind: 'armazem_conab', nome: 'Coop', municipio: 'Toledo', tipo: 'Chapï¿½u Chines', cap_t: 21410 });
+  assert.match(arm, /Chapéu chinês/);
+  assert.match(arm, /21\.410 t/);
+  assert.match(armazemTooltipHtml({ kind: 'porto', nome: 'Porto de Paranaguá', municipio: 'Paranaguá', tipo: 'porto graneleiro' }), /tt-badge tt-warn">Porto</);
+
+  const ceasa = ceasaTooltipHtml({ nome: 'CEASA Londrina' });
+  assert.match(ceasa, /<dt>Município<\/dt><dd class="">Londrina/);
+
+  for (const [file, fn] of [
+    ['subestacoes-pr.geojson', subestacaoTooltipHtml], ['usinas-pr.geojson', usinaTooltipHtml],
+    ['armazens-conab-pr.geojson', armazemTooltipHtml], ['ceasas-pr.geojson', ceasaTooltipHtml],
+  ]) {
+    for (const f of data(file).features) {
+      const h = fn(f.properties);
+      assert.match(h, /^<div class="tt">/, file);
+      assert.doesNotMatch(h, /undefined|NaN|ï¿½/, `${file}: ${h}`);
+    }
+  }
 });
 
 test('tooltip do ponto usa as propriedades originais pelo id (IDR sem chaves internas)', async () => {
@@ -163,10 +260,10 @@ test('tooltip do ponto usa as propriedades originais pelo id (IDR sem chaves int
   assert.equal(set[0], 'dg-agroindustrias-idr');
   const f = set[1].features[0];
   const html = idr.tooltip(f.properties, f);
-  assert.match(html, /Matéria-prima:/);
+  assert.match(html, /<dt>Matéria-prima<\/dt><dd class="">Vegetal/);
   assert.doesNotMatch(html, /__size|__label/);
   assert.deepEqual(idr.rowControls().legend.map((l) => l.count), [1, 0, 0]);
-  // Sem tooltip no app: o rótulo.
+  // Sem as propriedades originais (antes do load): o rótulo, no mesmo formato.
   const ceasas = layers.find((l) => l.id === 'datageo-ceasas');
-  assert.match(ceasas.tooltip({ __label: 'CEASA <C>' }, { id: 0 }), /CEASA &lt;C&gt;/);
+  assert.match(ceasas.tooltip({ __label: 'CEASA <C>' }, { id: 0 }), /tt-title">CEASA &lt;C&gt;</);
 });
