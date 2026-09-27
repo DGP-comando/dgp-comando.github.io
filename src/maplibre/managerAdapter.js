@@ -92,11 +92,17 @@ export function toManagerModule(def, host) {
           if (result.count != null) st.count = result.count;
           if (result.info !== undefined) st.info = result.info;
         }
-        if (first) await waitIdle(ctx.map);
         st.error = null;
         st.loaded = true;
         st.lastUpdate = Date.now();
-        if (first) st.firstLoadMs = performance.now() - t0;
+        // O tempo até a camada aparecer desenhada é medido em paralelo: esperar
+        // o mapa ocioso aqui seguraria a camada em "ligando" enquanto tiles do
+        // mapa base carregam (e o link não a incluiria nesse intervalo).
+        if (first) {
+          waitIdle(ctx.map).then(() => {
+            st.firstLoadMs = performance.now() - t0;
+          });
+        }
         return true;
       } catch (err) {
         console.warn(`[maplibre:${def.id}]`, err);
