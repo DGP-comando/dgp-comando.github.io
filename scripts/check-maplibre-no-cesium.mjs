@@ -29,7 +29,7 @@ while (queue.length) {
   }
   for (const m of src.matchAll(IMPORT_RE)) {
     const spec = m[1] ?? m[2] ?? m[3];
-    if (spec === 'cesium' || spec.startsWith('cesium/') || spec.startsWith('cesium-')) {
+    if (spec === 'cesium' || spec.startsWith('cesium/') || spec.startsWith('cesium-') || spec.startsWith('@cesium/')) {
       failures.push([...chain, spec].join('\n   -> '));
       continue;
     }
