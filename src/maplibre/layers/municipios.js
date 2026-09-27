@@ -1,19 +1,18 @@
 // src/maplibre/layers/municipios.js
 //
 // Municípios do PR no protótipo: os 399 polígonos com divisa ciano brilhante,
-// hover que destaca e mostra prefeito/VBP/cadeia (o mesmo tooltip do app),
-// clique que abre a ficha municipal (src/datageoFicha.js, reaproveitada como
-// está) e destaque do município selecionado.
+// hover que só destaca (sem tooltip: a camada-base não cobre o tooltip das
+// camadas de baixo; prefeito/VBP/cadeia estão na ficha), clique que abre a
+// ficha municipal (src/datageoFicha.js) e destaque do município selecionado.
 
 import { openFicha } from '../../datageoFicha.js';
-import { municipioTooltipHtml } from '../../data/municipioTooltip.js';
 import { defineLayer, LABEL_PAINT, TEXT_FONT } from '../kit.js';
 
 export const MUNICIPIOS_URL = '/data/municipios-pr.geojson';
 const INFO_URL = '/data/municipios-info.json';
 
 let infoPromise = null;
-/** municipios-info.json (prefeito, VBP, cadeia), carregado uma vez. */
+/** municipios-info.json (prefeito, VBP, cadeia) da ficha, carregado uma vez. */
 export function loadMunicipiosInfo() {
   infoPromise ??= fetch(INFO_URL)
     .then((r) => (r.ok ? r.json() : null))
@@ -23,10 +22,6 @@ export function loadMunicipiosInfo() {
     });
   return infoPromise;
 }
-let infoCache = null;
-loadMunicipiosInfo().then((info) => {
-  infoCache = info;
-});
 
 export async function openMunicipioFicha(ibge, nome) {
   const info = await loadMunicipiosInfo();
@@ -103,9 +98,9 @@ export const municipiosLayer = defineLayer({
     },
   ],
   interactive: ['dg-municipios-fill'],
+  underlay: true,
   hoverState: 'dg-municipios',
   count: async () => 399,
-  tooltip: (p) => `<div class="mt">${municipioTooltipHtml(p.NM_MUN, infoCache?.municipios?.[String(p.CD_MUN)])}</div>`,
   click: (p) => {
     openMunicipioFicha(p.CD_MUN, p.NM_MUN);
   },

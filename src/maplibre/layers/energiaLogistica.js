@@ -86,20 +86,20 @@ export function legendWithCounts(legend, counts) {
 }
 
 // Classes vt-* dos tooltips do app (entityHoverTooltip.js), só dentro de .dg-vt.
-// `tooltipWidth` do app vira max-width do #tooltip enquanto ele mostra o nosso.
+// `tooltipWidth` do app vira max-width do #dg-tooltip enquanto ele mostra o nosso.
 const VT_STYLE_ID = 'dg-energia-logistica-vt';
 function ensureVtStyle() {
   if (typeof document === 'undefined' || document.getElementById(VT_STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = VT_STYLE_ID;
   style.textContent = `
-    #tooltip .dg-vt { font: 11px/1.5 'JetBrains Mono', monospace; color: #cbd5e1; white-space: normal; }
-    #tooltip .dg-vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
-    #tooltip .dg-vt .vt-berco { color: #fbbf24; }
-    #tooltip .dg-vt .vt-dim, #tooltip .dg-vt span.vt-dim { color: #64748b; }
-    #tooltip .dg-vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
-    #tooltip:has(.dg-vt-w420) { max-width: 420px; }
-    #tooltip:has(.dg-vt-w720) { max-width: 720px; }
+    #dg-tooltip .dg-vt { font: 11px/1.5 'JetBrains Mono', monospace; color: #cbd5e1; white-space: normal; }
+    #dg-tooltip .dg-vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
+    #dg-tooltip .dg-vt .vt-berco { color: #fbbf24; }
+    #dg-tooltip .dg-vt .vt-dim, #dg-tooltip .dg-vt span.vt-dim { color: #64748b; }
+    #dg-tooltip .dg-vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
+    #dg-tooltip:has(.dg-vt-w420) { max-width: 420px; }
+    #dg-tooltip:has(.dg-vt-w720) { max-width: 720px; }
   `;
   document.head.appendChild(style);
 }

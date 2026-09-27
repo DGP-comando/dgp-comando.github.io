@@ -317,12 +317,12 @@ if (typeof document !== 'undefined' && !document.getElementById('dgx-vt-style'))
   const style = document.createElement('style');
   style.id = 'dgx-vt-style';
   style.textContent = `
-    #tooltip .dgx-vt { font: 11px/1.5 var(--font-mono, ui-monospace, monospace); color: #cbd5e1; white-space: normal; }
-    #tooltip .dgx-vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
-    #tooltip .dgx-vt .vt-dim { color: #64748b; font-size: 10px; }
-    #tooltip .dgx-vt .rt-st { margin-top: 6px; }
-    #tooltip .dgx-vt .rt-st b { color: #e2e8f0; }
-    #tooltip .dgx-vt .rt-tag, #tooltip .dgx-vt .rt-det { color: #94a3b8; font-size: 10px; }
+    #dg-tooltip .dgx-vt { font: 11px/1.5 var(--font-mono, ui-monospace, monospace); color: #cbd5e1; white-space: normal; }
+    #dg-tooltip .dgx-vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .04em; margin-bottom: 4px; }
+    #dg-tooltip .dgx-vt .vt-dim { color: #64748b; font-size: 10px; }
+    #dg-tooltip .dgx-vt .rt-st { margin-top: 6px; }
+    #dg-tooltip .dgx-vt .rt-st b { color: #e2e8f0; }
+    #dg-tooltip .dgx-vt .rt-tag, #dg-tooltip .dgx-vt .rt-det { color: #94a3b8; font-size: 10px; }
     /* Player acima da barra LOCALIZAÇÃO/estilos do protótipo (bottom 42 px). */
     body #dg-radio { bottom: 116px; z-index: 120; }
   `;

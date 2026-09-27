@@ -19,17 +19,17 @@ import { CAR_CLASSE_STYLES, CAR_MAX_HEIGHT } from '../../data/carClasses.js';
 import { defineLayer, EMPTY_FC, TEXT_FONT, zoomForHeight } from '../kit.js';
 import { buildTerritorioFeatures, cellFeatures, wantedCells } from './territoriosFeatures.js';
 
-// Classes .vt-* do tooltip do app (entityHoverTooltip.js), no #tooltip do protótipo.
+// Classes .vt-* do tooltip do app (entityHoverTooltip.js), no #dg-tooltip do protótipo.
 const VT_STYLE_ID = 'dg-vt-tooltip-style';
 function injectTooltipStyles() {
   if (typeof document === 'undefined' || document.getElementById(VT_STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = VT_STYLE_ID;
   style.textContent = `
-    #tooltip .vt { font: 11px/1.5 var(--font-mono, 'JetBrains Mono', monospace); color: #cbd5e1; white-space: normal; }
-    #tooltip .vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
-    #tooltip .vt .vt-dim { color: #64748b; }
-    #tooltip .vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
+    #dg-tooltip .vt { font: 11px/1.5 var(--font-mono, 'JetBrains Mono', monospace); color: #cbd5e1; white-space: normal; }
+    #dg-tooltip .vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
+    #dg-tooltip .vt .vt-dim { color: #64748b; }
+    #dg-tooltip .vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
   `;
   document.head.appendChild(style);
 }
@@ -126,6 +126,8 @@ function territorioLayer(spec, { onClick = null } = {}) {
           const p = props[feature.id];
           if (p) onClick(p);
         },
+        // Como no app Cesium: a ficha do município abre e o card da camada fica por cima.
+        clickWithUnderlay: true,
       }
       : {}),
   });

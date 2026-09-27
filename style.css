@@ -9313,7 +9313,7 @@ body.scene-playback-mode #first-run-launcher {
 /* Sem mouse não há hover: o tooltip municipal nunca deve prender na tela.
    O clique continua abrindo a ficha completa. */
 @media (hover: none), (pointer: coarse) {
-  #datageo-muni-tooltip { display: none !important; }
+  #dg-tooltip { display: none !important; }
 }
 
 /* Headers das classes de camadas (Limites, Infraestrutura, Clima...). */
@@ -9437,3 +9437,51 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
     width: calc(100vw - 16px);
   }
 }
+
+/* Tooltip de hover das camadas do mapa (src/maplibre/layerHost.js), com o
+   desenho do tooltip municipal e de entidades do app Cesium. O layerHost
+   posiciona por transform e esconde com [hidden]. */
+#dg-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  max-width: 340px;
+  padding: 10px 12px;
+  background: rgba(3, 10, 18, 0.92);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #cbd5e1;
+  z-index: 149; /* acima dos painéis (< 150), abaixo da pílula de voz e dos toasts */
+  pointer-events: none;
+  white-space: normal;
+}
+#dg-tooltip[hidden] { display: none; }
+#dg-tooltip strong { color: #22d3ee; letter-spacing: 0.04em; }
+#dg-tooltip div > span:first-child { color: #64748b; }
+#dg-tooltip .mt { white-space: nowrap; }
+#dg-tooltip .mt-nome {
+  color: #22d3ee;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+#dg-tooltip .mt-up { color: #22c55e; }
+#dg-tooltip .mt-down { color: #ef4444; }
+#dg-tooltip .mt-dim { color: #64748b; }
+#dg-tooltip .mt-fontes,
+#dg-tooltip .vt-fontes {
+  margin-top: 6px;
+  color: #475569;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+#dg-tooltip .vt-nome {
+  color: #22d3ee;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 2px;
+}
+#dg-tooltip .vt-dim { color: #64748b; }

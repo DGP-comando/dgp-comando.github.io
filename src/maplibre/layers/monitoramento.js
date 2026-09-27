@@ -358,15 +358,15 @@ function injectVesselTooltipStyle() {
   const style = document.createElement('style');
   style.id = 'dg-vt-style';
   style.textContent = `
-    #tooltip .vt { font: 11px/1.5 'JetBrains Mono', monospace; color: #cbd5e1; max-width: 340px; white-space: normal; }
-    #tooltip .vt span { color: inherit; }
-    #tooltip .vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
-    #tooltip .vt .vt-status { margin-bottom: 4px; }
-    #tooltip .vt .vt-berco { color: #fbbf24; }
-    #tooltip .vt .vt-fundeio { color: #94a3b8; }
-    #tooltip .vt .vt-ais { color: #7dd3fc; }
-    #tooltip .vt .vt-dim { color: #64748b; }
-    #tooltip .vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
+    #dg-tooltip .vt { font: 11px/1.5 'JetBrains Mono', monospace; color: #cbd5e1; max-width: 340px; white-space: normal; }
+    #dg-tooltip .vt span { color: inherit; }
+    #dg-tooltip .vt .vt-nome { color: #22d3ee; font-weight: 700; letter-spacing: .08em; margin-bottom: 2px; }
+    #dg-tooltip .vt .vt-status { margin-bottom: 4px; }
+    #dg-tooltip .vt .vt-berco { color: #fbbf24; }
+    #dg-tooltip .vt .vt-fundeio { color: #94a3b8; }
+    #dg-tooltip .vt .vt-ais { color: #7dd3fc; }
+    #dg-tooltip .vt .vt-dim { color: #64748b; }
+    #dg-tooltip .vt .vt-fontes { margin-top: 6px; color: #475569; font-size: 9px; letter-spacing: .04em; }
   `;
   document.head.appendChild(style);
 }

@@ -40,6 +40,10 @@
 //         na feição sob o cursor dessa fonte (exige id nas feições/promoteId)
 //     tooltip: (props, feature, ctx) => html   // HTML já escapado (use esc/row)
 //     click:   (props, feature, ctx) => void   // opcional
+//     underlay: true    // opcional: camada-base (municípios) que cede hover,
+//                       // tooltip e clique às camadas ligadas sob o cursor
+//     clickWithUnderlay: true  // opcional: o clique desta camada abre por cima
+//                       // do clique da camada-base (card regional sobre a ficha)
 //
 //     rowControls: (ctx) => ({ chips: [{id, label, active}], legend: [{label, color, count?}] })
 //     onChip:      (chipId, ctx) => void        // o registro redesenha a linha depois
@@ -117,7 +121,7 @@ export function zoomForHeight(heightM) {
 const LAYER_KEYS = new Set([
   'id', 'name', 'category', 'icon', 'source', 'detail', 'defaultOn', 'sources', 'layers', 'load', 'count',
   'refreshMs', 'onEnable', 'onDisable', 'interactive', 'hoverState', 'tooltip', 'click', 'rowControls', 'onChip',
-  'focusOn', 'analystRecords',
+  'focusOn', 'analystRecords', 'underlay', 'clickWithUnderlay',
 ]);
 
 /**
