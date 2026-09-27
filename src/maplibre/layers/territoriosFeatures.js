@@ -116,3 +116,32 @@ export function wantedCells({ lat, lon }, index, { focus = null, perView = 9, fo
   if (focus) return cellsInBbox(focus, index, focusCap, [lon, lat]);
   return nearestCells(lat, lon, index, perView);
 }
+
+/**
+ * Município sob o cursor, para os tooltips que não trazem município no dado
+ * (UCs, divisas do CAR, rede de distribuição). O layerHost não passa o ponto
+ * ao tooltip; cada camada liga este rastreador no onEnable e, no tooltip,
+ * consulta o preenchimento dos municípios (`dg-municipios-fill`, a camada-base
+ * ligada por padrão) no último ponto do mouse. Sem a camada: null.
+ */
+export function createCursorMunicipio(layerId = 'dg-municipios-fill') {
+  let map = null;
+  let point = null;
+  const onMove = (e) => {
+    point = e.point;
+  };
+  return {
+    attach(m) {
+      if (!m || map === m) return;
+      map?.off?.('mousemove', onMove);
+      map = m;
+      map.on('mousemove', onMove);
+    },
+    get() {
+      if (!map || !point || !map.getLayer?.(layerId)) return null;
+      const f = map.queryRenderedFeatures([point.x, point.y], { layers: [layerId] })?.[0];
+      const ibge = f?.properties?.CD_MUN ?? f?.id;
+      return ibge != null ? { ibge: String(ibge), nome: f.properties?.NM_MUN ?? '' } : null;
+    },
+  };
+}
