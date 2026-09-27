@@ -48,13 +48,16 @@ import {
 import {
   defineLayer,
   EMPTY_FC,
-  esc,
   fc,
+  fmtCoord,
+  fmtDateTime,
+  fmtInt,
+  fmtNum,
   LABEL_PAINT,
   point,
-  row,
   TEXT_FONT,
   TEXT_FONT_BOLD,
+  tipCard,
   zoomForHeight,
 } from '../kit.js';
 
@@ -108,6 +111,11 @@ export function buildEarthquakeFeatures(geojson) {
       time: f.properties.time ?? null,
       depth: Number.isFinite(depthKm) ? depthKm : null,
       url: f.properties.url ?? '',
+      magType: f.properties.magType ?? '',
+      tsunami: Number(f.properties.tsunami) === 1,
+      alert: f.properties.alert ?? '',
+      felt: Number.isFinite(Number(f.properties.felt)) && f.properties.felt !== null ? Number(f.properties.felt) : null,
+      status: f.properties.status ?? '',
       color: EARTHQUAKE_DEPTH_CSS[band],
       sig: mag >= EARTHQUAKE_SIGNIFICANT_MAG,
       r0: radiusPxAtZ0(earthquakeRadiusM(mag), lat),
@@ -124,17 +132,39 @@ export function buildEarthquakeFeatures(geojson) {
   return fc(features);
 }
 
-function formatQuakeTime(ms) {
-  if (!Number.isFinite(Number(ms))) return '';
-  return new Date(Number(ms)).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-}
+const DEPTH_LABEL = Object.freeze({ red: 'rasa (< 70 km)', orange: 'intermediária (70–300 km)', yellow: 'profunda (> 300 km)' });
+const PAGER = Object.freeze({
+  green: ['verde', 'ok'], yellow: ['amarelo', 'warn'], orange: ['laranja', 'alert'], red: ['vermelho', 'alert'],
+});
+const QUAKE_STATUS = Object.freeze({ reviewed: 'revisado', automatic: 'automático', deleted: 'removido' });
 
-export function earthquakeTooltip(p) {
+/** Tooltip de um terremoto (props de buildEarthquakeFeatures; `lonlat` da geometria). */
+export function earthquakeTooltip(p, lonlat = []) {
+  const mag = Number(p.mag);
   const depth = Number(p.depth);
-  return `<strong style="color:${esc(p.color)}">${esc(p.label)}${p.place ? ` · ${esc(p.place)}` : ''}</strong>${row(
-    'Profundidade',
-    Number.isFinite(depth) ? `${depth.toFixed(1)} km` : '',
-  )}${row('Hora', formatQuakeTime(p.time))}${row('Evento USGS', p.id)}`;
+  const [lon, lat] = lonlat;
+  const tone = mag >= 6 ? 'alert' : mag >= EARTHQUAKE_SIGNIFICANT_MAG ? 'warn' : 'info';
+  const pager = PAGER[p.alert];
+  const tsunami = p.tsunami === true || p.tsunami === 'true';
+  return tipCard({
+    icon: '🌋',
+    title: p.place || 'Terremoto',
+    subtitle: 'Terremoto · últimas 24 h',
+    badge: Number.isFinite(mag) ? { text: `M${fmtNum(mag, 1)}`, tone } : null,
+    rows: [
+      ['Magnitude', Number.isFinite(mag) ? `${fmtNum(mag, 1)}${p.magType ? ` (${p.magType})` : ''}` : '', tone],
+      ['Profundidade', Number.isFinite(depth) && p.depth !== null ? `${fmtNum(depth, 1, 'km')} · ${DEPTH_LABEL[earthquakeDepthBand(depth)]}` : ''],
+      ['Horário', p.time ? `${fmtDateTime(Number(p.time))} (Brasília)` : ''],
+      ['Alerta PAGER', pager ? pager[0] : '', pager?.[1]],
+      ['Tsunami', tsunami ? 'alerta de tsunami emitido' : '', 'alert'],
+      ['Relatos "sentido"', Number(p.felt) > 0 ? fmtInt(p.felt) : ''],
+      ['Coordenadas', fmtCoord(lat, lon, 3)],
+      ['Revisão', QUAKE_STATUS[p.status] ?? p.status],
+      ['Evento USGS', p.id],
+    ],
+    source: 'USGS · feed de 24 h',
+    updated: p.time ? Number(p.time) : null,
+  });
 }
 
 let quakeCounts = { red: 0, orange: 0, yellow: 0 };
@@ -228,7 +258,7 @@ const earthquakes = defineLayer({
   },
   analystRecords: (maxCount) => quakeAnalystRecords(lastQuakes, maxCount),
   interactive: ['dg-earthquakes-disc'],
-  tooltip: (p) => earthquakeTooltip(p),
+  tooltip: (p, f) => earthquakeTooltip(p, f?.geometry?.coordinates),
   rowControls: () => ({
     legend: [
       { label: '< 70 km', color: EARTHQUAKE_DEPTH_CSS.red, count: quakeCounts.red },
@@ -286,6 +316,7 @@ export function buildLocalInfraFeatures(features, layerId) {
       prio: labelPriorityFromProperties(props, layerId),
       type: String(props.type ?? tags.telecom ?? tags.waterway ?? ''),
       osm: props.osm_id ?? '',
+      ...localInfraDetails(props),
     };
     const centers = [];
     if (g.type === 'Point') {
@@ -308,6 +339,84 @@ export function buildLocalInfraFeatures(features, layerId) {
     }
   }
   return { points: fc(points), polygons: fc(polygons), count };
+}
+
+const clean = (v) => {
+  const t = String(v ?? '').trim();
+  return t && t !== 'undefined' && t !== 'null' ? t : '';
+};
+const first = (...vals) => vals.map(clean).find(Boolean) || '';
+
+/**
+ * Campos do OSM que interessam no tooltip, já planos (queryRenderedFeatures
+ * não devolve objetos aninhados como `tags`).
+ */
+export function localInfraDetails(props) {
+  const p = props ?? {};
+  const t = p.tags ?? {};
+  const output = first(t['plant:output:electricity'], p.output, t['generator:output:electricity']);
+  return {
+    name: first(p.name, t.name, t.official_name, t['name:en']),
+    nameEn: clean(t['name:en']),
+    operator: first(t.operator, p.operator, t['operator:short']),
+    owner: clean(t.owner),
+    capacity: first(t['capacity:it_load'], t.it_load, t.capacity, p.capacity),
+    output: /^\d/.test(output) ? output : '',
+    plant: first(t.power, p.source_layer === 'power_plant' ? 'plant' : ''),
+    plantSource: first(t['plant:source'], p.source),
+    method: first(t['plant:method'], p.method, t['generator:method']),
+    river: first(t.associated_river, p.associated_river, t.river, p.river, t['river:name']),
+    height: clean(t.height),
+    levels: clean(t['building:levels']),
+    start: clean(t.start_date),
+    website: first(t.website, t['contact:website'], t['operator:website']),
+    wiki: clean(t.wikipedia),
+    ref: first(t['ref:US:NID'], t.ref),
+  };
+}
+
+const PLANT_METHOD = Object.freeze({
+  'run-of-the-river': 'fio d\'água', 'water-storage': 'reservatório', 'water-pumped-storage': 'reversível (bombeamento)',
+});
+
+/** "14000 MW" -> "14.000 MW"; "330KW" -> "330 kW". */
+function fmtPower(raw) {
+  const m = /^([\d.,]+)\s*(k|m|g)?w/i.exec(String(raw ?? '').trim());
+  if (!m) return clean(raw);
+  const n = Number(m[1].replace(',', '.'));
+  const unit = { k: 'kW', m: 'MW', g: 'GW' }[(m[2] || '').toLowerCase()] || 'W';
+  return Number.isFinite(n) ? fmtNum(n, Number.isInteger(n) ? 0 : 1, unit) : clean(raw);
+}
+
+/** Tooltip de datacenter/barragem (props de buildLocalInfraFeatures). */
+export function localInfraTooltip(layerId, p, lonlat = []) {
+  const dam = layerId === 'local-dams';
+  const [lon, lat] = lonlat;
+  const isPlant = p.plant === 'plant' || p.plantSource === 'hydro';
+  const height = Number(String(p.height ?? '').replace(',', '.'));
+  return tipCard({
+    icon: dam ? '▰' : '▣',
+    title: p.name || p.title,
+    subtitle: dam ? (isPlant ? 'Barragem · usina hidrelétrica' : 'Barragem') : 'Datacenter',
+    rows: [
+      ['Nome em inglês', p.nameEn && p.nameEn !== p.name ? p.nameEn : ''],
+      ['Operador', p.operator],
+      ['Proprietário', p.owner && p.owner !== p.operator ? p.owner : ''],
+      ['Carga de TI', p.capacity],
+      ['Potência instalada', fmtPower(p.output)],
+      ['Tipo de usina', PLANT_METHOD[p.method] ?? p.method],
+      ['Rio', p.river],
+      ['Altura', Number.isFinite(height) && height > 0 ? fmtNum(height, 0, 'm') : ''],
+      ['Pavimentos', p.levels],
+      ['Início de operação', p.start],
+      ['Site', p.website],
+      ['Wikipédia', p.wiki],
+      ['Registro', p.ref],
+      ['Coordenadas', fmtCoord(lat, lon, 4)],
+      ['OSM', p.osm !== '' && p.osm != null ? String(p.osm) : ''],
+    ],
+    source: 'OpenStreetMap',
+  });
 }
 
 /** Texto do card: título (negrito) e, se houver, a linha de detalhe menor. */
@@ -406,14 +515,7 @@ function localInfraLayer({ id, name, color, icon, source, url, labelGridPx }) {
       return built.count;
     },
     interactive: [`${src}-pt`],
-    tooltip: (p, f) => {
-      const [lon, lat] = f.geometry?.coordinates ?? [];
-      return `<strong style="color:${esc(color)}">${esc(p.title)}</strong>${
-        p.detail ? `<div>${esc(p.detail)}</div>` : ''
-      }${row(name, p.type)}${row('OSM', p.osm)}${
-        Number.isFinite(lat) ? row('Posição', `${lat.toFixed(4)}, ${lon.toFixed(4)}`) : ''
-      }`;
-    },
+    tooltip: (p, f) => localInfraTooltip(id, p, f?.geometry?.coordinates),
   });
 }
 
@@ -443,6 +545,45 @@ const dams = localInfraLayer({
 const CABLE_COLOR = '#39d5ff';
 const LANDING_COLOR = '#8fffd2';
 
+/** Distância de grande círculo em km. */
+function haversineKm([lon1, lat1], [lon2, lat2]) {
+  const r = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * r) / 2) ** 2
+    + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2;
+  return 2 * 6371.0088 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Extensão (km) de uma LineString/MultiLineString, somando os trechos. */
+export function lineLengthKm(geometry) {
+  const parts = geometry?.type === 'LineString' ? [geometry.coordinates]
+    : geometry?.type === 'MultiLineString' ? geometry.coordinates : [];
+  let km = 0;
+  for (const line of parts ?? []) {
+    for (let i = 1; i < (line?.length ?? 0); i++) km += haversineKm(line[i - 1], line[i]);
+  }
+  return km;
+}
+
+/** Tooltip de cabo (linha ou ponto de referência) ou estação de ancoragem. */
+export function cableTooltip(p) {
+  const cable = p.kind === 'cable';
+  const tbd = p.tbd === true || p.tbd === 'true';
+  const km = Number(p.km);
+  return tipCard({
+    icon: cable ? '≋' : '⚓',
+    title: p.name || p.label,
+    subtitle: cable ? 'Cabo submarino de telecomunicações' : 'Estação de ancoragem de cabos submarinos',
+    badge: tbd ? { text: 'A DEFINIR', tone: 'warn' } : null,
+    rows: [
+      ['Extensão aprox.', cable && km > 0 ? fmtInt(km, 'km') : ''],
+      [cable ? 'Referência' : 'Coordenadas', fmtCoord(p.rlat, p.rlon, 3)],
+      ['Local', tbd ? 'posição ainda a definir' : '', 'warn'],
+    ],
+    note: 'Clique para aproximar.',
+    source: '© TeleGeography — submarinecablemap.com',
+  });
+}
+
 /**
  * Cabos (linhas com a cor de cada cabo) e referências: um ponto por cabo (a
  * coordenada de referência do TeleGeography) e um por estação de ancoragem,
@@ -467,12 +608,9 @@ export function buildCableData(cableJson, landingJson) {
         rlat: reference.lat,
       };
       if (kindName === 'cable') {
-        lines.push({
-          type: 'Feature',
-          id: lines.length,
-          geometry: feature.geometry,
-          properties: { ...props, color: String(feature.properties?.color || CABLE_COLOR) },
-        });
+        props.color = String(feature.properties?.color || CABLE_COLOR);
+        props.km = Math.round(lineLengthKm(feature.geometry));
+        lines.push({ type: 'Feature', id: lines.length, geometry: feature.geometry, properties: { ...props } });
       }
       const p = point(reference.lon, reference.lat, props);
       if (p) refs.push(p);
@@ -513,6 +651,14 @@ const submarineCables = defineLayer({
       source: 'dg-cables',
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.92, 'line-width': 2.5 },
+    },
+    {
+      // Faixa invisível e larga só para o hover/clique pegar a linha fina.
+      id: 'dg-cables-hit',
+      type: 'line',
+      source: 'dg-cables',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#000000', 'line-opacity': 0.01, 'line-width': 12 },
     },
     {
       id: 'dg-cable-refs-pt',
@@ -557,15 +703,8 @@ const submarineCables = defineLayer({
     ctx.setData('dg-cable-refs', built.refs);
     return built.count;
   },
-  interactive: ['dg-cable-refs-pt', 'dg-cables-line'],
-  tooltip: (p) => {
-    const cable = p.kind === 'cable';
-    const color = cable ? p.color || CABLE_COLOR : LANDING_COLOR;
-    return `<strong style="color:${esc(color)}">${esc(p.name || p.label)}</strong>${row(
-      'Tipo',
-      cable ? 'Cabo submarino' : `Estação de ancoragem${p.tbd === true || p.tbd === 'true' ? ' (a definir)' : ''}`,
-    )}<div><span>clique para aproximar</span></div>`;
-  },
+  interactive: ['dg-cable-refs-pt', 'dg-cables-hit'],
+  tooltip: (p) => cableTooltip(p),
   // Clique voa até a referência (6,5 km de altura, 52° de inclinação), como o app.
   click: (p, f, ctx) => {
     const lon = Number(p.rlon);
@@ -660,11 +799,45 @@ export function buildFireCells(fires, gridDegrees, nowMs = Date.now()) {
   );
 }
 
-export function fireTooltip(p) {
-  const detail = String(p.selDetail ?? '').split('\n');
-  return `<strong style="color:${esc(p.color)}">${esc(p.selTitle)}</strong>${detail
-    .map((line) => `<div>${esc(line)}</div>`)
-    .join('')}${row('Município', p.muni)}`;
+const SAT_NOME = Object.freeze({ N20: 'NOAA-20', N21: 'NOAA-21', SNPP: 'Suomi NPP', AQUA: 'Aqua', TERRA: 'Terra' });
+const CONF_PT = Object.freeze({ high: ['alta', 'ok'], nominal: ['nominal', 'info'], low: ['baixa', 'muted'] });
+const SEV_BADGE = Object.freeze({ red: ['ALTA', 'alert'], orange: ['MÉDIA', 'warn'], yellow: ['BAIXA', 'info'] });
+
+/**
+ * Tooltip de um foco (registro adaptado de firmsAdapt + município). A FRP só
+ * aparece quando o ETL a grava (fire_spots ainda não persiste, vem 0).
+ */
+export function fireTooltip(fire, nowMs = Date.now()) {
+  if (!fire) return '';
+  const conf = CONF_PT[confidenceBucket(fire.confidence)];
+  const sat = satelliteShortName(fire.satellite);
+  const satTxt = [fire.sensor, SAT_NOME[sat] ?? sat].filter(Boolean).join(' · ');
+  const acq = fire.acqMs > 0 ? fire.acqMs : null;
+  const ageH = acq ? (nowMs - acq) / 3600_000 : NaN;
+  // Com FRP gravada, o selo é a severidade da legenda; sem ela (fire_spots
+  // ainda não grava) a severidade sairia sempre "baixa": o selo vira recência.
+  const sev = SEV_BADGE[detectionSeverity(fire)];
+  const badge = fire.frp > 0 ? { text: sev[0], tone: sev[1] }
+    : ageH >= 0 && ageH < 6 ? { text: 'ÚLTIMAS 6 H', tone: 'alert' }
+      : ageH >= 0 && ageH < 24 ? { text: 'ÚLTIMAS 24 H', tone: 'warn' } : null;
+  return tipCard({
+    icon: '🔥',
+    title: fire.municipality ? `${fire.municipality}` : 'Foco de calor',
+    subtitle: fire.municipality ? 'Foco de calor (satélite)' : 'Foco de calor (satélite) · município não informado',
+    badge,
+    rows: [
+      ['Detecção', acq ? `${fmtDateTime(acq)} (Brasília)` : ''],
+      ['Intensidade', fire.frp > 0 ? sev[0].toLowerCase() : '', sev[1]],
+      ['Confiança', conf[0], conf[1]],
+      ['Potência radiativa', fire.frp > 0 ? fmtNum(fire.frp, fire.frp >= 10 ? 0 : 1, 'MW') : ''],
+      ['Temperatura de brilho', fire.brightness > 0 ? fmtNum(fire.brightness, 1, 'K') : ''],
+      ['Satélite', satTxt],
+      ['Coordenadas', fmtCoord(fire.lat, fire.lon, 4)],
+    ],
+    source: 'NASA FIRMS · DataGeo PR',
+    updated: acq,
+    now: nowMs,
+  });
 }
 
 let firmsState = { count: 0, sev: { red: 0, orange: 0, yellow: 0 }, info: null };
@@ -878,7 +1051,7 @@ const firms = defineLayer({
     selectFire(ctx, null);
   },
   interactive: ['dg-firms-glow'],
-  tooltip: (p) => fireTooltip(p),
+  tooltip: (p, f) => fireTooltip(lastFires[f?.id] ?? lastFires.find((x) => fireDetectionKey(x) === p.key)),
   // Clique seleciona (card completo) e centraliza no foco (requestWorldFocus do app).
   click: (p, f, ctx) => {
     selectFire(ctx, { geometry: f.geometry, properties: p });
