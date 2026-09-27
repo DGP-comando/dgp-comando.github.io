@@ -9485,3 +9485,57 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
   margin-bottom: 2px;
 }
 #dg-tooltip .vt-dim { color: #64748b; }
+
+/* Cartão único dos tooltips (src/maplibre/tooltipCard.js → tipCard). */
+#dg-tooltip:has(.tt) { padding: 0; max-width: 360px; }
+#dg-tooltip:has(.tt-wide) { max-width: 460px; }
+#dg-tooltip .tt { padding: 9px 11px 8px; min-width: 180px; }
+#dg-tooltip .tt-head { display: flex; align-items: baseline; gap: 6px; }
+#dg-tooltip .tt-icon { flex: none; font-size: 12px; }
+#dg-tooltip .tt-title {
+  color: #22d3ee;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+#dg-tooltip .tt-badge {
+  margin-left: auto;
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 15px;
+  color: #22d3ee;
+  white-space: nowrap;
+}
+#dg-tooltip .tt-sub { color: #94a3b8; font-size: 10px; margin-top: 1px; overflow-wrap: anywhere; }
+#dg-tooltip .tt-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  row-gap: 1px;
+  margin: 6px 0 0;
+}
+#dg-tooltip .tt-rows dt { color: #64748b; white-space: nowrap; }
+#dg-tooltip .tt-rows dd { margin: 0; color: #e2e8f0; overflow-wrap: anywhere; }
+#dg-tooltip .tt-sec { margin-top: 7px; padding-top: 5px; border-top: 1px solid rgba(34, 211, 238, 0.15); }
+#dg-tooltip .tt-sec-title { color: #7dd3fc; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+#dg-tooltip .tt-sec .tt-rows { margin-top: 2px; }
+#dg-tooltip .tt-note { margin-top: 6px; color: #94a3b8; font-style: italic; font-size: 10px; }
+#dg-tooltip .tt-foot {
+  margin-top: 7px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(100, 116, 139, 0.2);
+  color: #475569;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+#dg-tooltip .tt-ok { color: #4ade80; }
+#dg-tooltip .tt-info { color: #38bdf8; }
+#dg-tooltip .tt-warn { color: #fbbf24; }
+#dg-tooltip .tt-alert { color: #f87171; }
+#dg-tooltip .tt-muted { color: #64748b; }
