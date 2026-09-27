@@ -114,11 +114,34 @@ export function createLayerHost(engine) {
     return ids;
   }
 
-  function pickDef(point) {
+  // Todas as camadas interativas sob o ponto, de cima para baixo, uma por
+  // definição. O preenchimento dos municípios (camada-base, `underlay`) fica
+  // ligado quase sempre: sem esta lista ele venceria todo pick e esconderia o
+  // tooltip das camadas embaixo dele (o "drill" do app Cesium).
+  function hitsAt(point) {
     const ids = interactiveIds();
-    if (!ids.length) return null;
-    const [feature] = map.queryRenderedFeatures([point.x, point.y], { layers: ids });
-    return feature ? { feature, def: byInteractiveLayer.get(feature.layer.id) } : null;
+    if (!ids.length) return [];
+    const hits = [];
+    const seen = new Set();
+    for (const feature of map.queryRenderedFeatures([point.x, point.y], { layers: ids })) {
+      const def = byInteractiveLayer.get(feature.layer.id);
+      if (!def || seen.has(def.id)) continue;
+      seen.add(def.id);
+      hits.push({ feature, def });
+    }
+    return hits;
+  }
+
+  /** Quem responde ao hover: a camada mais alta que não é base e tem tooltip; senão a base. */
+  function hoverHit(hits) {
+    return hits.find((h) => !h.def.underlay && h.def.tooltip)
+      ?? hits.find((h) => !h.def.underlay)
+      ?? hits[0]
+      ?? null;
+  }
+
+  function pickDef(point) {
+    return hoverHit(hitsAt(point));
   }
 
   function setHover(next) {
@@ -172,8 +195,20 @@ export function createLayerHost(engine) {
     hovered = null;
   });
   map.on('click', (e) => {
-    const hit = pickDef(e.point);
-    if (hit?.def.click) hit.def.click(hit.feature.properties ?? {}, hit.feature, ctx);
+    const hits = hitsAt(e.point);
+    const top = hits.find((h) => !h.def.underlay && h.def.click);
+    const base = hits.find((h) => h.def.underlay && h.def.click);
+    const fire = (h) => h.def.click(h.feature.properties ?? {}, h.feature, ctx);
+    if (top && !top.def.clickWithUnderlay) {
+      fire(top);
+      return;
+    }
+    // Ponto ou linha sem clique por cima segura o clique; polígonos sem clique
+    // (terras indígenas, assentamentos...) deixam a ficha municipal abrir.
+    const blocked = hits.some((h) => !h.def.underlay && !h.def.click && h.feature.layer.type !== 'fill');
+    if (base && !blocked) fire(base);
+    // Depois da base: o card desta camada sobrepõe a ficha do município.
+    if (top) setTimeout(() => fire(top), 0);
   });
 
   const host = {
