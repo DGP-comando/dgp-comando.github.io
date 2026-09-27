@@ -33,7 +33,11 @@ const VIEWS = [
 ];
 
 const { check, finish } = createReport('qa-tooltips-todas');
-const { browser, page, errors } = await launchQaBrowser({ viewport: { width: 1440, height: 860 } });
+// APIs externas bloqueadas por rede/CORS (Open-Meteo, USGS...) não são erro do app.
+const { browser, page, errors } = await launchQaBrowser({
+  viewport: { width: 1440, height: 860 },
+  ignoreConsole: /Failed to load resource|ERR_|AJAXError|arcgisonline|openstreetmap|openfreemap|elevation-tiles|net::|open-meteo|CORS policy/i,
+});
 
 /** Pixel inteiro (página) sobre uma feição interativa da camada, perto do centro. */
 const pixelOn = (layerId) => page.evaluate((lid) => {
