@@ -156,14 +156,14 @@ function encode(state) {
 
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  // 16 camadas de contexto do GEV (em ordem alfabética) seguidas das 37 do
+  // 16 camadas de contexto do GEV (em ordem alfabética) seguidas das 39 do
   // DataGeo (prefixo datageo-, na ordem em que os tokens foram atribuídos).
   const gev = REGISTERED_LAYER_IDS.filter((id) => !id.startsWith('datageo-'));
   const datageo = REGISTERED_LAYER_IDS.filter((id) => id.startsWith('datageo-'));
   assert.equal(gev.length, 16);
-  assert.equal(datageo.length, 37);
-  assert.equal(REGISTERED_LAYER_IDS.length, 53);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 53);
+  assert.equal(datageo.length, 39);
+  assert.equal(REGISTERED_LAYER_IDS.length, 55);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 55);
   assert.deepEqual(gev, [...gev].sort());
   assert.deepEqual(REGISTERED_LAYER_IDS, [...gev, ...datageo]);
   assert.throws(
