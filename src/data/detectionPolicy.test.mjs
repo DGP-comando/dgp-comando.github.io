@@ -27,6 +27,15 @@ test('side aircraft brackets stay readable without changing zero-opacity intent'
   assert.equal(detectionBracketAlpha('SAT', 0.05), 0.05);
 });
 
+test('the aircraft floor matches AIR case-insensitively and nothing else', () => {
+  for (const type of ['AIR', 'air', 'Air', 'aIr']) {
+    assert.equal(detectionBracketAlpha(type, 0.05), AIRCRAFT_BRACKET_ALPHA_FLOOR, type);
+  }
+  for (const type of ['SAT', 'SEA', 'VEH', 'AIRS', 'AI', '', null, undefined, 0, 42]) {
+    assert.equal(detectionBracketAlpha(type, 0.05), 0.05, String(type));
+  }
+});
+
 test('the bracket floor anchor mirrors the real keyhole default it is calibrated to', () => {
   // detectionPolicy stays Cesium-free, so the anchor is a mirror. If the keyhole
   // default ever moves, this fails rather than silently shifting the shipped

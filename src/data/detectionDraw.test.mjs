@@ -10,6 +10,7 @@ import {
   composeLabel,
   acquireAlpha,
   appendCornerBracket,
+  appendCornerBracketBox,
   resolveTier,
   measureLabelCard,
   measureTrackLabel,
@@ -78,6 +79,22 @@ test('acquireAlpha clamps and defaults safely', () => {
   assert.equal(acquireAlpha(1000, 5000, 200), 1);  // long after
   assert.equal(acquireAlpha(NaN, 5000, 200), 1);   // no timestamp -> visible
   assert.equal(acquireAlpha(1000, 1100, 0), 1);    // no fade -> visible
+});
+
+test('appendCornerBracketBox draws exactly what appendCornerBracket draws', () => {
+  const record = () => {
+    const calls = [];
+    return {
+      calls,
+      moveTo: (x, y) => calls.push(['m', x, y]),
+      lineTo: (x, y) => calls.push(['l', x, y]),
+    };
+  };
+  const direct = record();
+  const boxed = record();
+  appendCornerBracket(direct, 100.25, 80.5, 13.75, 9.5);
+  appendCornerBracketBox(boxed, Float64Array.of(100.25, 80.5, 13.75, 9.5));
+  assert.deepEqual(boxed.calls, direct.calls);
 });
 
 test('appendCornerBracket emits 4 L-shaped corners (4 moveTo + 8 lineTo)', () => {

@@ -1,0 +1,4 @@
+# Working trees in LF on every OS: several unit tests read source files and
+# match multi-line patterns, and scripts/prepare-maplibre-worker.mjs writes
+# public/vendor in LF, which showed up as spurious diffs under autocrlf.
+* text=auto eol=lf

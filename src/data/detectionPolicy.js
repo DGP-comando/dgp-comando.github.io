@@ -78,6 +78,21 @@ export function aircraftBracketAlphaFloor(outsideOpacity) {
 }
 
 /**
+ * Case-insensitive `type === 'AIR'` without allocating an upper-cased copy
+ * (runs per contact per frame).
+ * @param {*} type
+ * @returns {boolean}
+ */
+function isAirType(type) {
+  if (type === 'AIR') return true;
+  const s = typeof type === 'string' ? type : String(type || '');
+  return s.length === 3
+    && (s.charCodeAt(0) | 32) === 97
+    && (s.charCodeAt(1) | 32) === 105
+    && (s.charCodeAt(2) | 32) === 114;
+}
+
+/**
  * Resolve the paint alpha for a detection bracket without altering admission.
  * @param {string} type - Detection object type; only AIR is floored.
  * @param {number} keyholeAlpha - Radial keyhole alpha for this contact.
@@ -87,7 +102,7 @@ export function aircraftBracketAlphaFloor(outsideOpacity) {
  */
 export function detectionBracketAlpha(type, keyholeAlpha, outsideOpacity = AIRCRAFT_BRACKET_FLOOR_ANCHOR) {
   const alpha = Math.max(0, Math.min(1, Number(keyholeAlpha) || 0));
-  if (String(type || '').toUpperCase() !== 'AIR' || alpha <= 0) return alpha;
+  if (alpha <= 0 || !isAirType(type)) return alpha;
   return Math.max(aircraftBracketAlphaFloor(outsideOpacity), alpha);
 }
 

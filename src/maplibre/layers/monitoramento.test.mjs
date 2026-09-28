@@ -69,7 +69,7 @@ test('rios: disco de 9 km, cor por alert_level, estação sem coordenada descart
   assert.equal(features.length, 2);
   const [a, b] = features;
   assert.equal(a.properties.color, '#ffa500');
-  assert.equal(a.properties.label, 'Iguaçu · União da Vitória\n412 cm · ALERT');
+  assert.equal(a.properties.label, 'Iguaçu · União da Vitória\n412 cm · ALERTA');
   assert.equal(b.properties.label, ' · 8\nNORMAL');
   // raio em pixels no zoom 10 ≈ 9000 m / (m/px no zoom 10 na latitude).
   const mpp10 = (40_075_016.686 * Math.cos((-26.23 * Math.PI) / 180)) / (512 * 2 ** 10);
@@ -158,7 +158,7 @@ test('incidentes: 1º município afetado, cor por severidade', () => {
     { id: 9, affected_municipalities: null },
   ]);
   assert.equal(features.length, 2);
-  assert.equal(features[0].properties.label, 'INCIDENTE · HIDRO\nEnchente · ACTIVE');
+  assert.equal(features[0].properties.label, 'INCIDENTE · HIDRO\nEnchente · ATIVO');
   assert.equal(features[0].properties.color, '#ff0000');
   assert.equal(features[1].properties.color, '#ffff00');
   assert.equal(features[1].properties.label, 'INCIDENTE · OUTRO\nY · ');
@@ -432,4 +432,16 @@ test('tooltip AIS: dimensões, calado, ETA e IMO zero omitido', () => {
   assert.equal(row(html, 'Indicativo').value, 'PPXX');
   assert.match(maritimoTooltip({ ...p, navStatus: 'Under way using engine', sog: 12 }), /tt-badge tt-info">NAVEGANDO A MOTOR</);
   assert.match(maritimoTooltip({ ...p, navStatus: 'At anchor' }), /tt-badge tt-muted">FUNDEADO</);
+});
+
+test('riverLabel não duplica o tipo do curso d\'água', async () => {
+  const { riverLabel } = await import('../../data/datageoMonitoramento.js');
+  assert.equal(riverLabel('Tibagi'), 'Rio Tibagi');
+  assert.equal(riverLabel('Rio Tibagi'), 'Rio Tibagi');
+  assert.equal(riverLabel('rio iguaçu'), 'rio iguaçu');
+  assert.equal(riverLabel('Ribeirão Três Bocas'), 'Ribeirão Três Bocas');
+  assert.equal(riverLabel('Córrego Água Verde'), 'Córrego Água Verde');
+  assert.equal(riverLabel('Riozinho'), 'Rio Riozinho');
+  assert.equal(riverLabel(''), null);
+  assert.equal(riverLabel(null), null);
 });

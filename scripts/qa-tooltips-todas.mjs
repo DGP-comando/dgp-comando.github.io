@@ -30,6 +30,7 @@ const VIEWS = [
   { lon: -51.5, lat: -24.7, alt: 2_500_000 }, // Sul do Brasil
   { lon: -49.27, lat: -25.43, alt: 15_000 }, // Curitiba de perto (CAR, estradas)
   { lon: -40, lat: -15, alt: 12_000_000 }, // globo (contexto global)
+  { lon: -130, lat: 45, alt: 9_000_000 }, // Pacífico Norte: terremotos diários (Alasca, Califórnia)
 ];
 
 const { check, finish } = createReport('qa-tooltips-todas');

@@ -235,9 +235,22 @@ function runAllocationProbe(entryCount, profile = 'generic') {
   // top optimization tier even when the parent unit suite is CPU-saturated.
   // With concurrent recompilation, the fixed frame warmup races TurboFan and
   // this worker nondeterministically measures a lower tier instead.
+  //
+  // Fixed, roomy young generation: a chunk's heapUsed delta is allocation
+  // minus whatever a scavenge collected mid-chunk, so with V8's dynamically
+  // sized new space the SAME workload read 30 KB or 715 KB per frame depending
+  // on where the scavenges fell (and on how big the rest of the heap was). At
+  // 128 MB per semi-space no scavenge lands inside a 48-frame chunk, and the
+  // delta is the real allocation.
   const result = spawnSync(
     process.execPath,
-    ['--expose-gc', '--no-concurrent-recompilation', WORKER_PATH],
+    [
+      '--expose-gc',
+      '--no-concurrent-recompilation',
+      '--min-semi-space-size=128',
+      '--max-semi-space-size=128',
+      WORKER_PATH,
+    ],
     {
     encoding: 'utf8',
     timeout: 180_000,

@@ -99,7 +99,11 @@ export function keyholeLabelAlpha(labelX, labelY, width, height) {
 export function keyholeLabelAlphaFromGeometry(labelX, labelY, geometry) {
   if (!geometry || !(geometry.radius > 0) || !Number.isFinite(labelX) || !Number.isFinite(labelY)) return 0;
   const feather = geometry.featherPx;
-  const distance = Math.hypot(labelX - geometry.centerX, labelY - geometry.centerY);
+  // sqrt, not Math.hypot: the hypot builtin allocates, and this runs per
+  // contact per frame in detection.
+  const dx = labelX - geometry.centerX;
+  const dy = labelY - geometry.centerY;
+  const distance = Math.sqrt(dx * dx + dy * dy);
   if (distance <= geometry.radius) return 1;
   if (!(feather > 0) || distance >= geometry.radius + feather) return keyholeOutsideOpacity;
   const progress = clamp((distance - geometry.radius) / feather, 0, 1);
