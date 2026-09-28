@@ -8,7 +8,7 @@ import {
 } from './detectionRenderDemand.js';
 import {
   acquireAlpha,
-  appendCornerBracket,
+  appendCornerBracketBox,
   resolveTier,
   measureTrackLabel,
   nearFarScale,
@@ -221,6 +221,10 @@ const _extraSources = [];
 /** Scratch reaproveitado de posição resolvida e de tela (sem alocação por alvo). */
 const _resolved = { lon: 0, lat: 0, height: 0, x: 0, y: 0, z: 0 };
 const _screen = { x: 0, y: 0 };
+/** Array reaproveitado por `_collectDetectableObjects` a cada quadro. */
+const _collectScratch = [];
+/** Caixa do bracket passada sem encaixotar doubles (appendCornerBracketBox). */
+const _bracketBox = new Float64Array(4);
 /** @type {number} Current mode index into MODE_LABELS */
 let _mode = MODE_OFF;
 /** @type {HTMLCanvasElement|null} Shared host canvas used for QA diagnostics. */
@@ -777,7 +781,10 @@ function _paintDetectionLane(frame) {
  */
 function _collectDetectableObjects() {
   const label = MODE_LABELS[_mode];
-  const objects = [];
+  // Reused every frame (5 000+ pushes): the caller consumes it within the frame.
+  // `length = 0` would drop the backing store and regrow it every frame.
+  const objects = _collectScratch;
+  let count = 0;
   const sources = _mapSources.length || _extraSources.length
     ? _layers.concat(_mapSources, _extraSources)
     : _layers;
@@ -797,7 +804,7 @@ function _collectDetectableObjects() {
       if (items && items.length > 0) {
         for (const item of items) {
           item._layerId = layer.id;
-          objects.push(item);
+          objects[count++] = item;
         }
       }
     } catch {
@@ -805,6 +812,7 @@ function _collectDetectableObjects() {
     }
   }
 
+  if (objects.length !== count) objects.length = count;
   return objects;
 }
 
@@ -899,6 +907,14 @@ function _semanticPriority(obj) {
   return 10;
 }
 
+/** Callout corners in placement-preference order; `right`/`top` place the card. */
+const LABEL_CORNERS = Object.freeze([
+  Object.freeze({ corner: 'NE', right: true, top: true, leadToSide: 'SW' }),
+  Object.freeze({ corner: 'NW', right: false, top: true, leadToSide: 'SE' }),
+  Object.freeze({ corner: 'SE', right: true, top: false, leadToSide: 'NW' }),
+  Object.freeze({ corner: 'SW', right: false, top: false, leadToSide: 'NE' }),
+]);
+
 function _buildLabelPlacements(
   sx,
   sy,
@@ -913,59 +929,35 @@ function _buildLabelPlacements(
   const gapX = 8;
   const gapY = 12;
   const margin = 4;
-  const raw = [
-    {
-      corner: 'NE',
-      cardX: sx + halfW + gapX,
-      cardY: sy - halfH - gapY - card.h,
-      leadFromX: sx + halfW,
-      leadFromY: sy - halfH,
-      leadToSide: 'SW',
-    },
-    {
-      corner: 'NW',
-      cardX: sx - halfW - gapX - card.w,
-      cardY: sy - halfH - gapY - card.h,
-      leadFromX: sx - halfW,
-      leadFromY: sy - halfH,
-      leadToSide: 'SE',
-    },
-    {
-      corner: 'SE',
-      cardX: sx + halfW + gapX,
-      cardY: sy + halfH + gapY,
-      leadFromX: sx + halfW,
-      leadFromY: sy + halfH,
-      leadToSide: 'NW',
-    },
-    {
-      corner: 'SW',
-      cardX: sx - halfW - gapX - card.w,
-      cardY: sy + halfH + gapY,
-      leadFromX: sx - halfW,
-      leadFromY: sy + halfH,
-      leadToSide: 'NE',
-    },
-  ];
-
   const placements = [];
-  for (const placement of raw) {
-    const { cardX, cardY } = placement;
+  // No per-corner scratch objects and no spread: this runs for every live
+  // callout on every frame. Same corners, order, and fields as before; card
+  // and leader-anchor coordinates now snap to whole pixels.
+  for (let c = 0; c < LABEL_CORNERS.length; c++) {
+    const { corner, right, top, leadToSide } = LABEL_CORNERS[c];
+    // Whole pixels, as the world overlay's writePlacement does: crisp text,
+    // and integer fields stay Smis instead of boxing a HeapNumber each.
+    const cardX = Math.round(right ? sx + halfW + gapX : sx - halfW - gapX - card.w);
+    const cardY = Math.round(top ? sy - halfH - gapY - card.h : sy + halfH + gapY);
     if (cardX < margin || cardY < margin || cardX + card.w > width - margin || cardY + card.h > height - margin) {
       continue;
     }
     const cardRect = { x: cardX, y: cardY, w: card.w, h: card.h };
     if (rectIntersectsAny(cardRect, occlusionRects)) continue;
-    const leadToX = placement.leadToSide.endsWith('E') ? cardX + card.w : cardX;
-    const leadToY = placement.leadToSide.startsWith('S') ? cardY + card.h : cardY;
     const centerX = cardX + card.w * 0.5;
     const centerY = cardY + card.h * 0.5;
     const radialAlpha = keyholeLabelAlphaFromGeometry(centerX, centerY, keyhole);
     if (radialAlpha <= 0) continue;
     placements.push({
-      ...placement,
-      leadToX,
-      leadToY,
+      corner,
+      cardX,
+      cardY,
+      leadFromX: Math.round(right ? sx + halfW : sx - halfW),
+      leadFromY: Math.round(top ? sy - halfH : sy + halfH),
+      leadToSide,
+      // The leader lands on the card corner facing the target.
+      leadToX: right ? cardX : cardX + card.w,
+      leadToY: top ? cardY + card.h : cardY,
       centerX,
       centerY,
       keyholeAlpha: radialAlpha,
@@ -1249,8 +1241,14 @@ function _drawOverlay(frame) {
     let halfW;
     let halfH;
     if (obj.type === 'AIR') {
+      // projector.distanceTo, inlined: a double returned from a call that
+      // TurboFan does not inline is boxed, per aircraft per frame.
+      const cam = projector.camera;
+      const ddx = cam.x - _resolved.x;
+      const ddy = cam.y - _resolved.y;
+      const ddz = cam.z - _resolved.z;
       const bscale = nearFarScale(
-        projector.distanceTo(_resolved),
+        Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz),
         BILL_NEAR, BILL_NEAR_SCALE, BILL_FAR, BILL_FAR_SCALE,
       );
       halfW = _clamp((isTracked ? 14 : 9) * bscale, 7, 48);
@@ -1268,7 +1266,11 @@ function _drawOverlay(frame) {
     const keyholeAlpha = keyholeLabelAlphaFromGeometry(sx, sy, keyhole);
     const bracketAlpha = detectionBracketAlpha(obj.type, keyholeAlpha, keyholeOutsideOpacity);
     if (bracketAlpha > 0) {
-      appendCornerBracket(pathFor(bracketPaths, color, bracketAlpha), sx, sy, halfW, halfH);
+      _bracketBox[0] = sx;
+      _bracketBox[1] = sy;
+      _bracketBox[2] = halfW;
+      _bracketBox[3] = halfH;
+      appendCornerBracketBox(pathFor(bracketPaths, color, bracketAlpha), _bracketBox);
       visibleCount++;
       if (obj.type === 'AIR') aircraftBracketSectors[detectionHorizontalSector(sx, width)]++;
       if (bracketAlpha >= 1) bracketOpacityCounts.full++;

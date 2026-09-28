@@ -124,6 +124,18 @@ export function appendCornerBracket(sink, sx, sy, halfW, halfH) {
 }
 
 /**
+ * `appendCornerBracket` with the box read from `[sx, sy, halfW, halfH]`.
+ * Detection's per-contact loop is too large for TurboFan to inline the
+ * bracket call, and every double passed across a non-inlined call is boxed;
+ * a reused Float64Array carries the four numbers without allocating.
+ * @param {{moveTo: Function, lineTo: Function}} sink
+ * @param {Float64Array|number[]} box - [sx, sy, halfW, halfH].
+ */
+export function appendCornerBracketBox(sink, box) {
+  appendCornerBracket(sink, box[0], box[1], box[2], box[3]);
+}
+
+/**
  * Resolves a detectable object's threat tier — the key into a theme's color
  * ramp (civil/military/sea/space/vehicle). A layer-supplied `tier` wins;
  * otherwise it derives from the coarse `type`. Drives per-tier box/card color.
