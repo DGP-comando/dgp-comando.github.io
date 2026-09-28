@@ -83,18 +83,19 @@ const SECTIONS = [
   },
 
   /**
-   * Extensionistas do IDR lotados no município, por formação (SisPont;
-   * sem especialidade no SisPont, o cargo do Portal da Transparência).
+   * Extensionistas do IDR no município: só a contagem por formação. Os nomes
+   * ficam no tooltip do escritório (camada Unidades do IDR).
    */
   function extensionistas({ ext }) {
     if (!ext) return null;
-    const grupos = ext.grupos.map(({ formacao, servidores }) =>
-      `<div><b>${esc(formacao || 'Formação não informada')}</b> <span class="fx-dim">(${fmtN(servidores.length)})</span>: ` +
-      `${servidores.map((s) => esc(s.nome) + (s.formacao_fonte === 'portal' ? '*' : '')).join(', ')}</div>`);
+    const porFormacao = ext.grupos
+      .map(({ formacao, servidores }) => `${esc(formacao || 'Formação não informada')} <b>${fmtN(servidores.length)}</b>`)
+      .join(' · ');
     const hora = ext.geradoEm ? new Date(ext.geradoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '';
-    return section(`Extensionistas · IDR (${fmtN(ext.total)})`,
-      grupos.join('') +
-      `<div class="fx-dim">IDR-SisPont + Portal da Transparência PR (* formação pelo cargo no Portal)${hora ? ` · ${esc(hora)}` : ''}</div>`);
+    return section('Extensionistas · IDR',
+      `<div>Extensionistas no município: <b>${fmtN(ext.total)}</b></div>` +
+      `<div class="fx-sub">${porFormacao}</div>` +
+      `<div class="fx-dim">IDR-SisPont + Portal da Transparência PR · nomes no escritório (camada Unidades do IDR)${hora ? ` · ${esc(hora)}` : ''}</div>`);
   },
 
   /** Adesão ao SUSAF-PR (mapa ADAPAR + lista de SIMs da SEAB). */

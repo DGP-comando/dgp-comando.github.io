@@ -57,6 +57,24 @@ test('tooltip sem o arquivo de servidores avisa em vez de mostrar zero', () => {
   assert.doesNotMatch(html, /servidores<\/span>/);
 });
 
+test('tooltip do escritório (UME) lista os extensionistas do município; regional não', () => {
+  const dados = { servidores: [
+    { nome: 'ANA', municipio: 'Tapira', formacao: 'Zootecnia', extensionista: true },
+    { nome: 'BRUNO', municipio: 'TAPIRA', formacao: 'Engenharia Agronômica', extensionista: true },
+    { nome: 'CAIO', municipio: 'Tapira', formacao: 'Assist. Administrativo', extensionista: false },
+    { nome: 'DORA', municipio: 'Umuarama', formacao: 'Zootecnia', extensionista: true },
+  ] };
+  const ume = { nome: 'Unidade Municipal de Extensão · Tapira', tipo: 'ume', municipio: 'Tapira' };
+  const html = unidadeTooltipHtml(ume, dados);
+  assert.match(html, /2 extensionistas/);
+  assert.match(html, /ANA/);
+  assert.match(html, /BRUNO/);
+  assert.doesNotMatch(html, /CAIO|DORA/);
+  const regional = unidadeTooltipHtml({ ...ume, tipo: 'regional' }, dados);
+  assert.doesNotMatch(regional, /ANA|extensionista/);
+  assert.match(unidadeTooltipHtml(ume, null), /indisponível/);
+});
+
 test('núcleo de fazenda florestal: uso, contrato, área e servidores da unidade florestal', () => {
   const nucleo = { unidade: 'uf-ponta-grossa', nome: 'Fazenda florestal · Núcleo 9', tipo: 'unidade-florestal',
     municipio: 'Ponta Grossa', unidade_nome: 'Unidade Florestal de Ponta Grossa', uso: 'Parceria',
