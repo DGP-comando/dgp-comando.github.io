@@ -6,7 +6,7 @@
 // Os dois arquivos saem do bucket privado (scripts/build_estacoes_idr.py e a
 // Edge Function datageo-servidores do c2).
 
-import { loadServidoresIdr, servidoresDasUnidades } from '../../data/servidoresIdr.js';
+import { extensionistasDoMunicipio, loadServidoresIdr, servidoresDasUnidades } from '../../data/servidoresIdr.js';
 import { dgFetchData } from '../../data/datageoClient.js';
 import { EMPTY_FC, LABEL_PAINT, TEXT_FONT, defineLayer, tipCard, zoomForHeight } from '../kit.js';
 import { makePointsLayer } from './energiaLogistica.js';
@@ -144,21 +144,34 @@ export function unidadeEstilo(p) {
     label: String(p.nome ?? '').split(' · ').pop(), labelMaxDist: grande ? 400_000 : 60_000 };
 }
 
-export function unidadeTooltipHtml(p) {
+/**
+ * Tooltip do escritório. Na unidade municipal (UME) lista os extensionistas
+ * lotados no município (`dados` = servidores-idr.json; null = indisponível).
+ */
+export function unidadeTooltipHtml(p, dados = null) {
+  const ume = p.tipo === 'ume';
+  const ext = ume && dados ? extensionistasDoMunicipio(dados, p.municipio) : null;
+  const todos = (ext?.grupos ?? []).flatMap((g) => g.servidores);
+  const nomes = todos.slice(0, MAX_NOMES).map((s) => [s.nome, s.formacao || 'formação não informada']);
   return tipCard({
     icon: '🏢',
     title: p.nome,
     subtitle: `IDR-Paraná · ${UNIDADE_ROTULO[p.tipo] ?? p.tipo}${p.regional ? ` · Regional ${p.regional}` : ''}`,
+    badge: ume && dados ? { text: `${todos.length} extensionista${todos.length === 1 ? '' : 's'}`, tone: 'info' } : null,
     rows: [['Endereço', p.endereco], ['Telefone', p.telefone], ['E-mail', p.email]],
+    sections: nomes.length ? [{ title: 'Extensionistas (SisPont + Portal da Transparência)', rows: nomes }] : [],
     note: [
+      ume && !dados ? 'Lista de extensionistas indisponível no momento.' : '',
+      todos.length > nomes.length ? `+ ${todos.length - nomes.length} extensionistas.` : '',
       p.aproximado ? 'Localização aproximada (sede do município): o ponto da base não fechava com o endereço.' : '',
       p.no_site === false ? 'Não consta em "Endereços e Contatos" do site do IDR.' : '',
     ].filter(Boolean).join(' '),
-    source: 'IDR-Paraná · Endereços e Contatos (28/09/2026)',
+    source: 'IDR-Paraná · Endereços e Contatos (28/09/2026) · SisPont',
+    wide: nomes.length > 0,
   });
 }
 
-export const unidadesIdrLayer = makePointsLayer({
+const unidadesBase = makePointsLayer({
   id: 'datageo-unidades-idr',
   name: 'Unidades do IDR (endereços)',
   category: 'Limites',
@@ -166,9 +179,26 @@ export const unidadesIdrLayer = makePointsLayer({
   source: 'IDR-Paraná',
   url: '/privado/unidades-idr-pr.geojson',
   estilo: unidadeEstilo,
-  tooltip: unidadeTooltipHtml,
+  tooltip: (p) => unidadeTooltipHtml(p, servidores),
   legend: UNIDADE_LEGENDA,
   labelDists: [400_000, 60_000],
+});
+
+// Os pontos do makePointsLayer + a lista de servidores para o tooltip das UMEs
+// (falha da lista não derruba a camada: o tooltip avisa).
+export const unidadesIdrLayer = defineLayer({
+  ...unidadesBase,
+  async load(ctx) {
+    const [n, dados] = await Promise.all([
+      unidadesBase.load(ctx),
+      loadServidoresIdr().catch((err) => {
+        console.warn('[DataGeo] servidores IDR indisponíveis:', err?.message);
+        return null;
+      }),
+    ]);
+    servidores = dados ?? servidores;
+    return n;
+  },
 });
 
 export default [estacoesIdrLayer, unidadesIdrLayer];

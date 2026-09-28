@@ -71,8 +71,11 @@ try {
     check(`${c.nome}: seção SUSAF (${c.susaf})`, c.susaf.test(sus ?? ''), sus);
     const n = extDe(c.nome);
     const ext = await secao('Extensionistas · IDR');
-    check(`${c.nome}: ${n} extensionistas na ficha`, n ? ext?.includes(`Extensionistas · IDR (${n})`) : ext === null, ext?.slice(0, 160));
-    if (n) check(`${c.nome}: sem RG na ficha`, !/\b\d{2}\.?\d{3}\.?\d{3}-?\d\b/.test(ext));
+    check(`${c.nome}: ${n} extensionistas na ficha`, n ? ext?.includes(`Extensionistas no município: ${n}`) : ext === null, ext?.slice(0, 160));
+    if (n) {
+      const nomes = SERV.filter((s) => s.extensionista && norm(s.municipio) === norm(c.nome)).map((s) => s.nome);
+      check(`${c.nome}: ficha só com contagem (sem nomes)`, !nomes.some((nm) => ext.includes(nm)));
+    }
     if (shot && c.nome === 'Umuarama') await (await page.$('#datageo-ficha')).screenshot({ path: shot });
   }
 
@@ -101,6 +104,25 @@ try {
   await waitMapIdle(page);
   const pts = await renderedFeatures(page, 'dg-unidades-idr-pt');
   check('unidades: pontos renderizados (447 no arquivo)', pts.count >= 440, pts.count);
+
+  // Escritório de Umuarama: tooltip com os extensionistas do município.
+  await setCamera(page, { lon: -53.32, lat: -23.77, alt: 30_000, heading: 0, pitch: -90 });
+  await waitMapIdle(page);
+  const u = await interactiveFeature(page, 'datageo-unidades-idr');
+  const alvo = await page.evaluate(() => {
+    const { engine } = window.__godsEyeView;
+    const f = engine.map.queryRenderedFeatures({ layers: ['dg-unidades-idr-pt'] })
+      .find((x) => x.properties.__label === 'Umuarama' && x.properties.__size === 6);
+    return f ? f.geometry.coordinates : null;
+  });
+  check('unidades: escritório de Umuarama renderizado', alvo || u, alvo);
+  if (alvo) {
+    const n = extDe('Umuarama');
+    const tip = await hoverTooltip(page, alvo[0], alvo[1], /extensionista/);
+    const umNome = SERV.find((s) => s.extensionista && norm(s.municipio) === 'UMUARAMA')?.nome;
+    check(`unidades: tooltip do escritório com ${n} extensionistas e nomes`,
+      tip.includes(`${n} extensionistas`) && tip.includes(umNome), tip.slice(0, 220));
+  }
   check('sem erros de página', errors.length === 0, errors.slice(0, 3));
 } catch (err) {
   check(`execução: ${err.message}`, false);
