@@ -149,7 +149,7 @@ export function buildRios(rows) {
       r0: metersToPixelsAtZoom0(RIVER_RADIUS_M, lat),
       label:
         `${row.river_name ?? ''} · ${row.station_name ?? row.station_code}` +
-        `\n${cm !== null && Number.isFinite(cm) ? `${cm.toFixed(0)} cm · ` : ''}${level.toUpperCase()}`,
+        `\n${cm !== null && Number.isFinite(cm) ? `${cm.toFixed(0)} cm · ` : ''}${RIVER_SITUACAO[level]?.text ?? level.toUpperCase()}`,
       alertLevel: level,
       levelCm: cm,
       municipality: row.municipality,
@@ -386,7 +386,7 @@ export function buildIncidentes(rows) {
     const color = INCIDENT_SEVERITY_COLORS[row.severity ?? 'medium'] ?? C.YELLOW;
     features.push(feature(`datageo-incidentes:${row.id}`, anchor.lon, anchor.lat, {
       ...pointStyle(color, 0.95, 14, C.WHITE, 1, 2),
-      label: `INCIDENTE · ${(row.type ?? 'outro').toUpperCase()}\n${row.title ?? ''} · ${(row.status ?? '').toUpperCase()}`,
+      label: `INCIDENTE · ${(row.type ?? 'outro').toUpperCase()}\n${row.title ?? ''} · ${(INCIDENTE_STATUS[row.status] ?? row.status ?? '').toUpperCase()}`,
       severity: row.severity,
       status: row.status,
       type: row.type,
@@ -621,13 +621,20 @@ export const RIVER_SITUACAO = Object.freeze({
   emergency: { text: 'EMERGÊNCIA', tone: 'alert' },
 });
 
+/** "Tibagi" → "Rio Tibagi"; nomes que já trazem o tipo ("Rio Tibagi", "Ribeirão X") ficam como estão. */
+export function riverLabel(name) {
+  const n = String(name ?? '').trim();
+  if (!n) return null;
+  return /^(rio|ribeir[aã]o|arroio|c[oó]rrego|riacho|lago|represa|lagoa)(\s|$)/i.test(n) ? n : `Rio ${n}`;
+}
+
 export function riosTooltip(p) {
   const sit = RIVER_SITUACAO[p.alertLevel] ?? (p.alertLevel ? { text: up(p.alertLevel), tone: 'muted' } : null);
   const cm = blank(p.levelCm) ? NaN : Number(p.levelCm);
   return tipCard({
     icon: '🌊',
     title: p.stationName || `Estação ${p.stationCode ?? ''}`.trim(),
-    subtitle: [p.riverName ? `Rio ${p.riverName}` : null, p.municipality].filter(Boolean).join(' · '),
+    subtitle: [riverLabel(p.riverName), p.municipality].filter(Boolean).join(' · '),
     badge: sit,
     rows: [
       ['Nível', Number.isFinite(cm) ? `${fmtInt(cm, 'cm')} (${fmtNum(cm / 100, 2, 'm')})` : '', sit && sit.tone !== 'ok' ? sit.tone : undefined],
@@ -850,8 +857,9 @@ export const INCIDENTE_SEVERIDADE = Object.freeze({
   critical: { text: 'CRÍTICA', tone: 'alert' },
 });
 const INCIDENTE_STATUS = {
-  open: 'Aberto', new: 'Novo', active: 'Ativo', investigating: 'Em investigação', monitoring: 'Em monitoramento',
+  detected: 'Detectado', open: 'Aberto', new: 'Novo', active: 'Ativo', investigating: 'Em investigação', monitoring: 'Em monitoramento',
   responding: 'Em resposta', in_progress: 'Em andamento', contained: 'Contido', mitigated: 'Mitigado', escalated: 'Escalado',
+  resolved: 'Resolvido', closed: 'Encerrado',
 };
 const OODA = { observe: 'Observar', orient: 'Orientar', decide: 'Decidir', act: 'Agir' };
 
