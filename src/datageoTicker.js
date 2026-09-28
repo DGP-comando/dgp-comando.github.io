@@ -5,6 +5,11 @@
 // marcador: urgent vermelho, important ambar, normal ciano.
 // Fase 2 da fusao (PLANO_FUSAO.md §3): "ticker de noticias" nao e camada
 // espacial; vive no chrome do HUD.
+//
+// Cada manchete com URL http(s) e um link para a pagina fonte (nova aba).
+// A faixa continua sem capturar o mouse (o mapa embaixo segue clicavel);
+// so os links recebem ponteiro, e a rolagem pausa no hover/foco para dar
+// tempo de clicar.
 
 import { fetchNews } from './data/datageoClient.js';
 import { startPollLoop } from './data/pollPolicy.js';
@@ -59,7 +64,20 @@ function injectStyles() {
       padding-left: 100%;
       animation: datageo-ticker-scroll var(--ticker-duration, 90s) linear infinite;
     }
-    #datageo-ticker .ticker-item { margin-right: 42px; }
+    #datageo-ticker .ticker-item { margin-right: 42px; color: inherit; text-decoration: none; }
+    #datageo-ticker a.ticker-item { pointer-events: auto; cursor: pointer; }
+    #datageo-ticker a.ticker-item:hover .ticker-title,
+    #datageo-ticker a.ticker-item:focus-visible .ticker-title { color: #f8fafc; text-decoration: underline; }
+    #datageo-ticker a.ticker-item:focus-visible { outline: 1px solid #22d3ee; outline-offset: 2px; }
+    /* O dock inferior (locais · voz · estilos) nasceu antes da faixa e
+       descia sobre ela, cobrindo manchetes no centro: sobe a altura da faixa.
+       So em telas largas; no celular a pilha inferior ja e apertada e subir
+       o dock cobriria Briefing/Vigilancia. */
+    @media (min-width: 700px) {
+      body:has(#datageo-ticker) #command-dock { bottom: calc(26px + 2vh); }
+    }
+    #datageo-ticker .ticker-track:hover .ticker-scroll,
+    #datageo-ticker .ticker-track:focus-within .ticker-scroll { animation-play-state: paused; }
     #datageo-ticker .ticker-dot { margin-right: 6px; }
     #datageo-ticker .ticker-source { color: #64748b; margin-left: 6px; }
     @keyframes datageo-ticker-scroll {
@@ -70,18 +88,49 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
+/**
+ * Link da manchete para a pagina fonte, ou null se a URL nao for http(s)
+ * (javascript:, data:, relativa, invalida). A URL vem do banco, preenchida
+ * por scrapers: nunca vai para o href sem passar por aqui.
+ * @param {{url?: string, source?: string}|null} item
+ * @returns {{href: string, title: string}|null}
+ */
+export function newsLink(item) {
+  if (typeof item?.url !== 'string') return null;
+  let parsed;
+  try {
+    parsed = new URL(item.url.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  const source = typeof item.source === 'string' ? item.source.trim() : '';
+  return {
+    href: parsed.href,
+    title: source ? `Abrir a notícia em ${source} (nova aba)` : 'Abrir a notícia na página fonte (nova aba)',
+  };
+}
+
 function render(container, items) {
   const track = container.querySelector('.ticker-scroll');
   if (!track) return;
   track.innerHTML = '';
   for (const item of items) {
-    const span = document.createElement('span');
+    const link = newsLink(item);
+    const span = document.createElement(link ? 'a' : 'span');
     span.className = 'ticker-item';
+    if (link) {
+      span.href = link.href;
+      span.target = '_blank';
+      span.rel = 'noopener noreferrer';
+      span.title = link.title;
+    }
     const dot = document.createElement('span');
     dot.className = 'ticker-dot';
     dot.textContent = '●';
     dot.style.color = URGENCY_COLORS[item.urgency ?? 'normal'] ?? URGENCY_COLORS.normal;
     const text = document.createElement('span');
+    text.className = 'ticker-title';
     text.textContent = item.title ?? '';
     const source = document.createElement('span');
     source.className = 'ticker-source';
