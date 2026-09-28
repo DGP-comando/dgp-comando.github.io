@@ -78,19 +78,19 @@ try {
 
   await page.evaluate(async () => (await import('/src/datageoFicha.js')).closeFicha());
 
-  // Estações: 20 áreas renderizadas; ponto compartilhado de Ponta Grossa
-  // (polo + unidade florestal) lista os servidores das duas unidades.
+  // Estações: 20 áreas + 13 núcleos das fazendas florestais; o ponto do polo
+  // de Ponta Grossa lista os servidores do polo.
   await setLayer(page, 'datageo-estacoes-idr', true);
   await setCamera(page, { lon: -51.4, lat: -24.6, alt: 900_000, heading: 0, pitch: -90 });
   await waitMapIdle(page);
   const areas = await renderedFeatures(page, 'dg-estacoes-idr-fill');
-  check('estações: áreas renderizadas', areas.count >= 20, areas);
+  check('estações: áreas + núcleos florestais renderizados', areas.count >= 33, areas);
   await setCamera(page, { lon: -50.0, lat: -25.14, alt: 40_000, heading: 0, pitch: -90 });
   await waitMapIdle(page);
-  const f = await interactiveFeature(page, 'datageo-estacoes-idr', { unidade: 'polo-ponta-grossa,uf-ponta-grossa' });
-  check('estações: ponto de Ponta Grossa renderizado', f);
+  const f = await interactiveFeature(page, 'datageo-estacoes-idr', { unidade: 'polo-ponta-grossa' });
+  check('estações: ponto do polo de Ponta Grossa renderizado', f);
   if (f) {
-    const esperado = SERV.filter((s) => ['polo-ponta-grossa', 'uf-ponta-grossa'].includes(s.unidade)).length;
+    const esperado = SERV.filter((s) => s.unidade === 'polo-ponta-grossa').length;
     const tip = await hoverTooltip(page, f.lon, f.lat, /servidor/);
     check(`estações: tooltip com ${esperado} servidores`, tip.includes(`${esperado} servidores`), tip.slice(0, 200));
   }

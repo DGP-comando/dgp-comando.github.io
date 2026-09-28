@@ -13,11 +13,14 @@ from pathlib import Path
 SUPABASE_URL = os.environ.get('DATAGEO_SUPABASE_URL', 'https://fialxjcsgywvvuxjxcly.supabase.co')
 PASTA = Path(__file__).resolve().parents[1] / 'data' / 'privado'
 BUCKET = 'datageo-privado'
+# Gravados pelas Edge Functions do c2 (de hora em hora): uma cópia local
+# (ex.: gerada para QA) nunca sobrescreve o arquivo vivo.
+DO_SERVIDOR = {'servidores-idr.json'}
 
 
 def main():
     key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or sys.exit('SUPABASE_SERVICE_ROLE_KEY ausente')
-    arquivos = sorted(p for p in PASTA.iterdir() if p.is_file())
+    arquivos = sorted(p for p in PASTA.iterdir() if p.is_file() and p.name not in DO_SERVIDOR)
     if not arquivos:
         sys.exit(f'nada em {PASTA}')
     for p in arquivos:

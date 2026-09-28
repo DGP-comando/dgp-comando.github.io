@@ -57,6 +57,20 @@ test('tooltip sem o arquivo de servidores avisa em vez de mostrar zero', () => {
   assert.doesNotMatch(html, /servidores<\/span>/);
 });
 
+test('núcleo de fazenda florestal: uso, contrato, área e servidores da unidade florestal', () => {
+  const nucleo = { unidade: 'uf-ponta-grossa', nome: 'Fazenda florestal · Núcleo 9', tipo: 'unidade-florestal',
+    municipio: 'Ponta Grossa', unidade_nome: 'Unidade Florestal de Ponta Grossa', uso: 'Parceria',
+    contrato: '025/2012', area_ha: 2168, aproximado: false };
+  const html = estacaoTooltipHtml(nucleo, DADOS);
+  assert.match(html, /Unidade Florestal de Ponta Grossa · Ponta Grossa/);
+  assert.match(html, /025\/2012/);
+  assert.match(html, /2\.168 ha/);
+  assert.match(html, /BELTRANA/);
+  const orfao = estacaoTooltipHtml({ ...nucleo, unidade: '', unidade_nome: '', municipio: 'Campo Largo' }, DADOS);
+  assert.match(orfao, /não vinculados/);
+  assert.doesNotMatch(orfao, /servidores<\/span>|BELTRANA/);
+});
+
 test('camada: arquivo privado e hover nos polígonos e pontos', () => {
   assert.deepEqual([...estacoesIdrLayer.interactive], ['dg-estacoes-idr-fill', 'dg-estacoes-idr-pt']);
 });

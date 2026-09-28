@@ -5,8 +5,13 @@ florestais de pesquisa do IDR-Paraná.
 - Estações: polígonos dos KML de H:/IDR-PARANA/02-PESQUISA/MAPAS ESTAÇÕES IDR/
   KML ESTAÇÕES/KML (um arquivo por área; áreas com a mesma coordenação levam
   a mesma chave `unidade`).
-- Polos de pesquisa e unidades florestais: sem polígono nos KML; ponto na
-  sede do município (representative_point do limite IBGE), `aproximado`.
+- Unidades florestais: os 13 núcleos das fazendas florestais (camada
+  "Núcleos 2024" do GT Fazendas Florestais). Cada núcleo vai para a unidade
+  florestal do município onde tem mais área; sem unidade florestal nesse
+  município (núcleo 8, Campo Largo), `unidade` fica vazia. Contratante fora
+  (há pessoa física); ficam uso, contrato e área.
+- Polos de pesquisa: sem polígono; ponto na sede do município
+  (representative_point do limite IBGE), `aproximado`.
 
 A chave `unidade` é a mesma que a Edge Function datageo-servidores (c2-parana)
 grava em cada servidor: o tooltip da camada lista os servidores por ela.
@@ -23,6 +28,15 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 KML_DIR = Path('H:/IDR-PARANA/02-PESQUISA/MAPAS ESTAÇÕES IDR/KML ESTAÇÕES/KML')
+NUCLEOS = Path('H:/IDR-PARANA/CULTIVOS FLORESTAIS/01-GT FAZENDAS FLORESTAIS/00-Planejamento/00-Geo/2024/Núcleos.gpkg')
+NUCLEOS_CAMADA = 'Núcleos 2024'
+# município com mais área do núcleo -> unidade florestal do SisPont
+UF_DO_MUNICIPIO = {
+    'Castro': ('uf-castro', 'Unidade Florestal de Castro'),
+    'Cerro Azul': ('uf-cerro-azul', 'Unidade Florestal de Cerro Azul'),
+    'Doutor Ulysses': ('uf-doutor-ulysses', 'Unidade Florestal Doutor Ulysses'),
+    'Ponta Grossa': ('uf-ponta-grossa', 'Unidade Florestal de Ponta Grossa'),
+}
 MUNICIPIOS = ROOT / 'public' / 'data' / 'municipios-pr.geojson'
 OUT = ROOT / 'data' / 'privado' / 'estacoes-idr-pr.geojson'
 
@@ -60,10 +74,6 @@ PONTOS = {
     'polo-pato-branco': ('Polo de Pesquisa Pato Branco', 'polo', 'Pato Branco'),
     'polo-guarapuava': ('Polo de Pesquisa Guarapuava', 'polo', 'Guarapuava'),
     'polo-irati': ('Polo de Pesquisa Irati', 'polo', 'Irati'),
-    'uf-castro': ('Unidade Florestal de Castro', 'unidade-florestal', 'Castro'),
-    'uf-cerro-azul': ('Unidade Florestal de Cerro Azul', 'unidade-florestal', 'Cerro Azul'),
-    'uf-doutor-ulysses': ('Unidade Florestal Doutor Ulysses', 'unidade-florestal', 'Doutor Ulysses'),
-    'uf-ponta-grossa': ('Unidade Florestal de Ponta Grossa', 'unidade-florestal', 'Ponta Grossa'),
 }
 
 
@@ -84,29 +94,46 @@ def estacoes() -> gpd.GeoDataFrame:
     return gpd.GeoDataFrame(partes, crs=4326)
 
 
-def pontos() -> gpd.GeoDataFrame:
-    """Um ponto por município sede; unidades no mesmo município dividem o ponto
-    (`unidade` e `nome` separados por vírgula / ' · ') para o hover achar todas."""
-    mun = gpd.read_file(MUNICIPIOS).to_crs(31982)  # representative_point em métrico
+def nucleos(mun: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    g = gpd.read_file(NUCLEOS, layer=NUCLEOS_CAMADA).to_crs(31982)
+    if len(g) != 13 or not g.geometry.is_valid.all():
+        raise SystemExit(f'{NUCLEOS.name}: esperado 13 núcleos válidos, veio {len(g)}')
+    linhas = []
+    for _, r in g.sort_values('Núcleo').iterrows():
+        area = mun.geometry.intersection(r.geometry).area
+        municipio = mun['NM_MUN'].iloc[int(area.values.argmax())]
+        unidade, nome_uf = UF_DO_MUNICIPIO.get(municipio, ('', ''))
+        texto = lambda v: '' if pd.isna(v) else str(v).strip()  # noqa: E731
+        linhas.append({
+            'unidade': unidade,
+            'nome': f'Fazenda florestal · Núcleo {int(r["Núcleo"])}',
+            'tipo': 'unidade-florestal',
+            'municipio': municipio,
+            'aproximado': False,
+            'unidade_nome': nome_uf,
+            'uso': texto(r['Tipo']),
+            'contrato': texto(r['Contrato']),
+            'area_ha': round(float(r.geometry.area) / 1e4),
+            'geometry': r.geometry.simplify(10),  # 10 m: basta para o mapa, derruba o arquivo
+        })
+    return gpd.GeoDataFrame(linhas, crs=31982).to_crs(4326)
+
+
+def pontos(mun: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     sede = dict(zip(mun['NM_MUN'], mun.geometry.representative_point().to_crs(4326)))
-    por_mun: dict[str, list] = {}
+    linhas = []
     for unidade, (nome, tipo, municipio) in PONTOS.items():
         if municipio not in sede:
             raise SystemExit(f'{unidade}: município {municipio!r} não está em {MUNICIPIOS.name}')
-        por_mun.setdefault(municipio, []).append((unidade, nome, tipo))
-    linhas = [{
-        'unidade': ','.join(u for u, _, _ in itens),
-        'nome': ' · '.join(n for _, n, _ in itens),
-        'tipo': ','.join(sorted({t for _, _, t in itens})),
-        'municipio': municipio,
-        'aproximado': True,
-        'geometry': sede[municipio],
-    } for municipio, itens in por_mun.items()]
+        linhas.append({'unidade': unidade, 'nome': nome, 'tipo': tipo, 'municipio': municipio,
+                       'aproximado': True, 'geometry': sede[municipio]})
     return gpd.GeoDataFrame(linhas, crs=4326)
 
 
 def main():
-    gdf = gpd.GeoDataFrame(pd.concat([estacoes(), pontos()], ignore_index=True), crs=4326)
+    mun = gpd.read_file(MUNICIPIOS).to_crs(31982)  # áreas e representative_point em métrico
+    partes = [estacoes(), nucleos(mun), pontos(mun)]
+    gdf = gpd.GeoDataFrame(pd.concat(partes, ignore_index=True), crs=4326)
     gdf['geometry'] = gdf.geometry.force_2d().set_precision(1e-6)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(json.loads(gdf.to_json(drop_id=True)), ensure_ascii=False), encoding='utf-8')

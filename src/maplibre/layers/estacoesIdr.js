@@ -29,15 +29,19 @@ export function estacaoTooltipHtml(p, dados) {
   const nomes = (lista ?? []).slice(0, MAX_NOMES)
     .map((s) => [s.nome, s.formacao || 'formação não informada']);
   const resto = (lista?.length ?? 0) - nomes.length;
+  const semUnidade = !p.unidade;
+  const fmtHa = (v) => (Number(v) > 0 ? `${Number(v).toLocaleString('pt-BR')} ha` : '');
   return tipCard({
-    icon: '🔬',
+    icon: p.tipo === 'unidade-florestal' ? '🌲' : '🔬',
     title: p.nome,
-    subtitle: `IDR-Paraná · ${tipos.join(' · ')} · ${p.municipio}`,
-    badge: lista ? { text: `${lista.length} servidor${lista.length === 1 ? '' : 'es'}`, tone: 'info' } : null,
+    subtitle: `IDR-Paraná · ${p.unidade_nome || tipos.join(' · ')} · ${p.municipio}`,
+    badge: lista && !semUnidade ? { text: `${lista.length} servidor${lista.length === 1 ? '' : 'es'}`, tone: 'info' } : null,
+    rows: [['Uso', p.uso], ['Contrato', p.contrato], ['Área', fmtHa(p.area_ha)]],
     sections: nomes.length ? [{ title: 'Servidores (SisPont)', rows: nomes }] : [],
     note: [
       !lista ? 'Lista de servidores indisponível no momento.' : '',
-      lista && !lista.length ? 'Nenhum servidor lotado nesta unidade no SisPont.' : '',
+      semUnidade ? 'Sem unidade florestal do SisPont neste município: servidores não vinculados.' : '',
+      lista && !semUnidade && !lista.length ? 'Nenhum servidor lotado nesta unidade no SisPont.' : '',
       resto > 0 ? `+ ${resto} servidores.` : '',
       p.aproximado ? 'Localização aproximada: sede do município.' : '',
     ].filter(Boolean).join(' '),
