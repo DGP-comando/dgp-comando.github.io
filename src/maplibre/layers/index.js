@@ -5,6 +5,7 @@
 
 import { municipiosLayer } from './municipios.js';
 import territorios from './territorios.js';
+import estacoesIdr from './estacoesIdr.js';
 import monitoramento from './monitoramento.js';
 import transporte from './transporte.js';
 import energiaLogistica from './energiaLogistica.js';
@@ -15,7 +16,7 @@ import contextoGev from './contextoGev.js';
 export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-ucs-federais',
-  'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-associacoes',
+  'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-estacoes-idr', 'datageo-associacoes',
   'datageo-car',
   'datageo-clima', 'datageo-rios', 'datageo-cemaden', 'datageo-irtc', 'datageo-dengue', 'datageo-ar',
   'datageo-anomalias', 'datageo-incidentes', 'datageo-infohidro', 'datageo-maritimo',
@@ -31,6 +32,7 @@ export const LAYER_ORDER = [
 const all = [
   municipiosLayer,
   ...territorios,
+  ...estacoesIdr,
   ...monitoramento,
   ...transporte,
   ...energiaLogistica,
