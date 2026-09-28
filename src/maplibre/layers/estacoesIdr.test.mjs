@@ -1,6 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { estacaoTooltipHtml, estacoesIdrLayer } from './estacoesIdr.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { estacaoTooltipHtml, estacoesIdrLayer, unidadeEstilo, unidadeTooltipHtml } from './estacoesIdr.js';
+
+// data/privado/ fica fora do git: o teste com dado real só roda onde o arquivo existe.
+const UNIDADES = new URL('../../../data/privado/unidades-idr-pr.geojson', import.meta.url);
+
+test('unidades reais: todo ponto tem estilo e rótulo; tetos de rótulo declarados', { skip: !existsSync(UNIDADES) }, () => {
+  const feats = JSON.parse(readFileSync(UNIDADES, 'utf8')).features;
+  assert.ok(feats.length > 400);
+  for (const f of feats) {
+    const s = unidadeEstilo(f.properties);
+    assert.ok(s, f.properties.nome);
+    assert.ok(s.label);
+    assert.ok([400_000, 60_000].includes(s.labelMaxDist));
+  }
+});
+
+test('tooltip da unidade: contato e aviso de posição aproximada', () => {
+  const html = unidadeTooltipHtml({ nome: 'Unidade Municipal de Extensão · Tapira', tipo: 'ume', regional: 'Umuarama',
+    endereco: 'Rua X, 1', telefone: '(44) 3000-0000', email: 'tapira@idr.pr.gov.br', aproximado: true, no_site: true });
+  assert.match(html, /tapira@idr\.pr\.gov\.br/);
+  assert.match(html, /Localização aproximada/);
+  assert.doesNotMatch(html, /Não consta/);
+});
 
 const DADOS = {
   servidores: [

@@ -16,7 +16,7 @@ import contextoGev from './contextoGev.js';
 export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-ucs-federais',
-  'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-estacoes-idr', 'datageo-associacoes',
+  'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-estacoes-idr', 'datageo-unidades-idr','datageo-associacoes',
   'datageo-car',
   'datageo-clima', 'datageo-rios', 'datageo-cemaden', 'datageo-irtc', 'datageo-dengue', 'datageo-ar',
   'datageo-anomalias', 'datageo-incidentes', 'datageo-infohidro', 'datageo-maritimo',

@@ -9,6 +9,7 @@
 import { loadServidoresIdr, servidoresDasUnidades } from '../../data/servidoresIdr.js';
 import { dgFetchData } from '../../data/datageoClient.js';
 import { EMPTY_FC, LABEL_PAINT, TEXT_FONT, defineLayer, tipCard, zoomForHeight } from '../kit.js';
+import { makePointsLayer } from './energiaLogistica.js';
 
 const URL = '/privado/estacoes-idr-pr.geojson';
 const COR = '#facc15';
@@ -115,4 +116,55 @@ export const estacoesIdrLayer = defineLayer({
   tooltip: (p) => estacaoTooltipHtml(p, servidores),
 });
 
-export default [estacoesIdrLayer];
+// ------------------------------------------------ unidades (endereços)
+//
+// 447 unidades (UMEs, regionais, estações, polos, sede) com endereço do site
+// do IDR (scripts/build_unidades_idr.py). Ponto que não fechava com o
+// município foi para a sede municipal e vem marcado `aproximado`.
+
+export const UNIDADE_LEGENDA = Object.freeze([
+  { grupo: 'ume', label: 'Unidade municipal', color: '#38bdf8' },
+  { grupo: 'regional', label: 'Unidade regional', color: '#f97316' },
+  { grupo: 'pesquisa', label: 'Estação / polo de pesquisa', color: COR },
+  { grupo: 'sede', label: 'Sede', color: '#f43f5e' },
+]);
+const UNIDADE_COR = Object.fromEntries(UNIDADE_LEGENDA.map((g) => [g.grupo, g.color]));
+const UNIDADE_ROTULO = { ume: 'Unidade municipal de extensão', regional: 'Unidade regional de extensão',
+  estacao: 'Estação de pesquisa', polo: 'Polo de pesquisa', sede: 'Sede' };
+
+export function unidadeEstilo(p) {
+  const grupo = p.tipo === 'estacao' || p.tipo === 'polo' ? 'pesquisa' : p.tipo;
+  if (!UNIDADE_COR[grupo]) return null;
+  const grande = grupo !== 'ume';
+  return { grupo, size: grande ? 9 : 6, color: UNIDADE_COR[grupo], alpha: 0.95,
+    label: String(p.nome ?? '').split(' · ').pop(), labelMaxDist: grande ? 400_000 : 60_000 };
+}
+
+export function unidadeTooltipHtml(p) {
+  return tipCard({
+    icon: '🏢',
+    title: p.nome,
+    subtitle: `IDR-Paraná · ${UNIDADE_ROTULO[p.tipo] ?? p.tipo}${p.regional ? ` · Regional ${p.regional}` : ''}`,
+    rows: [['Endereço', p.endereco], ['Telefone', p.telefone], ['E-mail', p.email]],
+    note: [
+      p.aproximado ? 'Localização aproximada (sede do município): o ponto da base não fechava com o endereço.' : '',
+      p.no_site === false ? 'Não consta em "Endereços e Contatos" do site do IDR.' : '',
+    ].filter(Boolean).join(' '),
+    source: 'IDR-Paraná · Endereços e Contatos (28/09/2026)',
+  });
+}
+
+export const unidadesIdrLayer = makePointsLayer({
+  id: 'datageo-unidades-idr',
+  name: 'Unidades do IDR (endereços)',
+  category: 'Limites',
+  icon: '🏢',
+  source: 'IDR-Paraná',
+  url: '/privado/unidades-idr-pr.geojson',
+  estilo: unidadeEstilo,
+  tooltip: unidadeTooltipHtml,
+  legend: UNIDADE_LEGENDA,
+  labelDists: [400_000, 60_000],
+});
+
+export default [estacoesIdrLayer, unidadesIdrLayer];
