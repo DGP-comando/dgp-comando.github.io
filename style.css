@@ -4421,7 +4421,9 @@ body.cockpit-mode #intel-hud .hud-right-edge { right: 22px; }
 }
 
 #data-panel {
-  --panel-expanded-width: 280px;
+  /* 340: a lista pede ~273 px (nome + contagem + selo DESLIGADA); com 280 o
+     #data-toggles ficava com 236 e ganhava rolagem horizontal. Cabe na pilha (360). */
+  --panel-expanded-width: 340px;
   position: fixed;
   top: calc(var(--left-stack-top) + var(--left-stack-gap));
   left: var(--left-stack-x);
