@@ -17,6 +17,7 @@ import { fetchMunicipioFicha } from './data/datageoClient.js';
 import { getClimaMunicipio } from './data/climaHistorico.js';
 import { getCarAgregado, getCarMunicipio } from './data/carMunicipios.js';
 import { getIndicadores } from './data/indicadoresMunicipais.js';
+import { getModulosFiscais } from './data/modulosFiscais.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -123,6 +124,28 @@ const SECTIONS = [
       }
     }
     return rows.length ? section('Economia agropecuária · SEAB/DERAL', rows.join('')) : null;
+  },
+
+  /**
+   * Modulo fiscal do municipio (INCRA), logo antes do CAR: e a regua das
+   * classes "0-4 MF", "4-10 MF"... Sem ele o operador nao sabe quantos
+   * hectares cada classe significa ali. Na ficha regional, a faixa.
+   */
+  function moduloFiscal({ mod }) {
+    if (!mod) return null;
+    const ha = (v) => `${fmtN(v, Number.isInteger(v) ? 0 : 1)} ha`;
+    if (mod.n > 1) {
+      const faixa = mod.mfMin === mod.mfMax ? `<b>${ha(mod.mfMin)}</b> em todos` : `de <b>${ha(mod.mfMin)}</b> a <b>${ha(mod.mfMax)}</b>`;
+      return section('Módulo fiscal · INCRA', `<div>1 módulo fiscal: ${faixa} nos ${fmtN(mod.n)} municípios</div>`);
+    }
+    return section(
+      'Módulo fiscal · INCRA',
+      `<div>1 módulo fiscal = <b>${ha(mod.mf)}</b></div>` +
+      `<div class="fx-sub">Pequena propriedade até <b>${ha(mod.pequenaAteHa)}</b> (4 MF) · ` +
+        `média até <b>${ha(mod.mediaAteHa)}</b> (15 MF)</div>` +
+      `<div class="fx-dim">Módulo rural (exploração indefinida): ${ha(mod.mei)} · ` +
+        `fração mínima de parcelamento: ${ha(mod.fmp)}</div>`,
+    );
   },
 
   /**
@@ -547,7 +570,7 @@ function ensurePanel() {
     <button class="fx-watch" type="button" aria-pressed="false" hidden>VIGIAR</button>
     <div class="fx-header"><div class="fx-nome"></div><div class="fx-meta"></div></div>
     <div class="fx-body"></div>
-    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · SICAR/SFB · DataGeo PR</div>
+    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · INCRA · SICAR/SFB · DataGeo PR</div>
   `;
   document.body.appendChild(_panel);
   _panel.querySelector('.fx-close').addEventListener('click', closeFicha);
@@ -668,17 +691,18 @@ export async function openFicha({ ibge, nome, info }) {
   panel.querySelector('.fx-meta').textContent =
     `IBGE ${ibge}` + (info?.prefeito ? ` · Prefeito: ${info.prefeito} (${info.partido})` : '');
 
-  // Clima historico, estrutura fundiaria e indicadores sao arquivos
-  // estaticos: em paralelo com o Supabase, e sem poder derrubar a ficha
-  // (nenhum dos tres lanca).
+  // Clima historico, estrutura fundiaria, indicadores e modulos fiscais sao
+  // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
+  // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
       getIndicadores([ibge]),
+      getModulosFiscais([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind };
+    return { ficha, info, climaHist, car, ind, mod };
   });
 }
 
@@ -729,11 +753,12 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info] = await Promise.all([
+    const [ind, car, info, mod] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
+      getModulosFiscais(ibges),
     ]);
-    return { ficha: {}, info, car, ind };
+    return { ficha: {}, info, car, ind, mod };
   });
 }
