@@ -18,6 +18,8 @@ import { getClimaMunicipio } from './data/climaHistorico.js';
 import { getCarAgregado, getCarMunicipio } from './data/carMunicipios.js';
 import { getIndicadores } from './data/indicadoresMunicipais.js';
 import { getModulosFiscais } from './data/modulosFiscais.js';
+import { getExtensionistas } from './data/servidoresIdr.js';
+import { getSusaf } from './data/susaf.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -78,6 +80,44 @@ const SECTIONS = [
     }
     rows.push('<div class="fx-dim">Agroindústrias: IDR + SIGSIF · estradas: OSM/DNIT/DER, convênios SEAB · associações: SECID-PR</div>');
     return section('Território · IDR/SEAB', rows.join(''));
+  },
+
+  /**
+   * Extensionistas do IDR lotados no município, por formação (SisPont;
+   * sem especialidade no SisPont, o cargo do Portal da Transparência).
+   */
+  function extensionistas({ ext }) {
+    if (!ext) return null;
+    const grupos = ext.grupos.map(({ formacao, servidores }) =>
+      `<div><b>${esc(formacao || 'Formação não informada')}</b> <span class="fx-dim">(${fmtN(servidores.length)})</span>: ` +
+      `${servidores.map((s) => esc(s.nome) + (s.formacao_fonte === 'portal' ? '*' : '')).join(', ')}</div>`);
+    const hora = ext.geradoEm ? new Date(ext.geradoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+    return section(`Extensionistas · IDR (${fmtN(ext.total)})`,
+      grupos.join('') +
+      `<div class="fx-dim">IDR-SisPont + Portal da Transparência PR (* formação pelo cargo no Portal)${hora ? ` · ${esc(hora)}` : ''}</div>`);
+  },
+
+  /** Adesão ao SUSAF-PR (mapa ADAPAR + lista de SIMs da SEAB). */
+  function susaf({ sus }) {
+    if (!sus) return null;
+    const data = sus.dataMapa ? sus.dataMapa.split('-').reverse().join('/') : '';
+    const rodape = `<div class="fx-dim">${esc(sus.fonte)}${data ? ` · mapa de ${esc(data)}` : ''}</div>`;
+    if (sus.n > 1) {
+      return section('SUSAF-PR', `<div>Aderiram: <b>${fmtN(sus.aderiram)}</b> de ${fmtN(sus.n)} municípios ` +
+        `<span class="fx-dim">(${fmtN(sus.viaConsorcio)} via consórcio)</span></div>` +
+        `<div>Estabelecimentos indicados: <b>${fmtN(sus.estabelecimentos)}</b></div>${rodape}`);
+    }
+    if (!sus.adesao) return section('SUSAF-PR', `<div>Não aderiu ao SUSAF-PR</div>${rodape}`);
+    const via = sus.adesao === 'consorcio' ? 'via consórcio intermunicipal (consórcio não detalhado)' : 'com SIM próprio';
+    const rows = [`<div>Aderiu <b>${via}</b>${sus.suspenso ? ' · <b>suspenso</b>' : ''}</div>`];
+    rows.push(sus.estabelecimentos === null
+      ? '<div class="fx-dim">Consta na lista de SIMs, mas sem cor no mapa da ADAPAR (conferir)</div>'
+      : `<div>Estabelecimentos indicados: <b>${fmtN(sus.estabelecimentos)}</b></div>`);
+    if (sus.sim) {
+      const contato = [sus.sim.responsavel, sus.sim.telefone, sus.sim.email].filter(Boolean).map(esc).join(' · ');
+      if (contato) rows.push(`<div class="fx-sub">SIM: ${contato}</div>`);
+    }
+    return section('SUSAF-PR', rows.join('') + rodape);
   },
 
   function economia({ info }) {
@@ -695,14 +735,16 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
       getIndicadores([ibge]),
       getModulosFiscais([ibge]),
+      getExtensionistas(nome),
+      getSusaf([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus };
   });
 }
 
@@ -753,12 +795,13 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod] = await Promise.all([
+    const [ind, car, info, mod, sus] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
       getModulosFiscais(ibges),
+      getSusaf(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod };
+    return { ficha: {}, info, car, ind, mod, sus };
   });
 }
