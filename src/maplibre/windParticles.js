@@ -10,9 +10,11 @@
 //     quase constante em qualquer zoom, como no app;
 //   - descarte aleatório por quadro dropRate + 0,01 · velocidade normalizada, e
 //     renascimento em ponto aleatório da grade ao sair dela;
-//   - cada partícula é um traço de lineLength · pixelSize metros (30–120 px
-//     com a grade inteira na tela a ~1 km/px) na direção do movimento, largura lineWidth (1–2,4 px), transparente atrás e opaco na
-//     frente, cor da rampa `colors` pela velocidade normalizada.
+//   - cada partícula deixa um rastro das últimas TRAIL posições (lon/lat, então
+//     o rastro curva com o escoamento e acompanha a câmera sem borrar), fino e
+//     transparente na cauda, largura lineWidth (1–2,4 px) e opaco na cabeça,
+//     cor da rampa `colors` pela velocidade normalizada. Vento forte anda mais
+//     por quadro, então o rastro dele sai naturalmente mais longo.
 //
 // DESENHO: canvas 2D sobreposto ao canvas do mapa (pointer-events: none).
 // Projetar 4096 partículas por quadro com map.project no globo seria caro; em
@@ -169,7 +171,10 @@ export function latticeCell(lat0, lon0, dLat, dLon, nx, ny, lon, lat) {
 // ------------------------------------------------------------- sobreposição
 
 const BINS = 8; // faixas de velocidade: uma cor/largura por faixa
-const PIECES = 3; // o traço em 3 trechos de opacidade crescente
+const PIECES = 4; // o rastro em 4 trechos de opacidade crescente
+const TRAIL = 10; // posições guardadas por partícula (≈ 1/6 s a 60 fps)
+const MAX_JUMP_PX = 80; // segmento maior que isso é salto de projeção, não rastro
+const MARGIN_PX = 150; // folga fora da tela para a cabeça ainda desenhar a cauda
 const DROP_RATE_BUMP = 0.01; // default da lib (o app não sobrescreve)
 const MAX_FRAMES = 3; // teto do passo após uma pausa longa
 
@@ -189,7 +194,6 @@ export class WindParticleField {
     this.canvas = null;
     this.latticeKey = '';
     this.pixelSize = 1000;
-    this.lengthScale = 1;
     this.binStyle = [];
     for (let b = 0; b < BINS; b += 1) {
       const norm = (b + 0.5) / BINS;
@@ -226,7 +230,10 @@ export class WindParticleField {
       this.lon = new Float64Array(this.count);
       this.lat = new Float64Array(this.count);
       this.spd = new Float32Array(this.count);
-      this.fresh = new Uint8Array(this.count);
+      this.hLon = new Float64Array(this.count * TRAIL);
+      this.hLat = new Float64Array(this.count * TRAIL);
+      this.hHead = new Uint8Array(this.count);
+      this.hLen = new Uint8Array(this.count);
     }
     for (let k = 0; k < this.count; k += 1) this.respawn(k);
     if (this.running) this.draw();
@@ -237,7 +244,18 @@ export class WindParticleField {
     this.lon[k] = b.west + Math.random() * (b.east - b.west);
     this.lat[k] = b.south + Math.random() * (b.north - b.south);
     this.spd[k] = 0;
-    this.fresh[k] = 1; // recém-nascida não desenha neste quadro (como a lib)
+    // Recém-nascida não tem rastro: só desenha depois do primeiro passo.
+    this.hLen[k] = 0;
+    this.remember(k);
+  }
+
+  /** Empurra a posição atual no anel do rastro da partícula k. */
+  remember(k) {
+    const h = this.hLen[k] ? (this.hHead[k] + 1) % TRAIL : 0;
+    this.hLon[k * TRAIL + h] = this.lon[k];
+    this.hLat[k * TRAIL + h] = this.lat[k];
+    this.hHead[k] = h;
+    if (this.hLen[k] < TRAIL) this.hLen[k] += 1;
   }
 
   ensureCanvas() {
@@ -347,7 +365,7 @@ export class WindParticleField {
       this.lon[k] = next[0];
       this.lat[k] = next[1];
       this.spd[k] = next[2];
-      this.fresh[k] = 0;
+      this.remember(k);
     }
   }
 
@@ -362,8 +380,6 @@ export class WindParticleField {
     const b = map.getBounds();
     const ps = libPixelSize({ west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() }, this.grid.bounds);
     if (ps) this.pixelSize = ps;
-    // Traço em px: lineLength · pixelSize metros na escala do centro da tela.
-    this.lengthScale = Math.min(4, this.pixelSize / metersPerPixel(map.getZoom(), c.lat));
     // No globo, pontos além do horizonte não entram (ângulo ao centro > ~80°).
     const cosMax = Math.cos((80 * Math.PI) / 180);
     const toRad = Math.PI / 180;
@@ -410,64 +426,68 @@ export class WindParticleField {
   draw() {
     if (!this.canvas || !this.grid) return;
     this.updateLattice();
-    const { ctx, style, grid } = this;
+    const { ctx } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-    // Um path por (faixa de velocidade, trecho do traço): 24 strokes por quadro.
+    // Um path por (faixa de velocidade, trecho do rastro): 32 strokes por quadro.
     const paths = [];
     for (let b = 0; b < BINS; b += 1) {
       paths.push([]);
       for (let p = 0; p < PIECES; p += 1) paths[b].push(new Path2D());
     }
-    const head = [0, 0];
-    const probe = [0, 0];
+    const pt = [0, 0];
+    const xs = new Float32Array(TRAIL);
+    const ys = new Float32Array(TRAIL);
+    const ok = new Uint8Array(TRAIL);
     const span = this.domain.max - this.domain.min;
-    const { min: lmin, max: lmax } = style.lineLength;
-    const margin = lmax * this.lengthScale;
     const w = this.cssW;
     const h = this.cssH;
+    const { hLon, hLat, hHead, hLen } = this;
     let drawn = 0;
     for (let k = 0; k < this.count; k += 1) {
-      if (this.fresh[k]) continue;
-      const lon = this.lon[k];
-      const lat = this.lat[k];
-      if (!this.screenAt(lon, lat, head)) continue;
-      if (head[0] < -margin || head[1] < -margin || head[0] > w + margin || head[1] > h + margin) continue;
-      const wind = windAt(grid, lon, lat);
-      if (!wind) continue;
-      const speed = Math.hypot(wind[0], wind[1]);
-      if (speed === 0) continue;
-      // Direção do movimento na TELA: ponto um pouco à frente na malha.
-      const [mLon, mLat] = metersPerDegree(lat);
-      const ahead = 2000 / speed; // segundos para andar 2 km
-      if (!this.screenAt(lon + (wind[0] * ahead) / mLon, lat + (wind[1] * ahead) / mLat, probe)) continue;
-      let dx = probe[0] - head[0];
-      let dy = probe[1] - head[1];
-      const len = Math.hypot(dx, dy);
-      if (!(len > 1e-6)) continue;
-      dx /= len;
-      dy /= len;
-      const norm = Math.min(1, Math.max(0, (speed - this.domain.min) / span));
-      const L = (lmin + (lmax - lmin) * norm) * this.lengthScale;
+      const n = hLen[k];
+      if (n < 2) continue;
+      const base = k * TRAIL;
+      const head = hHead[k];
+      // Cabeça fora da tela (com folga): a partícula inteira fica de fora.
+      if (!this.screenAt(hLon[base + head], hLat[base + head], pt)) continue;
+      if (pt[0] < -MARGIN_PX || pt[1] < -MARGIN_PX || pt[0] > w + MARGIN_PX || pt[1] > h + MARGIN_PX) continue;
+      // m = 0 é a posição mais antiga, m = n - 1 a cabeça.
+      for (let m = 0; m < n; m += 1) {
+        const idx = base + ((head - (n - 1 - m) + TRAIL) % TRAIL);
+        ok[m] = this.screenAt(hLon[idx], hLat[idx], pt) ? 1 : 0;
+        xs[m] = pt[0];
+        ys[m] = pt[1];
+      }
+      const norm = Math.min(1, Math.max(0, (this.spd[k] - this.domain.min) / span));
       const bin = Math.min(BINS - 1, Math.floor(norm * BINS));
-      for (let p = 0; p < PIECES; p += 1) {
-        const path = paths[bin][p];
-        path.moveTo(head[0] + dx * L * (p / PIECES), head[1] + dy * L * (p / PIECES));
-        path.lineTo(head[0] + dx * L * ((p + 1) / PIECES), head[1] + dy * L * ((p + 1) / PIECES));
+      for (let m = 1; m < n; m += 1) {
+        if (!ok[m - 1] || !ok[m]) continue;
+        const dx = xs[m] - xs[m - 1];
+        const dy = ys[m] - ys[m - 1];
+        if (dx * dx + dy * dy > MAX_JUMP_PX * MAX_JUMP_PX) continue;
+        // Idade do segmento (0 = junto da cabeça) medida contra o rastro cheio:
+        // um rastro recém-nascido é curto, mas já tem a cabeça forte.
+        const age = n - 1 - m;
+        const piece = PIECES - 1 - Math.min(PIECES - 1, Math.floor((age * PIECES) / (TRAIL - 1)));
+        const path = paths[bin][piece];
+        path.moveTo(xs[m - 1], ys[m - 1]);
+        path.lineTo(xs[m], ys[m]);
       }
       drawn += 1;
     }
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     for (let b = 0; b < BINS; b += 1) {
       const st = this.binStyle[b];
       ctx.strokeStyle = st.color;
       for (let p = 0; p < PIECES; p += 1) {
-        const s = (p + 0.5) / PIECES;
+        const s = (p + 1) / PIECES;
         ctx.globalAlpha = trailAlpha(s) * st.speedAlpha;
-        // Traço afina para trás: metade da largura na cauda, cheia na frente.
-        ctx.lineWidth = st.width * (0.5 + 0.5 * s);
+        // Cometa: a cauda afina até 30% da largura, a cabeça tem a largura cheia.
+        ctx.lineWidth = st.width * (0.3 + 0.7 * s);
         ctx.stroke(paths[b][p]);
       }
     }
