@@ -137,8 +137,8 @@ test('a camada de chuva fica abaixo das partículas de vento, e as duas dividem 
   const client = fs.readFileSync(path.join(ROOT, 'src', 'data', 'datageoClient.js'), 'utf8');
 
   assert.match(grades, /type: 'raster',\s+source: 'dg-precipitacao'/, 'a chuva é um raster do próprio mapa');
-  assert.match(particles, /insertBefore\(c, mapCanvas\.nextSibling\)/,
-    'o canvas do vento fica por cima do canvas do mapa (e da chuva)');
+  assert.match(particles, /getCanvas\(\)\.parentNode\.appendChild\(c\)/,
+    'o canvas do vento fica por cima do canvas do mapa (e da chuva) e do #post-process-canvas');
   assert.match(particles, /pointer-events:none/, 'o vento não pode roubar o hover da chuva');
 
   // Uma requisição para as duas: a precipitação viaja na mesma lista `current=`.

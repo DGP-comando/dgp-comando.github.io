@@ -245,8 +245,9 @@ export class WindParticleField {
     const c = document.createElement('canvas');
     c.className = 'dg-wind-particles';
     c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;';
-    const mapCanvas = this.map.getCanvas();
-    mapCanvas.parentNode.insertBefore(c, mapCanvas.nextSibling);
+    // No fim do container, acima do #post-process-canvas (que também se põe
+    // logo depois do canvas do mapa e, com um estilo ativo, é opaco).
+    this.map.getCanvas().parentNode.appendChild(c);
     this.canvas = c;
     this.ctx = c.getContext('2d');
     this.onResize();
