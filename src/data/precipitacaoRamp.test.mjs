@@ -48,7 +48,7 @@ test('a escala sobe de forma monótona em opacidade, do chuvisco ao extremo', ()
 });
 
 test('a escala nunca entra na família do ciano, que é a cor do vento', () => {
-  // O vento desenha em #7dd3fc / #22d3ee / #a5f3fc / #e0f2fe. Uma escala de
+  // O vento desenha em azul-claro a branco (ventosOptions.js). Uma escala de
   // chuva que chegasse perto disso tornaria as duas camadas ilegíveis juntas —
   // que é exatamente o caso de uso desta camada.
   for (const klass of PRECIP_CLASSES) {

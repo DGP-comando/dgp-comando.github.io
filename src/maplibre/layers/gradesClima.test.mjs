@@ -143,10 +143,10 @@ test('velocidade de tela ~ constante: m/px e domínio', () => {
 
 test('rampa e opacidade do traço seguem a lib', () => {
   const { colors } = WIND_PARTICLE_STYLE;
-  assert.deepEqual(rampColor(colors, 0), [0x7d, 0xd3, 0xfc]);
-  assert.deepEqual(rampColor(colors, 1), [0xe0, 0xf2, 0xfe]);
+  assert.deepEqual(rampColor(colors, 0), [0x93, 0xc5, 0xfd]);
+  assert.deepEqual(rampColor(colors, 1), [0xff, 0xff, 0xff]);
   // Centro do 2º texel = 2º cor exata.
-  assert.deepEqual(rampColor(colors, 1.5 / 4), [0x22, 0xd3, 0xee]);
+  assert.deepEqual(rampColor(colors, 1.5 / 4), [0xbf, 0xdb, 0xfe]);
   assert.equal(trailAlpha(0), 0);
   assert.equal(trailAlpha(1), 1);
   assert.ok(trailAlpha(0.3) < trailAlpha(0.7));

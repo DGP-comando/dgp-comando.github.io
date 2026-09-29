@@ -12,6 +12,8 @@ export const WIND_PARTICLE_STYLE = {
   lineLength: { min: 30, max: 120 },
   speedFactor: 1.2,
   dropRate: 0.003,
-  colors: ['#7dd3fc', '#22d3ee', '#a5f3fc', '#e0f2fe'],
+  // Azul-claro (calmo) a branco (forte): fora do ciano saturado dos limites
+  // municipais e longe do roxo da precipitacao.
+  colors: ['#93c5fd', '#bfdbfe', '#e0f2fe', '#ffffff'],
   flipY: false,
 };
