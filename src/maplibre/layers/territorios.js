@@ -22,6 +22,7 @@ import { openFichaRegiao } from '../../datageoFicha.js';
 import { fichaRegionalIdr, TERRITORIO_SPECS } from '../../data/territoriosSpec.js';
 import { CAR_CLASSE_STYLES, CAR_MAX_HEIGHT, carTooltip } from '../../data/carClasses.js';
 import { loadCarMunicipios } from '../../data/carMunicipios.js';
+import { loadCadunicoRural } from '../../data/cadunicoRural.js';
 import { defineLayer, EMPTY_FC, TEXT_FONT, zoomForHeight } from '../kit.js';
 import { loadMunicipiosInfo, MUNICIPIOS_URL } from './municipios.js';
 import {
@@ -62,6 +63,7 @@ function territorioLayer(spec, { onClick = null } = {}) {
   let loaded = null;
   let info = null;
   let nomes = null;
+  let cadunico = null; // {porChave, referencia} das famílias do CadÚnico (bucket privado)
   const interactive = Boolean(tooltipOf || onClick);
 
   return defineLayer({
@@ -117,11 +119,13 @@ function territorioLayer(spec, { onClick = null } = {}) {
         loaded = null;
         throw err;
       });
-      const [built, inf, nms] = await Promise.all([
+      const [built, inf, nms, cad] = await Promise.all([
         loaded,
         spec.agregaMunicipios ? loadMunicipiosInfo() : null,
         spec.agregaMunicipios ? loadNomesMunicipios() : null,
+        spec.cadunico ? loadCadunicoRural() : null,
       ]);
+      cadunico = cad ? { porChave: cad[spec.cadunico.grupo] ?? {}, referencia: cad.referencia } : null;
       info = inf?.municipios ?? null;
       nomes = nms;
       props = built.props;
@@ -135,7 +139,9 @@ function territorioLayer(spec, { onClick = null } = {}) {
       ? {
         tooltip: (_p, feature) => {
           const p = props[feature.id];
-          return p ? tooltipOf(p, { municipio: cursor.get(), info, nomes }) : '';
+          if (!p) return '';
+          const cad = cadunico && cadunico.porChave[spec.cadunico.chave(p)];
+          return tooltipOf(p, { municipio: cursor.get(), info, nomes, cadunico: cad, cadunicoRef: cadunico?.referencia });
         },
       }
       : {}),

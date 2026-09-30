@@ -19,6 +19,7 @@ import { getCarAgregado, getCarMunicipio } from './data/carMunicipios.js';
 import { getIndicadores } from './data/indicadoresMunicipais.js';
 import { getModulosFiscais } from './data/modulosFiscais.js';
 import { getProtecaoSocial } from './data/protecaoSocial.js';
+import { mesAno } from './data/cadunicoRural.js';
 import { getExtensionistas } from './data/servidoresIdr.js';
 import { getSusaf } from './data/susaf.js';
 
@@ -274,14 +275,15 @@ const SECTIONS = [
    * grupo tem o seu mês; o rodapé diz qual.
    */
   function protecaoSocial({ ps }) {
-    if (!ps?.cad_familias) return null;
-    const mes = (p) => (p ? `${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][Number(p.slice(4)) - 1]}/${p.slice(0, 4)}` : '');
-    const rows = [
-      `<div>CadÚnico: <b>${fmtN(ps.cad_familias)}</b> famílias` +
+    if (!ps?.cad_familias && !ps?.rural) return null;
+    const mes = mesAno;
+    const rows = [];
+    if (ps.cad_familias) {
+      rows.push(`<div>CadÚnico: <b>${fmtN(ps.cad_familias)}</b> famílias` +
         (ps.cad_pessoas && ps.populacao
           ? ` <span class="fx-dim">(${fmtN(ps.cad_pessoas)} pessoas, ${fmtPct(ps.cad_pessoas, ps.populacao)} da população)</span>`
-          : '') + '</div>',
-    ];
+          : '') + '</div>');
+    }
     if (ps.cad_familias_pobreza) {
       rows.push(`<div class="fx-sub">Em situação de pobreza: <b>${fmtN(ps.cad_familias_pobreza)}</b> famílias ` +
         `<span class="fx-dim">(${fmtPct(ps.cad_familias_pobreza, ps.cad_familias)} das cadastradas)</span></div>`);
@@ -304,8 +306,34 @@ const SECTIONS = [
     } else if (anoPaa) {
       rows.push(`<div class="fx-dim">Sem compras do PAA registradas em ${esc(anoPaa)}</div>`);
     }
-    rows.push(`<div class="fx-dim">MI Social, ${esc(mes(ps.periodos.cadunico))}` +
-      (ps.n > 1 ? ` · soma de ${fmtN(ps.n)} municípios` : '') + '</div>');
+    if (ps.periodos.cadunico) {
+      rows.push(`<div class="fx-dim">MI Social, ${esc(mes(ps.periodos.cadunico))}` +
+        (ps.n > 1 ? ` · soma de ${fmtN(ps.n)} municípios` : '') + '</div>');
+    }
+    const r = ps.rural;
+    if (r?.familias) {
+      // Um município: contagem suprimida vira "menos de 5". Recorte: fica fora da soma (nota).
+      const q = (k, rotulo) => {
+        if (r[k]) return `${fmtN(r[k])} ${rotulo}`;
+        return r.n <= 1 && r.suprimidos.includes(k) ? `menos de 5 ${rotulo}` : '';
+      };
+      const junta = (...partes) => partes.filter(Boolean).join(' · ');
+      const pobreza = junta(
+        r.extrema_pobreza ? `<b>${fmtN(r.extrema_pobreza)}</b> em extrema pobreza (${fmtPct(r.extrema_pobreza, r.familias)})` : '',
+        q('pobreza', 'em pobreza'),
+      );
+      const moradia = junta(q('sem_agua_canalizada', 'sem água canalizada'), q('sem_banheiro', 'sem banheiro'));
+      const povos = junta(q('indigenas', 'indígenas'), q('quilombolas', 'quilombolas'));
+      rows.push(
+        `<div class="fx-sub" style="margin-top:8px">Famílias rurais no CadÚnico · ${esc(mes(r.referencia))}</div>` +
+        `<div><b>${fmtN(r.familias)}</b> famílias rurais · ${fmtN(r.pessoas ?? 0)} pessoas</div>` +
+        (pobreza ? `<div class="fx-sub">${pobreza}</div>` : '') +
+        (moradia ? `<div class="fx-sub">${moradia}</div>` : '') +
+        (povos ? `<div class="fx-sub">${povos}</div>` : '') +
+        `<div class="fx-dim">Extração do IDR-Paraná (acesso restrito); não comparável ao total do MI Social acima` +
+          (r.n > 1 && r.suprimidos.length ? '; contagens abaixo de 5 ficam fora da soma' : '') + '</div>',
+      );
+    }
     return section('Proteção social · MDS', rows.join(''));
   },
 

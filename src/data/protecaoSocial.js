@@ -4,6 +4,9 @@
 // CadÚnico, Bolsa Família, Programa Fomento Rural e PAA por município, do MI
 // Social do MDS. Só contagens agregadas; na ficha regional, somadas.
 // Buscado no máximo UMA vez — mesmo contrato de modulosFiscais.js.
+// `rural`: famílias rurais do CadÚnico (bucket privado, cadunicoRural.js).
+
+import { loadCadunicoRural, resumirRural } from './cadunicoRural.js';
 
 const URL = '/data/protecao-social-pr.json';
 
@@ -41,10 +44,15 @@ export function resumirProtecaoSocial(dados, ibges) {
 
 /** Resumo para a ficha municipal ou regional. Nunca lança: a ficha segue sem a seção. */
 export async function getProtecaoSocial(ibges) {
-  try {
-    return resumirProtecaoSocial(await loadProtecaoSocial(), ibges);
-  } catch (err) {
-    console.warn('[DataGeo:ficha] proteção social indisponível:', err?.message);
-    return null;
-  }
+  const [mds, rural] = await Promise.all([
+    loadProtecaoSocial().catch((err) => {
+      console.warn('[DataGeo:ficha] proteção social indisponível:', err?.message);
+      return null;
+    }),
+    loadCadunicoRural(),
+  ]);
+  const ps = resumirProtecaoSocial(mds, ibges);
+  const rur = resumirRural(rural, ibges);
+  if (!ps && !rur) return null;
+  return { n: ibges?.length ?? 0, periodos: {}, ...ps, rural: rur };
 }

@@ -10,6 +10,7 @@
 // anel externo (âncora do rótulo) e a quebra das feições em partes.
 
 import { fmtDate, fmtInt as fmtIntTip, fmtNum, fmtPct, tipCard } from '../maplibre/tooltipCard.js';
+import { secaoCadunicoTerritorio } from './cadunicoRural.js';
 
 /** Centroide simples do anel externo (suficiente para ancorar label). */
 export function centroidOf(rings) {
@@ -182,6 +183,7 @@ export function terraIndigenaTooltip(p, x) {
       ['Área', areaTxt(p.area_ha)],
       ['Município', municipioCursor(x)],
     ],
+    sections: [secaoCadunicoTerritorio(x?.cadunico, x?.cadunicoRef)].filter(Boolean),
     source: 'FUNAI/CMR · DataGeo PR',
   });
 }
@@ -205,6 +207,7 @@ export function quilombolaTooltip(p, x) {
       ['Fase', FASE_QUILOMBO[fase.toUpperCase()] ?? fase],
       ['Município', p.municipio || municipioCursor(x)],
     ],
+    sections: [secaoCadunicoTerritorio(x?.cadunico, x?.cadunicoRef)].filter(Boolean),
     source: 'IBGE, Censo 2022 · INCRA',
   });
 }
@@ -233,6 +236,7 @@ export function assentamentoTooltip(p, x) {
       ['Obtenção', p.obtencao],
       ['Código SIPRA', p.codigo],
     ],
+    sections: [secaoCadunicoTerritorio(x?.cadunico, x?.cadunicoRef)].filter(Boolean),
     source: 'INCRA/SIPRA · DataGeo PR',
   });
 }
@@ -309,6 +313,8 @@ export const TERRITORIO_SPECS = Object.freeze({
     labelOf: (p) => `${nomeTi(p)}${fmtHa(p.area_ha)}`,
     labelMaxDist: 600_000,
     tooltipOf: terraIndigenaTooltip,
+    // Famílias do CadÚnico casadas ao território (bucket privado; chave = nome).
+    cadunico: { grupo: 'terras_indigenas', chave: (p) => p.nome },
   },
   quilombolas: {
     id: 'datageo-quilombolas',
@@ -320,6 +326,7 @@ export const TERRITORIO_SPECS = Object.freeze({
     labelOf: (p) => `TQ ${p.nome}${p.fase ? ` (${p.fase})` : ''}`,
     labelMaxDist: 1_600_000,
     tooltipOf: quilombolaTooltip,
+    cadunico: { grupo: 'quilombos', chave: (p) => p.nome },
   },
   assentamentos: {
     id: 'datageo-assentamentos',
@@ -332,6 +339,7 @@ export const TERRITORIO_SPECS = Object.freeze({
     labelOf: (p) => `${p.nome}${fmtFamilias(p.familias)}`,
     tooltipOf: assentamentoTooltip,
     labelMaxDist: 80_000,
+    cadunico: { grupo: 'assentamentos', chave: (p) => p.codigo },
   },
   ucsFederais: {
     id: 'datageo-ucs-federais',
