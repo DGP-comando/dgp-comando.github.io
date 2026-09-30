@@ -32,6 +32,8 @@ const LIFECYCLE_LABELS = Object.freeze({
 // — terremotos, cabos, voos etc.). A ordem aqui e a ordem do painel.
 const LAYER_CATEGORY_ORDER = Object.freeze([
   'Limites',
+  'Território',
+  'Proteção social',
   'Infraestrutura',
   'Logística agro',
   'Clima',
