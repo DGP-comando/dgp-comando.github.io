@@ -9,6 +9,7 @@ import estacoesIdr from './estacoesIdr.js';
 import monitoramento from './monitoramento.js';
 import transporte from './transporte.js';
 import energiaLogistica from './energiaLogistica.js';
+import protecaoSocial from './protecaoSocial.js';
 import conectividadeRadios from './conectividadeRadios.js';
 import gradesClima from './gradesClima.js';
 import contextoGev from './contextoGev.js';
@@ -17,7 +18,7 @@ export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-ucs-federais',
   'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-estacoes-idr', 'datageo-unidades-idr',
-  'datageo-associacoes',
+  'datageo-associacoes', 'datageo-equipamentos-suas',
   'datageo-car',
   'datageo-clima', 'datageo-rios', 'datageo-cemaden', 'datageo-irtc', 'datageo-dengue', 'datageo-ar',
   'datageo-anomalias', 'datageo-incidentes', 'datageo-infohidro', 'datageo-maritimo',
@@ -37,6 +38,7 @@ const all = [
   ...monitoramento,
   ...transporte,
   ...energiaLogistica,
+  ...protecaoSocial,
   ...conectividadeRadios,
   ...gradesClima,
   ...contextoGev,

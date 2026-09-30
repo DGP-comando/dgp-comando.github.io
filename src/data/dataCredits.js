@@ -100,6 +100,12 @@ export const DATA_CREDITS = [
       'frigoríficos e laticínios do SIGSIF/MAPA',
   },
   {
+    key: 'mds-equipamentos-suas',
+    html:
+      'CRAS, CREAS, Centros POP, postos do CadÚnico e equipamentos de segurança alimentar: ' +
+      '<a href="https://mapa-social.mds.gov.br" target="_blank" rel="noopener">MDS, Mapa Social (SAGI)</a>',
+  },
+  {
     key: 'idr-regionais',
     html: 'Regionais: IDR-Paraná, mapa municipal das regionais',
   },
