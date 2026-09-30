@@ -8,6 +8,7 @@
 
 import { extensionistasDoMunicipio, loadServidoresIdr, servidoresDasUnidades } from '../../data/servidoresIdr.js';
 import { dgFetchData } from '../../data/datageoClient.js';
+import { gerenteDaRegional, loadGerentesIdr } from '../../data/gerentesIdr.js';
 import { EMPTY_FC, LABEL_PAINT, TEXT_FONT, defineLayer, tipCard, zoomForHeight } from '../kit.js';
 import { makePointsLayer } from './energiaLogistica.js';
 
@@ -21,6 +22,7 @@ const MAX_NOMES = 25;
 const TIPO = { estacao: 'Estação de pesquisa', polo: 'Polo de pesquisa', 'unidade-florestal': 'Unidade florestal' };
 
 let servidores = null; // payload de servidores-idr.json; null = indisponível
+let gerentes = null; // payload de gerentes-idr.json; null = indisponível
 
 /** HTML do tooltip de uma estação/polo/unidade (exportado para o teste). */
 export function estacaoTooltipHtml(p, dados) {
@@ -146,10 +148,12 @@ export function unidadeEstilo(p) {
 
 /**
  * Tooltip do escritório. Na unidade municipal (UME) lista os extensionistas
- * lotados no município (`dados` = servidores-idr.json; null = indisponível).
+ * lotados no município (`dados` = servidores-idr.json; null = indisponível);
+ * na regional, o gerente (`ger` = gerentes-idr.json).
  */
-export function unidadeTooltipHtml(p, dados = null) {
+export function unidadeTooltipHtml(p, dados = null, ger = null) {
   const ume = p.tipo === 'ume';
+  const gerente = p.tipo === 'regional' ? gerenteDaRegional(ger, p.regional) : null;
   const ext = ume && dados ? extensionistasDoMunicipio(dados, p.municipio) : null;
   const todos = (ext?.grupos ?? []).flatMap((g) => g.servidores);
   const nomes = todos.slice(0, MAX_NOMES).map((s) => [s.nome, s.formacao || 'formação não informada']);
@@ -158,7 +162,7 @@ export function unidadeTooltipHtml(p, dados = null) {
     title: p.nome,
     subtitle: `IDR-Paraná · ${UNIDADE_ROTULO[p.tipo] ?? p.tipo}${p.regional ? ` · Regional ${p.regional}` : ''}`,
     badge: ume && dados ? { text: `${todos.length} extensionista${todos.length === 1 ? '' : 's'}`, tone: 'info' } : null,
-    rows: [['Endereço', p.endereco], ['Telefone', p.telefone], ['E-mail', p.email]],
+    rows: [...(gerente ? [['Gerente', gerente.nome]] : []), ['Endereço', p.endereco], ['Telefone', p.telefone], ['E-mail', p.email]],
     sections: nomes.length ? [{ title: 'Extensionistas (SisPont + Portal da Transparência)', rows: nomes }] : [],
     note: [
       ume && !dados ? 'Lista de extensionistas indisponível no momento.' : '',
@@ -166,7 +170,7 @@ export function unidadeTooltipHtml(p, dados = null) {
       p.aproximado ? 'Localização aproximada (sede do município): o ponto da base não fechava com o endereço.' : '',
       p.no_site === false ? 'Não consta em "Endereços e Contatos" do site do IDR.' : '',
     ].filter(Boolean).join(' '),
-    source: 'IDR-Paraná · Endereços e Contatos (28/09/2026) · SisPont',
+    source: `IDR-Paraná · Endereços e Contatos (28/09/2026) · SisPont${gerente ? ` · gerente: RH do IDR${gerente.referencia ? ` (${gerente.referencia})` : ''}` : ''}`,
     wide: nomes.length > 0,
   });
 }
@@ -179,24 +183,30 @@ const unidadesBase = makePointsLayer({
   source: 'IDR-Paraná',
   url: '/privado/unidades-idr-pr.geojson',
   estilo: unidadeEstilo,
-  tooltip: (p) => unidadeTooltipHtml(p, servidores),
+  tooltip: (p) => unidadeTooltipHtml(p, servidores, gerentes),
   legend: UNIDADE_LEGENDA,
   labelDists: [400_000, 60_000],
 });
 
 // Os pontos do makePointsLayer + a lista de servidores para o tooltip das UMEs
+// e os gerentes para o das regionais
 // (falha da lista não derruba a camada: o tooltip avisa).
 export const unidadesIdrLayer = defineLayer({
   ...unidadesBase,
   async load(ctx) {
-    const [n, dados] = await Promise.all([
+    const [n, dados, ger] = await Promise.all([
       unidadesBase.load(ctx),
       loadServidoresIdr().catch((err) => {
         console.warn('[DataGeo] servidores IDR indisponíveis:', err?.message);
         return null;
       }),
+      loadGerentesIdr().catch((err) => {
+        console.warn('[DataGeo] gerentes IDR indisponíveis:', err?.message);
+        return null;
+      }),
     ]);
     servidores = dados ?? servidores;
+    gerentes = ger ?? gerentes;
     return n;
   },
 });

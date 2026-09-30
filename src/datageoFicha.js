@@ -22,6 +22,7 @@ import { getProtecaoSocial } from './data/protecaoSocial.js';
 import { mesAno } from './data/cadunicoRural.js';
 import { getExtensionistas } from './data/servidoresIdr.js';
 import { getSusaf } from './data/susaf.js';
+import { gerenteDaRegional, getGerentes } from './data/gerentesIdr.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -62,7 +63,7 @@ const SECTIONS = [
    * Agroindústrias, malha viária e vínculos regionais. Serve a ficha
    * municipal e a regional (ind já vem somado por getIndicadores).
    */
-  function territorio({ ind }) {
+  function territorio({ ind, gerentes }) {
     if (!ind) return null;
     const rows = [
       `<div>Agroindústrias: <b>${fmtN(ind.agro_total)}</b> · IDR <b>${fmtN(ind.agro_idr)}</b> ` +
@@ -80,7 +81,10 @@ const SECTIONS = [
     if (ind.n === 1 && ind.regionais.length) {
       rows.push(`<div>Regional IDR: <b>${esc(ind.regionais[0])}</b></div>`);
     }
-    rows.push('<div class="fx-dim">Agroindústrias: IDR + SIGSIF · estradas: OSM/DNIT/DER, convênios SEAB · associações: SECID-PR</div>');
+    const ger = ind.regionais.length === 1 ? gerenteDaRegional(gerentes, ind.regionais[0]) : null;
+    if (ger) rows.push(`<div>Gerente regional: <b>${esc(ger.nome)}</b></div>`);
+    const fonteGer = ger ? ` · gerente: RH do IDR${ger.referencia ? ` (${esc(ger.referencia)})` : ''}` : '';
+    rows.push(`<div class="fx-dim">Agroindústrias: IDR + SIGSIF · estradas: OSM/DNIT/DER, convênios SEAB · associações: SECID-PR${fonteGer}</div>`);
     return section('Território · IDR/SEAB', rows.join(''));
   },
 
@@ -806,7 +810,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -815,8 +819,9 @@ export async function openFicha({ ibge, nome, info }) {
       getExtensionistas(nome),
       getSusaf([ibge]),
       getProtecaoSocial([ibge]),
+      getGerentes(),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes };
   });
 }
 
@@ -867,14 +872,15 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
       getModulosFiscais(ibges),
       getSusaf(ibges),
       getProtecaoSocial(ibges),
+      getGerentes(),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes };
   });
 }

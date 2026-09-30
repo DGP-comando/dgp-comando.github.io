@@ -4,7 +4,8 @@ Entrada: "NN- RELAÇÃO SERVIDORES DO IDR-PARANA -<MÊS>-<ANO>.xlsx", enviada pe
 RH todo mês, guardada FORA do repositório (datageo-command-dados-locais).
 
 Saída: data/privado/servidores-rh.json (bucket privado, fora do git: subir com
-scripts/upload_privado.py). A Edge Function datageo-servidores do c2 lê esse
+scripts/upload_privado.py), mais data/privado/gerentes-idr.json (chefe do
+escritório regional de cada regional, para o tooltip e as fichas). A Edge Function datageo-servidores do c2 lê esse
 arquivo e o usa como fonte de verdade sobre o SisPont: quem está no quadro,
 município, vínculo, cessão e cargo. Sem ele a função segue só com SisPont+Portal.
 
@@ -25,6 +26,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 MUN_GEOJSON = ROOT / 'public' / 'data' / 'municipios-pr.geojson'
 OUT = ROOT / 'data' / 'privado' / 'servidores-rh.json'
+OUT_GERENTES = ROOT / 'data' / 'privado' / 'gerentes-idr.json'
+REGIONAIS_GEOJSON = ROOT / 'public' / 'data' / 'regionais-idr-pr.geojson'
 MINIMO = 1000  # abaixo disso a planilha veio cortada ou com layout novo
 
 # Grafias da planilha que não batem com o nome oficial do IBGE.
@@ -38,8 +41,10 @@ ALIAS_MUN = {
 COLS = {
     'MATR.': 'id', 'NOME DO FUNCIONARIO': 'nome', 'LOTAÇÃO': 'lotacao', 'MUNICÍPIO': 'municipio',
     'OCUPACAO/PROFISSAO': 'ocupacao', 'CONV.': 'vinculo', 'ÓRGÃO/ONDE ESTÁ(CESSÃO/DISPOSIÇÃO)': 'cedido_para',
-    'ÁREA': 'area', 'ADMISSAO': 'admissao', 'EXONERAÇÃO': 'exoneracao',
+    'ÁREA': 'area', 'ADMISSAO': 'admissao', 'EXONERAÇÃO': 'exoneracao', 'CHEFIAS': 'chefia',
 }
+# "CHEFE DO ESCRITÓRIO REGIONAL DE X" (também "CHEFE DE ESCRITÓRIO ...").
+RE_GERENTE = re.compile(r'^CHEFE D[OE] ESCRITORIO REGIONAL DE (.+)$')
 
 
 def norm(s):
@@ -99,6 +104,27 @@ def build(df, oficiais):
     return ativos, desligados, sem_mun
 
 
+def gerentes(df, regionais):
+    """Chefe de escritório regional (o gerente da regional) por regional, dos ativos."""
+    out = {}
+    for r in df[df['exoneracao'].isna() & df['chefia'].notna()].itertuples():
+        m = RE_GERENTE.match(norm(r.chefia))
+        if not m:
+            continue
+        regional = regionais.get(m[1])
+        if not regional:
+            sys.exit(f'regional não reconhecida na chefia: {texto(r.chefia)}')
+        if regional in out:
+            sys.exit(f'dois chefes para a regional {regional}')
+        out[regional] = {'nome': texto(r.nome), 'cargo': texto(r.chefia)}
+    return dict(sorted(out.items()))
+
+
+def regionais_oficiais():
+    feats = json.loads(REGIONAIS_GEOJSON.read_text(encoding='utf-8'))['features']
+    return {norm(f['properties']['regional']): f['properties']['regional'] for f in feats}
+
+
 def referencia(caminho):
     m = re.search(r'-\s*([A-ZÇ]+)-(\d{4})', Path(caminho).stem.upper())
     return f'{m[1].capitalize()}/{m[2]}' if m else ''
@@ -108,7 +134,8 @@ def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     caminho = sys.argv[1]
-    ativos, desligados, sem_mun = build(le_planilha(caminho), municipios_oficiais())
+    df = le_planilha(caminho)
+    ativos, desligados, sem_mun = build(df, municipios_oficiais())
     if len(ativos) < MINIMO:
         sys.exit(f'só {len(ativos)} ativos (< {MINIMO}): planilha incompleta?')
     if len({a['id'] for a in ativos}) != len(ativos):
@@ -122,6 +149,16 @@ def main():
     }, ensure_ascii=False), encoding='utf-8')
     print(f'{OUT.name}: {len(ativos)} ativos, {len(desligados)} desligados; '
           f'sem município reconhecido: {sem_mun or "nenhum"}')
+
+    regionais = regionais_oficiais()
+    ger = gerentes(df, regionais)
+    OUT_GERENTES.write_text(json.dumps({
+        'referencia': referencia(caminho),
+        'fonte': 'Relação de Servidores do IDR-Paraná (RH)',
+        'regionais': ger,
+    }, ensure_ascii=False), encoding='utf-8')
+    faltam = sorted(set(regionais.values()) - set(ger))
+    print(f'{OUT_GERENTES.name}: {len(ger)} de {len(regionais)} regionais; sem gerente: {faltam or "nenhuma"}')
 
 
 if __name__ == '__main__':

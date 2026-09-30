@@ -92,3 +92,14 @@ test('núcleo de fazenda florestal: uso, contrato, área e servidores da unidade
 test('camada: arquivo privado e hover nos polígonos e pontos', () => {
   assert.deepEqual([...estacoesIdrLayer.interactive], ['dg-estacoes-idr-fill', 'dg-estacoes-idr-pt']);
 });
+
+test('tooltip da unidade regional mostra o gerente da regional', () => {
+  const ger = { referencia: 'Setembro/2026', regionais: { 'Santo Antonio da Platina': { nome: 'FULANO GERENTE', cargo: 'CHEFE' } } };
+  const p = { nome: 'Unidade Regional · Santo Antônio da Platina', tipo: 'regional', regional: 'Santo Antônio da Platina' };
+  const html = unidadeTooltipHtml(p, null, ger);
+  assert.match(html, /Gerente/);
+  assert.match(html, /FULANO GERENTE/);
+  assert.match(html, /RH do IDR \(Setembro\/2026\)/);
+  assert.doesNotMatch(unidadeTooltipHtml({ ...p, tipo: 'ume', municipio: 'X' }, null, ger), /FULANO/);
+  assert.doesNotMatch(unidadeTooltipHtml(p, null, null), /Gerente/);
+});
