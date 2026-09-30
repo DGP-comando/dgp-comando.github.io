@@ -106,6 +106,12 @@ export const DATA_CREDITS = [
       '<a href="https://mapa-social.mds.gov.br" target="_blank" rel="noopener">MDS, Mapa Social (SAGI)</a>',
   },
   {
+    key: 'mds-mi-social',
+    html:
+      'Proteção social na ficha municipal (CadÚnico, Bolsa Família, Fomento Rural, PAA): ' +
+      '<a href="https://aplicacoes.cidadania.gov.br/vis/data3/data-explorer.php" target="_blank" rel="noopener">MDS, MI Social (SAGI)</a>',
+  },
+  {
     key: 'idr-regionais',
     html: 'Regionais: IDR-Paraná, mapa municipal das regionais',
   },

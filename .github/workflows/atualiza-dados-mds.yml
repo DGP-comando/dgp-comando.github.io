@@ -1,6 +1,7 @@
-# Atualiza toda segunda os equipamentos do MDS (CRAS, CREAS, segurança
-# alimentar) da API aberta do Mapa Social. Só faz commit se os pontos
-# mudaram (o script é idempotente) e então dispara o deploy: push feito com
+# Atualiza toda segunda os dados abertos do MDS: equipamentos (CRAS, CREAS,
+# segurança alimentar, API do Mapa Social) e indicadores municipais da ficha
+# (CadÚnico, Bolsa Família, Fomento, PAA, API do MI Social). Só faz commit se
+# algo mudou (os scripts são idempotentes) e então dispara o deploy: push feito com
 # GITHUB_TOKEN não aciona o `on: push` de deploy-pages.yml.
 name: Atualiza dados MDS
 
@@ -31,17 +32,22 @@ jobs:
         env:
           PYTHONUTF8: '1'
 
+      - run: python scripts/build_protecao_social.py
+        env:
+          PYTHONUTF8: '1'
+
       - name: Commit se mudou e dispara deploy
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet -- public/data/equipamentos-suas-pr.geojson; then
-            echo "Sem mudança nos equipamentos."
+          ARQS='public/data/equipamentos-suas-pr.geojson public/data/protecao-social-pr.json'
+          if git diff --quiet -- $ARQS; then
+            echo "Sem mudança nos dados do MDS."
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add public/data/equipamentos-suas-pr.geojson
-          git commit -m 'chore: atualiza equipamentos do MDS (Mapa Social)'
+          git add $ARQS
+          git commit -m 'chore: atualiza dados abertos do MDS'
           git push
           gh workflow run deploy-pages.yml --ref main

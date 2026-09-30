@@ -18,6 +18,7 @@ import { getClimaMunicipio } from './data/climaHistorico.js';
 import { getCarAgregado, getCarMunicipio } from './data/carMunicipios.js';
 import { getIndicadores } from './data/indicadoresMunicipais.js';
 import { getModulosFiscais } from './data/modulosFiscais.js';
+import { getProtecaoSocial } from './data/protecaoSocial.js';
 import { getExtensionistas } from './data/servidoresIdr.js';
 import { getSusaf } from './data/susaf.js';
 
@@ -265,6 +266,47 @@ const SECTIONS = [
       }
     }
     return section('População · IBGE', rows.join(''));
+  },
+
+  /**
+   * Proteção social (MDS · MI Social): CadÚnico, Bolsa Família e as duas
+   * políticas do MDS voltadas ao agricultor (Fomento Rural e PAA). Cada
+   * grupo tem o seu mês; o rodapé diz qual.
+   */
+  function protecaoSocial({ ps }) {
+    if (!ps?.cad_familias) return null;
+    const mes = (p) => (p ? `${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'][Number(p.slice(4)) - 1]}/${p.slice(0, 4)}` : '');
+    const rows = [
+      `<div>CadÚnico: <b>${fmtN(ps.cad_familias)}</b> famílias` +
+        (ps.cad_pessoas && ps.populacao
+          ? ` <span class="fx-dim">(${fmtN(ps.cad_pessoas)} pessoas, ${fmtPct(ps.cad_pessoas, ps.populacao)} da população)</span>`
+          : '') + '</div>',
+    ];
+    if (ps.cad_familias_pobreza) {
+      rows.push(`<div class="fx-sub">Em situação de pobreza: <b>${fmtN(ps.cad_familias_pobreza)}</b> famílias ` +
+        `<span class="fx-dim">(${fmtPct(ps.cad_familias_pobreza, ps.cad_familias)} das cadastradas)</span></div>`);
+    }
+    if (ps.pbf_familias) {
+      const povos = [
+        ps.pbf_indigenas ? `${fmtN(ps.pbf_indigenas)} indígenas` : '',
+        ps.pbf_quilombolas ? `${fmtN(ps.pbf_quilombolas)} quilombolas` : '',
+      ].filter(Boolean).join(' · ');
+      rows.push(`<div>Bolsa Família: <b>${fmtN(ps.pbf_familias)}</b> famílias` +
+        (povos ? ` <span class="fx-dim">(${povos})</span>` : '') + '</div>');
+    }
+    if (ps.fomento_familias) {
+      rows.push(`<div>Fomento Rural: <b>${fmtN(ps.fomento_familias)}</b> ${ps.fomento_familias === 1 ? 'família atendida' : 'famílias atendidas'} <span class="fx-dim">(acumulado)</span></div>`);
+    }
+    const anoPaa = ps.periodos.paa?.slice(0, 4);
+    if (ps.paa_agricultores) {
+      rows.push(`<div>PAA ${esc(anoPaa)}: <b>${fmtN(ps.paa_agricultores)}</b> ${ps.paa_agricultores === 1 ? 'agricultor fornecedor' : 'agricultores fornecedores'}` +
+        (ps.paa_valor ? ` <span class="fx-dim">· ${fmtBRL(ps.paa_valor)} pagos</span>` : '') + '</div>');
+    } else if (anoPaa) {
+      rows.push(`<div class="fx-dim">Sem compras do PAA registradas em ${esc(anoPaa)}</div>`);
+    }
+    rows.push(`<div class="fx-dim">MI Social, ${esc(mes(ps.periodos.cadunico))}` +
+      (ps.n > 1 ? ` · soma de ${fmtN(ps.n)} municípios` : '') + '</div>');
+    return section('Proteção social · MDS', rows.join(''));
   },
 
   function seguranca({ info }) {
@@ -611,7 +653,7 @@ function ensurePanel() {
     <button class="fx-watch" type="button" aria-pressed="false" hidden>VIGIAR</button>
     <div class="fx-header"><div class="fx-nome"></div><div class="fx-meta"></div></div>
     <div class="fx-body"></div>
-    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · INCRA · SICAR/SFB · DataGeo PR</div>
+    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · INCRA · SICAR/SFB · MDS · DataGeo PR</div>
   `;
   document.body.appendChild(_panel);
   _panel.querySelector('.fx-close').addEventListener('click', closeFicha);
@@ -736,7 +778,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -744,8 +786,9 @@ export async function openFicha({ ibge, nome, info }) {
       getModulosFiscais([ibge]),
       getExtensionistas(nome),
       getSusaf([ibge]),
+      getProtecaoSocial([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps };
   });
 }
 
@@ -796,13 +839,14 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus] = await Promise.all([
+    const [ind, car, info, mod, sus, ps] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
       getModulosFiscais(ibges),
       getSusaf(ibges),
+      getProtecaoSocial(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus };
+    return { ficha: {}, info, car, ind, mod, sus, ps };
   });
 }
