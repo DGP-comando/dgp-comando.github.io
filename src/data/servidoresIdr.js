@@ -2,7 +2,8 @@
 //
 // Servidores do IDR-Paraná: /privado/servidores-idr.json, gravado de hora em
 // hora pela Edge Function datageo-servidores do c2-parana (SisPont + Portal
-// da Transparência, sem RG nem chefia). Bucket privado: só usuário liberado.
+// da Transparência, sem RG nem chefia; a relação mensal do RH, quando
+// publicada, manda em quadro, município, vínculo e cessão). Bucket privado: só usuário liberado.
 //
 // Usos: seção "Extensionistas · IDR" da ficha municipal e tooltip da camada
 // de estações/polos/unidades florestais (chave `unidade`).
@@ -42,7 +43,7 @@ const porNome = (a, b) => a.nome.localeCompare(b.nome, 'pt-BR');
 /**
  * Extensionistas lotados no município, agrupados por formação (a mais
  * numerosa primeiro; "não informada" por último).
- * @returns {{total: number, grupos: Array<{formacao: string, servidores: object[]}>, geradoEm: string}|null}
+ * @returns {{total: number, grupos: Array<{formacao: string, servidores: object[]}>, geradoEm: string, rh: string|null}|null}
  */
 export function extensionistasDoMunicipio(dados, municipio) {
   const alvo = normNome(municipio);
@@ -57,7 +58,7 @@ export function extensionistasDoMunicipio(dados, municipio) {
     .map(([formacao, servidores]) => ({ formacao, servidores: [...servidores].sort(porNome) }))
     .sort((a, b) => (!a.formacao) - (!b.formacao) || b.servidores.length - a.servidores.length
       || a.formacao.localeCompare(b.formacao, 'pt-BR'));
-  return { total: lista.length, grupos, geradoEm: dados.gerado_em };
+  return { total: lista.length, grupos, geradoEm: dados.gerado_em, rh: dados.fontes?.rh ?? null };
 }
 
 /** Servidores de uma ou mais unidades (chave `unidade`; "a,b" vira duas). */

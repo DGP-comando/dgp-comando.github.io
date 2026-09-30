@@ -27,6 +27,8 @@ test('extensionistas do município: só extensionistas, agrupados por formação
   assert.deepEqual(r.grupos.map((g) => g.formacao), ['Engenharia Agronômica', 'Zootecnia', '']);
   assert.deepEqual(r.grupos[0].servidores.map((s) => s.nome), ['ANA A', 'CARLA B']);
   assert.equal(r.geradoEm, DADOS.gerado_em);
+  assert.equal(r.rh, null);
+  assert.equal(extensionistasDoMunicipio({ ...DADOS, fontes: { rh: 'RH, Setembro/2026' } }, 'paranavai').rh, 'RH, Setembro/2026');
   assert.equal(extensionistasDoMunicipio(DADOS, 'Curitiba'), null);
   assert.equal(extensionistasDoMunicipio(null, 'Curitiba'), null);
 });

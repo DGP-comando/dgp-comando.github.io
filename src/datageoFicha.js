@@ -97,7 +97,7 @@ const SECTIONS = [
     return section('Extensionistas · IDR',
       `<div>Extensionistas no município: <b>${fmtN(ext.total)}</b></div>` +
       `<div class="fx-sub">${porFormacao}</div>` +
-      `<div class="fx-dim">IDR-SisPont + Portal da Transparência PR · nomes no escritório (camada Unidades do IDR)${hora ? ` · ${esc(hora)}` : ''}</div>`);
+      `<div class="fx-dim">IDR-SisPont + Portal da Transparência PR${ext.rh ? ` + ${esc(ext.rh)}` : ''} · nomes no escritório (camada Unidades do IDR)${hora ? ` · ${esc(hora)}` : ''}</div>`);
   },
 
   /** Adesão ao SUSAF-PR (mapa ADAPAR + lista de SIMs da SEAB). */
