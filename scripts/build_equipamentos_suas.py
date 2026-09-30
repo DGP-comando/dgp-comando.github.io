@@ -114,6 +114,10 @@ def main():
         feats.extend(ok)
     if len(feats) < 500:  # CRAS sozinhos passam de 500: menos que isso é API quebrada
         sys.exit(f'só {len(feats)} pontos: API mudou? arquivo não sobrescrito')
+    # Idempotente: só a data da consulta mudou -> não regrava (sem commit vazio no Actions).
+    if OUT.exists() and json.loads(OUT.read_text(encoding='utf-8')).get('features') == feats:
+        print(f'{len(feats)} pontos, sem mudança em {OUT.name}')
+        return
     gj = {'type': 'FeatureCollection', 'fonte': f'MDS · Mapa Social (SAGI), consulta {atualizado}', 'features': feats}
     OUT.write_text(json.dumps(gj, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     print(f'{len(feats)} pontos -> {OUT.name}')
