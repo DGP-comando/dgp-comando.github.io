@@ -88,6 +88,44 @@ export function cellFeatures(payload, key, index, groupsKey = 'classes', groupPr
   return { features, lines };
 }
 
+function dentroDoAnel(ring, x, y) {
+  let dentro = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) dentro = !dentro;
+  }
+  return dentro;
+}
+
+/** Área de um anel em hectares (graus -> metros na latitude do anel). */
+export function areaAnelHa(ring) {
+  let s = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    s += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+  }
+  const m = 111_320;
+  return (Math.abs(s / 2) * m * m * Math.cos((ring[0][1] * Math.PI) / 180)) / 10_000;
+}
+
+/**
+ * O imóvel do CAR que contém (lon, lat): o MENOR anel, entre as features de
+ * divisas (MultiLineString de anéis, `cellFeatures`), que contém o ponto.
+ * Imóveis do CAR se sobrepõem; o menor é o mais provável de ser o da família.
+ * @returns {{ring: number[][], classe: string|null, ha: number} | null}
+ */
+export function anelQueContem(features, lon, lat) {
+  let best = null;
+  for (const f of features ?? []) {
+    for (const ring of f?.geometry?.coordinates ?? []) {
+      if (ring.length < 4 || !dentroDoAnel(ring, lon, lat)) continue;
+      const ha = areaAnelHa(ring);
+      if (!best || ha < best.ha) best = { ring, classe: f.properties?.classe ?? null, ha };
+    }
+  }
+  return best;
+}
+
 /**
  * Células existentes que cruzam o bbox [w, s, e, n], das mais próximas do
  * centro do bbox (ou de `center` = [lon, lat]) para as mais distantes, até `cap`.

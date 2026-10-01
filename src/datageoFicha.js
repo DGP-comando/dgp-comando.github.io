@@ -23,6 +23,9 @@ import { mesAno } from './data/cadunicoRural.js';
 import { getExtensionistas } from './data/servidoresIdr.js';
 import { getSusaf } from './data/susaf.js';
 import { gerenteDaRegional, getGerentes } from './data/gerentesIdr.js';
+import { getOutorgasMunicipios } from './maplibre/layers/outorgas.js';
+import { getCaf } from './data/cafFamilias.js';
+import { secaoCaf } from './datageoCaf.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -273,6 +276,11 @@ const SECTIONS = [
     return section('População · IBGE', rows.join(''));
   },
 
+  /** CAF do MDA (bucket privado): contagem, série, renda e perfil. Município e regional. */
+  function caf({ caf }) {
+    return secaoCaf(caf);
+  },
+
   /**
    * Proteção social (MDS · MI Social): CadÚnico, Bolsa Família e as duas
    * políticas do MDS voltadas ao agricultor (Fomento Rural e PAA). Cada
@@ -505,6 +513,24 @@ const SECTIONS = [
     return section('Clima histórico · BR-DWGD', rows.join(''));
   },
 
+  /**
+   * Outorgas de uso da água vigentes do IAT (SIGARH + CRH), por tipo, ao vivo
+   * do GeoPR. Município e regional (a consulta soma a lista de IBGEs).
+   */
+  function outorgas({ out }) {
+    if (!out) return null;
+    if (!out.total) return section('Outorgas de água · IAT', '<div>Nenhuma outorga vigente no IAT</div>');
+    const maior = Math.max(...out.linhas.map((l) => l.n));
+    const barras = out.linhas.map((l) => (
+      `<div class="fx-bar-row"><span class="fx-bar-label fx-bar-label-wide" title="${esc(l.label)}">${esc(l.curto)}</span>` +
+        `<span class="fx-bar-track"><span class="fx-bar-fill" style="width:${Math.round((l.n / maior) * 100)}%;background:${l.color}"></span></span>` +
+        `<span class="fx-bar-val fx-bar-val-wide">${fmtN(l.n)}</span></div>`
+    ));
+    return section('Outorgas de água · IAT',
+      `<div>Outorgas vigentes: <b>${fmtN(out.total)}</b></div>${barras.join('')}` +
+      `<div class="fx-dim">IAT/GeoPR · SIGARH ${fmtN(out.sigarh)} + CRH ${fmtN(out.crh)} · inclui usos independentes de outorga · consulta ao vivo · pontos na camada Outorgas de uso da água</div>`);
+  },
+
   function hidro({ ficha }) {
     const rios = Array.isArray(ficha.rios) ? ficha.rios : [];
     const cemaden = Array.isArray(ficha.cemaden) ? ficha.cemaden : [];
@@ -685,7 +711,7 @@ function ensurePanel() {
     <button class="fx-watch" type="button" aria-pressed="false" hidden>VIGIAR</button>
     <div class="fx-header"><div class="fx-nome"></div><div class="fx-meta"></div></div>
     <div class="fx-body"></div>
-    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · INCRA · SICAR/SFB · MDS · DataGeo PR</div>
+    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · INCRA · SICAR/SFB · MDA · MDS · IAT · DataGeo PR</div>
   `;
   document.body.appendChild(_panel);
   _panel.querySelector('.fx-close').addEventListener('click', closeFicha);
@@ -810,7 +836,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -820,8 +846,10 @@ export async function openFicha({ ibge, nome, info }) {
       getSusaf([ibge]),
       getProtecaoSocial([ibge]),
       getGerentes(),
+      getOutorgasMunicipios([ibge]),
+      getCaf([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf };
   });
 }
 
@@ -872,7 +900,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, caf] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -880,7 +908,34 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getSusaf(ibges),
       getProtecaoSocial(ibges),
       getGerentes(),
+      getOutorgasMunicipios(ibges),
+      getCaf(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, caf };
   });
+}
+
+/**
+ * Painel da ficha com conteúdo próprio (cadastro de uma família do CAF):
+ * `carregar()` devolve o HTML do corpo.
+ */
+export async function openPainel({ nome, meta, carregar }) {
+  const panel = ensurePanel();
+  const seq = ++_requestSeq;
+  panel.classList.add('open');
+  if (_current) {
+    _current = null;
+    anunciarSelecao();
+  }
+  syncWatchButton();
+  panel.querySelector('.fx-nome').textContent = nome;
+  panel.querySelector('.fx-meta').textContent = meta;
+  const body = panel.querySelector('.fx-body');
+  body.innerHTML = '<div class="fx-loading">Carregando o cadastro…</div>';
+  try {
+    const html = await carregar();
+    if (seq === _requestSeq) body.innerHTML = html || '<div class="fx-loading">Cadastro não encontrado.</div>';
+  } catch (err) {
+    if (seq === _requestSeq) body.innerHTML = `<div class="fx-loading">Falha ao carregar: ${esc(err?.message)}</div>`;
+  }
 }

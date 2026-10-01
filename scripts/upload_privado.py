@@ -1,8 +1,10 @@
 """Sobe data/privado/* para o bucket privado datageo-privado (Supabase Storage).
 
 O front le esses arquivos por /privado/<nome> (dgFetchData), so com usuario
-liberado. Rodar depois de regerar qualquer um deles:
-  SUPABASE_SERVICE_ROLE_KEY=... py -3 scripts/upload_privado.py
+liberado. Subpastas viram prefixo no bucket (data/privado/caf/x.json ->
+caf/x.json). Rodar depois de regerar qualquer um deles; com argumentos, so os
+caminhos (relativos a data/privado) que comecam por eles:
+  SUPABASE_SERVICE_ROLE_KEY=... py -3 scripts/upload_privado.py [caf-municipios.json caf/ ...]
 """
 import mimetypes
 import os
@@ -20,13 +22,18 @@ DO_SERVIDOR = {'servidores-idr.json'}
 
 def main():
     key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or sys.exit('SUPABASE_SERVICE_ROLE_KEY ausente')
-    arquivos = sorted(p for p in PASTA.iterdir() if p.is_file() and p.name not in DO_SERVIDOR)
+    filtro = sys.argv[1:]
+    arquivos = sorted(
+        p for p in PASTA.rglob('*')
+        if p.is_file() and p.name not in DO_SERVIDOR
+        and (not filtro or any(p.relative_to(PASTA).as_posix().startswith(f) for f in filtro))
+    )
     if not arquivos:
         sys.exit(f'nada em {PASTA}')
     for p in arquivos:
         tipo = 'application/geo+json' if p.suffix == '.geojson' else mimetypes.guess_type(p.name)[0]
         req = urllib.request.Request(
-            f'{SUPABASE_URL}/storage/v1/object/{BUCKET}/{p.name}',
+            f'{SUPABASE_URL}/storage/v1/object/{BUCKET}/{p.relative_to(PASTA).as_posix()}',
             data=p.read_bytes(),
             method='POST',
             headers={
@@ -38,7 +45,7 @@ def main():
             },
         )
         with urllib.request.urlopen(req, timeout=120) as r:
-            print(f'{p.name}: {p.stat().st_size // 1024} KB -> HTTP {r.status}')
+            print(f'{p.relative_to(PASTA).as_posix()}: {p.stat().st_size // 1024} KB -> HTTP {r.status}')
 
 
 if __name__ == '__main__':

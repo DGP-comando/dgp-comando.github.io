@@ -26,7 +26,7 @@ import { loadCadunicoRural } from '../../data/cadunicoRural.js';
 import { defineLayer, EMPTY_FC, TEXT_FONT, zoomForHeight } from '../kit.js';
 import { loadMunicipiosInfo, MUNICIPIOS_URL } from './municipios.js';
 import {
-  buildTerritorioFeatures, cellFeatures, createCursorMunicipio, wantedCells,
+  anelQueContem, buildTerritorioFeatures, cellFeatures, createCursorMunicipio, wantedCells,
 } from './territoriosFeatures.js';
 
 // Contexto dos tooltips: município sob o cursor (UCs, TIs, CAR) e, nas
@@ -294,6 +294,21 @@ function createCarLoader() {
       await refresh();
       return ix.trechos;
     },
+    /**
+     * Imóvel do CAR que contém (lon, lat), carregando sob demanda a célula do
+     * ponto e as vizinhas (o anel mora na célula do seu vértice central).
+     */
+    async imovelEm(lon, lat) {
+      const ix = await loadIndex();
+      const i = Math.floor(lat / ix.cell_deg);
+      const j = Math.floor(lon / ix.cell_deg);
+      const keys = [];
+      for (let di = -1; di <= 1; di++) {
+        for (let dj = -1; dj <= 1; dj++) if (ix.cells[`${i + di}_${j + dj}`]) keys.push(`${i + di}_${j + dj}`);
+      }
+      await Promise.all(keys.map(loadCell));
+      return anelQueContem(keys.flatMap((k) => cells.get(k)?.features ?? []), lon, lat);
+    },
     stats() {
       let lines = 0;
       for (const c of cells.values()) lines += c.lines;
@@ -358,6 +373,8 @@ export const carLayer = defineLayer({
 });
 
 export const carStats = () => car.stats();
+/** Imóvel do CAR (menor anel) que contém o ponto, ou null. */
+export const carImovelEm = (lon, lat) => car.imovelEm(lon, lat);
 
 // ------------------------------------------------------------------ export
 

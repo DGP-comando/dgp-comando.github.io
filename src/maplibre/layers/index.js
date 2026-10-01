@@ -14,13 +14,14 @@ import conectividadeRadios from './conectividadeRadios.js';
 import gradesClima from './gradesClima.js';
 import contextoGev from './contextoGev.js';
 import outorgas from './outorgas.js';
+import caf from './caf.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-ucs-federais',
   'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-regionais-idr', 'datageo-estacoes-idr', 'datageo-unidades-idr',
   'datageo-associacoes', 'datageo-equipamentos-suas',
-  'datageo-car',
+  'datageo-car', 'datageo-caf',
   'datageo-clima', 'datageo-rios', 'datageo-cemaden', 'datageo-irtc', 'datageo-dengue', 'datageo-ar',
   'datageo-anomalias', 'datageo-incidentes', 'datageo-infohidro', 'datageo-maritimo',
   'datageo-ferrovias', 'datageo-rodovias', 'datageo-estradas', 'datageo-estradas-conveniadas',
@@ -44,6 +45,7 @@ const all = [
   ...gradesClima,
   ...contextoGev,
   ...outorgas,
+  ...caf,
 ];
 
 const rank = (id) => {
