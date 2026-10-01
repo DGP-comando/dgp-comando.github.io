@@ -10,6 +10,8 @@ import { LAYER_STATE_REGISTRY } from './layerState.js';
 import { pointFeatures } from '../maplibre/layers/energiaLogistica.js';
 import { faxinalPontoEstilo, faxinalPontoTooltip, faxinaisLayer, FAXINAL_LEGENDA } from '../maplibre/layers/faxinais.js';
 import { LAYERS } from '../maplibre/layers/index.js';
+import { faxinaisPorMunicipio } from './faxinais.js';
+import { aresurTexto, faxinaisTexto, municipioTooltipHtml } from './municipioTooltip.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (name) => JSON.parse(fs.readFileSync(path.join(ROOT, 'public', 'data', name), 'utf8'));
@@ -90,4 +92,23 @@ test('camadas no painel e no share link', () => {
     assert.ok(LAYER_STATE_REGISTRY.find((e) => e.id === id), `${id} sem token`);
   }
   assert.equal(faxinaisLayer.category, 'Limites');
+});
+
+test('tooltip do município: total do inventário 2010 e ARESUR dos perímetros atuais', () => {
+  const por = faxinaisPorMunicipio(read('faxinais-pr.geojson'), read('faxinais-territorios-pr.geojson'));
+  assert.equal(Object.values(por).reduce((a, m) => a + m.total, 0), 227);
+  const aresurPerimetros = read('faxinais-territorios-pr.geojson').features.filter((f) => f.properties.aresur === 'Sim').length;
+  assert.equal(Object.values(por).reduce((a, m) => a + m.aresur, 0), aresurPerimetros);
+  // Pinhão: ARESUR de 2013 (Bom Retiro, São Roquinho), ausentes do tipo dos pontos de 2010.
+  assert.equal(por['4119301'].aresur, 2);
+  assert.equal(faxinaisTexto({ total: 15, aresur: 2 }), '15');
+  assert.equal(aresurTexto({ total: 15, aresur: 2 }), '2 faxinais');
+  assert.equal(aresurTexto({ total: 3, aresur: 1 }), '1 faxinal');
+  assert.equal(aresurTexto({ total: 3, aresur: 0 }), '');
+  assert.equal(faxinaisTexto(undefined), '');
+  const com = municipioTooltipHtml('Pinhão', null, null, false, por['4119301']);
+  assert.match(com, /Faxinais \(IAT, 2010\)/);
+  assert.match(com, /<dt>ARESUR \(IAT\)<\/dt><dd[^>]*>2 faxinais<\/dd>/);
+  assert.match(com, /IAT\/GeoPR/);
+  assert.doesNotMatch(municipioTooltipHtml('Curitiba', null, null, false, undefined), /Faxinais|ARESUR/);
 });

@@ -2,11 +2,12 @@
 //
 // Municípios do PR no protótipo: os 399 polígonos com divisa ciano brilhante,
 // hover que destaca e mostra o tooltip (prefeito, VBP, cadeia, fontes
-// protegidas) só quando nenhuma camada ligada está sob o cursor (a base cede o
+// protegidas, faxinais) só quando nenhuma camada ligada está sob o cursor (a base cede o
 // hover), clique que abre a ficha municipal (src/datageoFicha.js) e destaque
 // do município selecionado.
 
 import { openFicha } from '../../datageoFicha.js';
+import { loadFaxinaisMunicipios } from '../../data/faxinais.js';
 import { loadFontes } from '../../data/fontesProtegidas.js';
 import { municipioTooltipHtml } from '../../data/municipioTooltip.js';
 import { defineLayer, LABEL_PAINT, TEXT_FONT } from '../kit.js';
@@ -30,8 +31,10 @@ export function loadMunicipiosInfo() {
 // vêm do bucket privado: sem sessão a linha some e tenta de novo depois.
 let infoTip = null;
 let fontesTip = null;
+let faxinaisTip = null;
 function carregaTooltip() {
   if (!infoTip) loadMunicipiosInfo().then((i) => { infoTip = i; });
+  if (!faxinaisTip) loadFaxinaisMunicipios().then((f) => { faxinaisTip = f; });
   if (!fontesTip) loadFontes().then((f) => { fontesTip = f; });
 }
 
@@ -117,9 +120,11 @@ export const municipiosLayer = defineLayer({
     return 399;
   },
   tooltip: (p) => {
-    if (!fontesTip) carregaTooltip(); // login depois do boot
+    if (!fontesTip || !faxinaisTip) carregaTooltip(); // login depois do boot, ou falha de rede
     const ibge = String(p.CD_MUN);
-    return municipioTooltipHtml(p.NM_MUN, infoTip?.municipios?.[ibge], fontesTip?.municipios?.[ibge], Boolean(fontesTip));
+    return municipioTooltipHtml(
+      p.NM_MUN, infoTip?.municipios?.[ibge], fontesTip?.municipios?.[ibge], Boolean(fontesTip), faxinaisTip?.[ibge],
+    );
   },
   click: (p) => {
     openMunicipioFicha(p.CD_MUN, p.NM_MUN);

@@ -2,7 +2,8 @@
 /**
  * qa-faxinais — faxinais do IAT (dado público):
  *   1. a camada de pontos carrega os 227 faxinais e o hover mostra nome, município e situação;
- *   2. a camada de perímetros carrega um polígono por faxinal e o hover mostra a resolução ARESUR.
+ *   2. a camada de perímetros carrega um polígono por faxinal e o hover mostra a resolução ARESUR;
+ *   3. sem camada ligada, o tooltip do município traz a contagem de faxinais.
  *
  * Uso: node scripts/qa-faxinais.mjs [--url http://localhost:5173] [--shot arquivo.png]
  */
@@ -51,6 +52,22 @@ const { browser, page, errors } = await launchQaBrowser({
 try {
   await openApp(page, url);
   await page.keyboard.press('Escape');
+
+  // 0. Tooltip do município (nenhuma camada sob o cursor): total do inventário
+  // e ARESUR dos perímetros. Inácio Martins (sem ARESUR) e Pinhão (2 ARESUR de 2013).
+  const pinhao = PONTOS.find((f) => f.properties.ibge === '4119301');
+  for (const f of [isolado, pinhao]) {
+    const { ibge, municipio } = f.properties;
+    const [lon, lat] = f.geometry.coordinates;
+    const total = PONTOS.filter((o) => o.properties.ibge === ibge).length;
+    const aresur = POLIS.filter((o) => o.properties.ibge === ibge && o.properties.aresur === 'Sim').length;
+    const esperado = `Faxinais (IAT, 2010)${total}${aresur ? `ARESUR (IAT)${aresur} faxina` : ''}`;
+    await setCamera(page, { lon, lat, alt: 60_000 });
+    await waitMapIdle(page, 60_000);
+    const tm = await hoverTooltip(page, lon, lat, /Faxinais/);
+    check(`tooltip do município (${municipio}): faxinais e ARESUR`, tm.includes(esperado) && tm.includes(municipio),
+      { tm: tm.slice(0, 300), esperado });
+  }
 
   await setLayer(page, 'datageo-faxinais', true);
   const pts = await waitForStats(page, 'datageo-faxinais', 's => s.count > 0 || s.error', 120_000);
