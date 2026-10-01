@@ -156,14 +156,14 @@ function encode(state) {
 
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  // 16 camadas de contexto do GEV (em ordem alfabética) seguidas das 44 do
+  // 16 camadas de contexto do GEV (em ordem alfabética) seguidas das 46 do
   // DataGeo (prefixo datageo-, na ordem em que os tokens foram atribuídos).
   const gev = REGISTERED_LAYER_IDS.filter((id) => !id.startsWith('datageo-'));
   const datageo = REGISTERED_LAYER_IDS.filter((id) => id.startsWith('datageo-'));
   assert.equal(gev.length, 16);
-  assert.equal(datageo.length, 44);
-  assert.equal(REGISTERED_LAYER_IDS.length, 60);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 60);
+  assert.equal(datageo.length, 46);
+  assert.equal(REGISTERED_LAYER_IDS.length, 62);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 62);
   assert.deepEqual(gev, [...gev].sort());
   assert.deepEqual(REGISTERED_LAYER_IDS, [...gev, ...datageo]);
   assert.throws(
@@ -231,10 +231,10 @@ test('v2 codec distinguishes absent from empty and keeps canonical deterministic
 });
 
 test('unknown enabled-layer tokens reject the payload instead of becoming an empty set', () => {
-  // 'Z' esta fora do registry (o espaco foi estendido a A-Z em 2026-08-26 e
-  // 'z' minusculo, o token original deste teste, passou a ser atribuido).
-  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=Z')), null);
-  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=c.Z')), null);
+  // Os 62 tokens [a-zA-Z0-9] estao todos atribuidos desde 2026-10-01 ('Z'
+  // virou datageo-faxinais-territorios): 'ZZ' nao existe no registry.
+  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=ZZ')), null);
+  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=c.ZZ')), null);
 });
 
 test('unknown and forbidden option fields are ignored while missing options use codec defaults', () => {

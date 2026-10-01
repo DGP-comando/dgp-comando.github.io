@@ -40,6 +40,9 @@ export const nomeTi = (p) => `${String(p.nome).startsWith('TI ') ? '' : 'TI '}${
 const fmtFamilias = (n) => (Number(n) > 0 ? ` · ${Math.round(n).toLocaleString('pt-BR')} famílias` : '');
 export const plural = (n, um, varios) => `${n} ${n === 1 ? um : varios}`;
 
+/** Cor dos faxinais: perímetros (territorios.js) e pontos do inventário (faxinais.js). */
+export const COR_FAXINAL = '#fcd34d';
+
 /**
  * "RESERVA BIOLÓGICA DAS PEROBAS" -> "Reserva Biológica das Perobas": o CNUC
  * grava em caixa alta, e rótulo em caixa alta no globo pesa demais.
@@ -266,6 +269,29 @@ export function ucTooltip(p, x) {
   });
 }
 
+const ARESUR_TOM = { Sim: 'ok', 'Em análise': 'warn' };
+
+/** Perímetro de faxinal (IAT): território inscrito no CAR ou perímetro ARESUR. */
+export function faxinalTooltip(p) {
+  const resolucao = p.resolucao ? `Resolução SEMA ${p.resolucao}` : '';
+  return tipCard({
+    icon: '🌳',
+    title: tituloProprio(p.nome),
+    subtitle: `Faxinal${p.municipio ? ` · ${p.municipio}` : ''}`,
+    badge: p.aresur ? { text: p.aresur === 'Sim' ? 'ARESUR' : `ARESUR ${p.aresur.toLocaleLowerCase('pt-BR')}`, tone: ARESUR_TOM[p.aresur] ?? 'info' } : null,
+    rows: [
+      ['Perímetro', p.base === 'CAR' ? `${p.perimetro} (CAR)` : p.perimetro],
+      ['Área mapeada', areaTxt(p.area_ha)],
+      ['Área na resolução', haTxt(p.area_resolucao_ha)],
+      ['Imóvel no CAR', haTxt(p.area_imovel_ha)],
+      ['ARESUR', resolucao || (p.aresur === 'Sim' ? 'reconhecido, sem resolução na base' : '')],
+      ['Recibo do CAR', p.recibo_car],
+    ],
+    note: p.obs,
+    source: 'IAT/GeoPR · Limites Faxinais e ARESUR (Decreto 3.446/1997)',
+  });
+}
+
 export function regionalIdrTooltip(p, x) {
   const ibges = p.municipios ?? [];
   return tipCard({
@@ -340,6 +366,19 @@ export const TERRITORIO_SPECS = Object.freeze({
     tooltipOf: assentamentoTooltip,
     labelMaxDist: 80_000,
     cadunico: { grupo: 'assentamentos', chave: (p) => p.codigo },
+  },
+  // Perímetros do IAT: os 30 territórios do CAR (com a situação na ARESUR) e
+  // os perímetros ARESUR sem território correspondente (build_faxinais.py).
+  faxinais: {
+    id: 'datageo-faxinais-territorios',
+    name: 'Faxinais · territórios (IAT)',
+    icon: '🌳',
+    source: 'IAT/GeoPR · ARESUR',
+    url: '/data/faxinais-territorios-pr.geojson',
+    cssColor: COR_FAXINAL,
+    labelOf: (p) => `${tituloProprio(p.nome)}${fmtHa(p.area_ha)}`,
+    labelMaxDist: 120_000,
+    tooltipOf: faxinalTooltip,
   },
   ucsFederais: {
     id: 'datageo-ucs-federais',

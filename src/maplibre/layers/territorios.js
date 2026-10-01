@@ -384,6 +384,7 @@ export default [
   territorioLayer(S.terrasIndigenas),
   territorioLayer(S.quilombolas),
   territorioLayer(S.assentamentos),
+  territorioLayer(S.faxinais),
   territorioLayer(S.ucsFederais),
   territorioLayer(S.ucsEstaduais),
   territorioLayer(S.regionaisIdr, { onClick: (p) => openFichaRegiao(fichaRegionalIdr(p)) }),

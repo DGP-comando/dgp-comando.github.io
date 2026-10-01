@@ -21,8 +21,8 @@ const square = (x, y, s = 1) => [[x, y], [x + s, y], [x + s, y + s], [x, y + s],
 
 test('camadas na ordem e com os ids/categorias do app', () => {
   assert.deepEqual(layers.map((l) => l.id), [
-    'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-ucs-federais',
-    'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-associacoes', 'datageo-car',
+    'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-faxinais-territorios',
+    'datageo-ucs-federais', 'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-associacoes', 'datageo-car',
   ]);
   const cat = Object.fromEntries(layers.map((l) => [l.id, l.category]));
   assert.equal(cat['datageo-terras-indigenas'], 'Limites');

@@ -17,10 +17,12 @@ import outorgas from './outorgas.js';
 import caf from './caf.js';
 import cafPj from './cafPj.js';
 import fontesProtegidas from './fontesProtegidas.js';
+import faxinais from './faxinais.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
-  'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-ucs-federais',
+  'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-faxinais-territorios',
+  'datageo-faxinais', 'datageo-ucs-federais',
   'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-fontes-protegidas', 'datageo-regionais-idr', 'datageo-estacoes-idr', 'datageo-unidades-idr',
   'datageo-associacoes', 'datageo-equipamentos-suas',
   'datageo-car', 'datageo-caf', 'datageo-caf-pj',
@@ -50,6 +52,7 @@ const all = [
   ...caf,
   ...cafPj,
   ...fontesProtegidas,
+  ...faxinais,
 ];
 
 const rank = (id) => {
