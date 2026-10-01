@@ -44,6 +44,18 @@ try {
     check('tooltip com sistema e tipo', /IAT · (SIGARH|CRH)/.test(txt), txt.slice(0, 300));
     check('tooltip sem mojibake', !/�/.test(txt), txt.slice(0, 300));
   }
+  // CRH: efluente (Café Iguaçu, Cornélio Procópio) e hidrelétrica (Salto Apucaraninha).
+  for (const [grupo, lon, lat, re] of [['efl', -50.6374, -23.1808, /Lançamento de efluentes/], ['hid', -50.9092, -23.7503, /MW/]]) {
+    await setCamera(page, { lon, lat, alt: 6_000 });
+    await waitMapIdle(page, 60_000);
+    let g = null;
+    for (let i = 0; i < 40 && !g; i++) {
+      g = await interactiveFeature(page, 'datageo-outorgas', { grupo, sistema: 'CRH' });
+      if (!g) await sleep(500);
+    }
+    const txt = g ? await hoverTooltip(page, g.lon, g.lat, re) : '';
+    check(`CRH ${grupo}: ponto e tooltip`, re.test(txt), txt.slice(0, 300) || g);
+  }
   if (shot) await page.screenshot({ path: shot });
   check('sem erros de página', errors.length === 0, errors.slice(0, 5));
 } finally {
