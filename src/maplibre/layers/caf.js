@@ -12,7 +12,7 @@
 //
 // Tudo do bucket privado (LGPD): sem usuário liberado a camada não carrega.
 
-import { CAF_CORES, loadCafFamilias, loadCafPontos, periodo } from '../../data/cafFamilias.js';
+import { CAF_CORES, loadCafFamilias, loadCafPj, loadCafPontos, periodo, pjsPorFamilia } from '../../data/cafFamilias.js';
 import { familiaHtml } from '../../datageoCaf.js';
 import { openPainel } from '../../datageoFicha.js';
 import { EMPTY_FC, defineLayer, fc, fmtInt, fmtNum, tipCard } from '../kit.js';
@@ -25,6 +25,7 @@ const LOCAL = ['ok', 'corrigida', 'fora_municipio'];
 
 let dados = null; // caf-pontos.json
 let legenda = [];
+let porFamilia = null; // nr_caf PF -> PJs de que é sócia (caf-pj.json)
 let selecao = 0; // clique mais recente: resposta atrasada de outro clique não redesenha
 
 /** Features dos pontos (id = índice da linha em `p`) e contagem por grupo. */
@@ -136,14 +137,17 @@ export default [defineLayer({
       meta: `CAF ${f.caf} · MDA ${periodo(dados.referencia)} · acesso restrito`,
       carregar: async () => {
         const ligado = ctx.isOn('datageo-car');
-        const [mun, imovel] = await Promise.all([
+        const [mun, imovel, pj] = await Promise.all([
           loadCafFamilias(f.ibge),
           ligado ? carImovelEm(f.lon, f.lat).catch(() => null) : null,
+          loadCafPj(),
         ]);
         const fam = mun?.familias?.[f.caf];
         if (!fam) return null;
         if (meu === selecao && ctx.isOn('datageo-caf')) destacar(ctx, f, imovel);
-        return familiaHtml(fam, { car: { ligado, imovel }, grupos: dados.grupos, grupo: f.g });
+        porFamilia ??= pj ? pjsPorFamilia(pj) : null;
+        const pjs = porFamilia?.get(f.caf) ?? [];
+        return familiaHtml(fam, { car: { ligado, imovel }, grupos: dados.grupos, grupo: f.g, pjs });
       },
     });
   },

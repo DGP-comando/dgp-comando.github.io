@@ -4,7 +4,9 @@
  *   1. a camada carrega um ponto por família e o hover mostra nome e renda;
  *   2. com o CAR ligado, o clique abre o cadastro completo no painel e destaca
  *      o imóvel do CAR que contém o ponto;
- *   3. a ficha municipal e a regional trazem "Agricultura familiar · CAF".
+ *   3. a ficha municipal e a regional trazem "Agricultura familiar · CAF";
+ *   4. CAF jurídicas: um ponto por entidade e, no clique, a rede até as
+ *      famílias sócias no mapa e o painel com os sócios.
  * O bucket privado é servido de data/privado/ (interceptação), porque o dev
  * roda sem login. Requer as saídas de scripts/build_caf.py.
  *
@@ -21,6 +23,7 @@ const PRIVADO = new URL('../data/privado/', import.meta.url);
 const ler = (rel) => JSON.parse(readFileSync(new URL(rel, PRIVADO), 'utf8'));
 const PONTOS = ler('caf-pontos.json');
 const MUN = ler('caf-municipios.json');
+const PJ = ler('caf-pj.json');
 const IBGE = '4117909'; // Palotina
 const REGIONAL = JSON.parse(readFileSync(new URL('../public/data/regionais-idr-pr.geojson', import.meta.url), 'utf8'))
   .features.find((f) => f.properties.regional === 'Toledo').properties;
@@ -127,6 +130,37 @@ try {
   const reg = await secaoCaf();
   check('ficha regional: agregado da regional', reg.includes(alvo),
     reg.slice(0, 300));
+  check('ficha: linha das CAF jurídicas', /CAF jurídicas com sede aqui/.test(reg), reg.match(/CAF jurídicas[^·]*/)?.[0]);
+
+  // 4. CAF jurídicas: entidade geocodificada com poucas famílias sócias no mapa.
+  await page.keyboard.press('Escape');
+  await setLayer(page, 'datageo-car', false);
+  await setLayer(page, 'datageo-caf-pj', true);
+  const { stats: spj } = await waitForStats(page, 'datageo-caf-pj', 's => s.count > 0 || s.error', 120_000);
+  check('CAF jurídicas: um ponto por entidade', spj?.count === PJ.pj.length, { spj, esperado: PJ.pj.length });
+  const ent = PJ.pj.find((p) => p.precisao === 'rua' && p.familias_no_mapa >= 5 && p.familias_no_mapa <= 60);
+  await setCamera(page, { lon: ent.lon, lat: ent.lat, alt: 3_000 });
+  await waitMapIdle(page, 60_000);
+  const tpj = await hoverTooltip(page, ent.lon, ent.lat, /Famílias sócias/);
+  check('CAF jurídica: hover', /Famílias sócias/.test(tpj), tpj.slice(0, 200));
+  const ppj = await page.evaluate((lo, la) => {
+    const { engine } = window.__godsEyeView;
+    const q = engine.project(lo, la);
+    const r = engine.container.getBoundingClientRect();
+    return { x: r.left + q.x, y: r.top + q.y };
+  }, ent.lon, ent.lat);
+  await page.mouse.click(ppj.x, ppj.y);
+  await page.waitForFunction(() => /Famílias sócias com CAF PF/.test(document.querySelector('#datageo-ficha')?.textContent ?? ''),
+    { timeout: 60_000 }).catch(() => {});
+  await sleep(1500);
+  const painelPj = await fichaTexto();
+  const linhas = await page.evaluate(() => window.__godsEyeView.engine.map.querySourceFeatures('dg-caf-rede')
+    .filter((f) => f.geometry.type === 'LineString').length);
+  check('CAF jurídica: painel com sócios', painelPj.includes(`Famílias sócias com CAF PF: ${fmt(ent.familias.length)}`), painelPj.slice(0, 300));
+  check('CAF jurídica: linhas até as famílias sócias', linhas >= ent.familias_no_mapa, { linhas, esperado: ent.familias_no_mapa });
+  await page.mouse.move(5, 450);
+  await sleep(500);
+  if (shot) await page.screenshot({ path: shot.replace(/\.png$/, '-pj.png') });
   check('sem erros de página', errors.length === 0, errors.slice(0, 5));
 } finally {
   await browser.close();

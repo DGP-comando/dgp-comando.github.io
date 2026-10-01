@@ -93,6 +93,11 @@ export function secaoCaf(c) {
   rows.push(`<div class="fx-sub">Declarante até o 5º ano ou sem escolaridade ${pct(c.escol_baixa, ativas)} · ` +
     `não proprietários ${pct(c.nao_prop, ativas)} · aposentadoria/pensão ${pct(c.aposent, ativas)} · Bolsa Família ${n(c.bolsa ?? 0)}</div>`);
   rows.push(`<div class="fx-sub">CAFs emitidas pelo IDR: ${pct(c.idr, ativas)}</div>`);
+  if (c.pj) {
+    const tipos = Object.entries(c.pj.tipos).filter(([, v]) => v).map(([t, v]) => `${n(v)} ${esc(t.toLowerCase())}`);
+    rows.push(`<div class="fx-sub">CAF jurídicas com sede aqui: <b>${n(c.pj.total)}</b>${tipos.length ? ` (${tipos.join(' · ')})` : ''} · ` +
+      `famílias sócias de alguma: <b>${n(c.pj.associadas)}</b> (${pct(c.pj.associadas, ativas)})</div>`);
+  }
   rows.push(`<div class="fx-dim">MDA · CAF PF, extração de ${data(meta.referencia)} x ${data(meta.anterior)} (acesso restrito) · ` +
     `medianas; ${ant} corrigido pelo IPCA (+${n((meta.ipca - 1) * 100, 1)}%) · famílias na camada Agricultura familiar (CAF)</div>`);
   return section('Agricultura familiar · CAF (MDA)', rows.filter(Boolean).join(''));
@@ -157,7 +162,7 @@ export function carHtml(car, areaCaf) {
 }
 
 /** Cadastro completo de uma família (painel do clique). */
-export function familiaHtml(f, { car = null, grupos = [], grupo = null } = {}) {
+export function familiaHtml(f, { car = null, grupos = [], grupo = null, pjs = [] } = {}) {
   const out = [];
   if (f.alertas?.length) out.push(section('Conferir', f.alertas.map((a) => `<div class="fx-warn">${esc(a)}</div>`).join('')));
 
@@ -172,6 +177,11 @@ export function familiaHtml(f, { car = null, grupos = [], grupo = null } = {}) {
     producaoHtml(f.producao.filter((p) => p.dentro), 'Dentro do estabelecimento') +
     producaoHtml(f.producao.filter((p) => !p.dentro), 'Fora do estabelecimento')));
 
+  if (pjs.length) {
+    out.push(section(`Sócia de CAF jurídica (${pjs.length})`, pjs.map((p) =>
+      `<div><b>${esc(p.fantasia || p.razao)}</b> <span class="fx-dim">· ${esc(p.tipo)} · ${esc(p.endereco?.municipio)}</span></div>`).join('') +
+      '<div class="fx-dim">Ligue a camada CAF jurídicas e clique na entidade para ver os demais sócios</div>'));
+  }
   out.push(section(`Membros da família (${f.membros.length})`, f.membros.map(membroHtml).join('')));
 
   const e = f.endereco;
@@ -193,5 +203,56 @@ export function familiaHtml(f, { car = null, grupos = [], grupo = null } = {}) {
     f.areas.map(areaHtml).join('') +
     kv('Ponto no mapa', loc.lat !== null && loc.lat !== undefined ? `${loc.lat}, ${loc.lon} · ${situacao}` : situacao) +
     carHtml(car, r.ha)));
+  return out.join('');
+}
+
+// ------------------------------------------------------------ CAF jurídica
+
+const cnpjFmt = (c) => (/^\d{14}$/.test(String(c))
+  ? String(c).replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5') : esc(c));
+const PRECISAO = {
+  rua: 'endereço (rua)', cep: 'CEP', assentamento: 'assentamento do INCRA citado no endereço',
+  sede: 'aproximada, sede urbana do município', municipio: 'aproximada, município da sede',
+};
+const MAX_LISTA = 300;
+
+/**
+ * Painel de uma CAF jurídica. `nomes`: nr_caf PF -> nome do declarante
+ * (caf-pontos); `filiadas`: PJs filiadas (centrais).
+ */
+export function pjHtml(p, { nomes = new Map(), filiadas = [] } = {}) {
+  const out = [];
+  const e = p.endereco ?? {};
+  const r = p.responsavel;
+  out.push(section('Entidade',
+    kv('Tipo', esc(p.tipo)) +
+    kv('CNPJ', cnpjFmt(p.cnpj)) +
+    kv('Razão social', esc(p.razao)) +
+    kv('Constituição · inscrição · validade', `${data(p.constituicao)} · ${data(p.inscricao)} · <b>${data(p.validade)}</b>`) +
+    kv('Emissor', esc(p.emissor)) +
+    kv('Cadastrado por', esc(p.cadastrador)) +
+    kv('Responsável', r ? `${esc(r.nome)} · ${cpfFmt(r.cpf)}${r.nome_t ? ` · técnico ${esc(r.nome_t)}` : ''}` : '') +
+    p.contatos.map((c) => kv('Contato', [esc(c.email), c.telefone ? tel(c.telefone) : ''].filter(Boolean).join(' · '))).join('') +
+    kv('Endereço', esc([e.logradouro, e.numero && e.numero !== '0' ? e.numero : '', e.complemento, e.municipio, e.cep]
+      .filter(Boolean).join(', '))) +
+    kv('Localização', esc(PRECISAO[p.precisao] ?? p.precisao))));
+
+  const sem = p.socios_sem_caf.length;
+  const falhas = Object.entries(p.falhas ?? {}).map(([erro, k]) => `<div class="fx-warn">${n(k)} · ${esc(erro)}</div>`).join('');
+  out.push(section('Sócios',
+    `<div>Famílias sócias com CAF PF: <b>${n(p.familias.length)}</b> · no mapa <b>${n(p.familias_no_mapa)}</b> ` +
+    '<span class="fx-dim">(destacadas com linhas até a entidade)</span></div>' +
+    (sem ? `<div class="fx-sub">Sócios pessoa física sem CAF PF localizada: ${n(sem)}</div>` : '') +
+    (falhas ? `<div class="fx-sub" style="margin-top:6px">Recusados pelo MDA</div>${falhas}` : '')));
+
+  if (filiadas.length) {
+    out.push(section(`Entidades filiadas (${filiadas.length})`, filiadas.map((f) =>
+      `<div>${esc(f.fantasia || f.razao)} <span class="fx-dim">· ${esc(f.tipo)} · ${esc(f.endereco?.municipio)} · ${n(f.familias.length)} famílias</span></div>`).join('')));
+  }
+  const lista = p.familias.slice(0, MAX_LISTA).map((k) => `<div>${esc(nomes.get(k) || '(sem ponto no mapa)')} <span class="fx-dim">· CAF ${esc(k)}</span></div>`);
+  const resto = p.familias.length - lista.length;
+  out.push(section('Famílias sócias', lista.join('') +
+    (resto > 0 ? `<div class="fx-dim">… e mais ${n(resto)}</div>` : '') +
+    (sem ? `<div class="fx-sub" style="margin-top:6px">Sem CAF PF</div>${p.socios_sem_caf.slice(0, MAX_LISTA).map((s) => `<div>${esc(s)}</div>`).join('')}` : '')));
   return out.join('');
 }

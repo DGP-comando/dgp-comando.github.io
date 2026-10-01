@@ -93,3 +93,49 @@ test('vínculo com o CAR: destacado, ausente ou camada desligada', () => {
   assert.match(carHtml({ ligado: true, imovel: null }), /Nenhum imóvel do CAR/);
   assert.match(carHtml({ ligado: false }), /Ligue a camada CAR/);
 });
+
+import { pjsPorFamilia, resumoPj } from './cafFamilias.js';
+import { pjHtml } from '../datageoCaf.js';
+import { extensao, pjFeatures, redeFeatures } from '../maplibre/layers/cafPj.js';
+
+const PJ = {
+  tipos: ['Associação', 'Cooperativa Singular', 'Cooperativa Central', 'Empreendimento Familiar'],
+  pj: [
+    { caf: '1', tipo: 'Cooperativa Central', razao: 'CENTRAL', lon: -50, lat: -25, familias: ['10'], filiadas: ['2'], socios_sem_caf: [], precisao: 'rua' },
+    { caf: '2', tipo: 'Cooperativa Singular', razao: 'COOP <X>', fantasia: '', lon: -51, lat: -24, familias: ['10', '11', '99'], filiadas: [], socios_sem_caf: ['FULANO'], precisao: 'municipio',
+      cnpj: '14103680000183', contatos: [{ email: 'a@b.c', telefone: '4699375045' }], endereco: { municipio: 'Toledo' }, falhas: { 'CPF sem CAF': 2 }, familias_no_mapa: 2 },
+  ],
+  municipios: { 4100103: { pj: { Associação: 1 }, associadas: 5 }, 4100202: { pj: { 'Cooperativa Singular': 2 }, associadas: 3 } },
+};
+const PONTOS = new Map([['10', [-50.1, -25.1, 'ANA']], ['11', [-51.1, -24.1, 'BETO']]]);
+
+test('CAF PJ: resumo por município soma e índice família -> entidades', () => {
+  const r = resumoPj(PJ, ['4100103', '4100202', '4100301']);
+  assert.equal(r.total, 3);
+  assert.equal(r.associadas, 8);
+  assert.equal(r.tipos['Cooperativa Singular'], 2);
+  assert.deepEqual(pjsPorFamilia(PJ).get('10').map((p) => p.caf), ['1', '2']);
+  assert.equal(pjsPorFamilia(PJ).get('99').length, 1);
+});
+
+test('CAF PJ: pontos por tipo e rede até sócios e filiadas', () => {
+  const { features, counts } = pjFeatures(PJ);
+  assert.deepEqual(counts, [0, 1, 1, 0]);
+  assert.equal(features[1].properties.aprox, 1);
+  const rede = redeFeatures(PJ.pj[0], PJ.pj, PONTOS);
+  // central -> família 10, central -> filiada, filiada -> 10 e 11 (99 sem ponto fica fora)
+  assert.equal(rede.filter((f) => f.geometry.type === 'LineString').length, 4);
+  assert.deepEqual(rede.filter((f) => f.properties.nivel === 2).length, 1);
+  assert.deepEqual(extensao(rede), [[-51.1, -25.1], [-50, -24]]);
+});
+
+test('CAF PJ: painel escapa, formata CNPJ e lista sócios', () => {
+  const html = pjHtml(PJ.pj[1], { nomes: new Map([['10', 'ANA']]) });
+  assert.match(html, /14\.103\.680\/0001-83/);
+  assert.match(html, /COOP &lt;X&gt;/);
+  assert.match(html, /aproximada, município da sede/);
+  assert.match(html, /ANA <span class="fx-dim">· CAF 10/);
+  assert.match(html, /\(sem ponto no mapa\)/);
+  assert.match(html, /FULANO/);
+  assert.match(html, /2 · CPF sem CAF/);
+});

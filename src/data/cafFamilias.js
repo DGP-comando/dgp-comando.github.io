@@ -7,6 +7,8 @@
 //   caf-municipios.json  agregados por município, regional IDR e estado
 //   caf-pontos.json      um ponto por família (camada)
 //   caf/<ibge>.json      cadastro completo das famílias do município (clique)
+//   caf-pj.json          CAF jurídicas, sócios (nr_caf PF) e resumo por município
+//                        (scripts/build_caf_pj.py)
 
 import { dgFetchData } from './datageoClient.js';
 
@@ -22,6 +24,9 @@ export const CAF_CORES = Object.freeze([
   '#a78bfa', // Outras atividades
   '#94a3b8', // Só renda de fora
 ]);
+
+/** Cor de cada tipo de CAF PJ, na ordem de `tipos` do build_caf_pj. */
+export const PJ_CORES = Object.freeze(['#38bdf8', '#e879f9', '#fb7185', '#fbbf24']);
 
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
@@ -45,6 +50,32 @@ function cacheado(url) {
 
 export const loadCafMunicipios = cacheado('/privado/caf-municipios.json');
 export const loadCafPontos = cacheado('/privado/caf-pontos.json');
+export const loadCafPj = cacheado('/privado/caf-pj.json');
+
+/** Soma o resumo de PJ dos municípios (PJ com sede ali por tipo e famílias sócias). null sem dado. */
+export function resumoPj(pj, ibges) {
+  const itens = (ibges ?? []).map((c) => pj?.municipios?.[String(c)]).filter(Boolean);
+  if (!pj || !(ibges ?? []).length) return null;
+  const tipos = Object.fromEntries((pj.tipos ?? []).map((t) => [t, 0]));
+  let associadas = 0;
+  for (const it of itens) {
+    for (const [t, n] of Object.entries(it.pj ?? {})) tipos[t] = (tipos[t] ?? 0) + n;
+    associadas += it.associadas ?? 0;
+  }
+  return { tipos, total: Object.values(tipos).reduce((a, b) => a + b, 0), associadas };
+}
+
+/** nr_caf PF -> PJs de que a família é sócia. */
+export function pjsPorFamilia(pj) {
+  const m = new Map();
+  for (const p of pj?.pj ?? []) {
+    for (const k of p.familias) {
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(p);
+    }
+  }
+  return m;
+}
 
 const porMunicipio = new Map();
 /** Cadastro completo das famílias de um município: {familias: {nr_caf: {...}}} ou null. */
@@ -68,11 +99,11 @@ export function recorteCaf(dados, ibges) {
 
 /** Agregado + metadados (referência, IPCA, grupos) para a ficha; null sem dado. */
 export async function getCaf(ibges) {
-  const dados = await loadCafMunicipios();
+  const [dados, pj] = await Promise.all([loadCafMunicipios(), loadCafPj()]);
   const r = recorteCaf(dados, ibges);
   if (!r) return null;
   const { referencia, anterior, ipca, vence_dias: venceDias, grupos } = dados;
-  return { ...r, meta: { referencia, anterior, ipca, venceDias, grupos } };
+  return { ...r, pj: resumoPj(pj, ibges), meta: { referencia, anterior, ipca, venceDias, grupos } };
 }
 
 /** Variação % entre a e b (null se não der para calcular). */
