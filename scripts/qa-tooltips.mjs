@@ -2,8 +2,8 @@
 /**
  * qa-tooltips — o tooltip do anfitrião (#dg-tooltip) aparece e a camada de
  * municípios (camada-base, quase sempre ligada) não esconde as de baixo:
- *   1. só municípios: o hover destaca sem tooltip (a base é só clicável) e o
- *      clique abre a ficha do município;
+ *   1. só municípios: o hover mostra o tooltip do município (prefeito, VBP,
+ *      fontes protegidas) e o clique abre a ficha do município;
  *   2. com terras indígenas / assentamentos / regionais / associações ligadas,
  *      o hover sobre um polígono delas mostra o tooltip DELAS (não o do município);
  *   3. clique sobre assentamento (sem clique próprio) segue abrindo a ficha
@@ -91,13 +91,14 @@ try {
   // Anula só essa regra, como num desktop com mouse.
   await page.addStyleTag({ content: '#dg-tooltip:not([hidden]) { display: block !important; }' });
 
-  // 1. Só municípios: sem tooltip, cursor de clique, clique abre a ficha.
+  // 1. Só municípios: tooltip do município, cursor de clique, clique abre a ficha.
   await setCamera(page, { lon: -51.5, lat: -24.7, alt: 900_000 });
   await waitMapIdle(page);
   const base = await pixelOver('datageo-municipios');
   const tipBase = base ? await hoverAt(base) : null;
   const cursor = await page.evaluate(() => window.__godsEyeView.engine.map.getCanvas().style.cursor);
-  check('município sem tooltip, com cursor de clique', base && !tipBase && cursor === 'pointer', { tip: tipBase?.text, cursor });
+  check('município com tooltip próprio e cursor de clique', base && /Clique para abrir a ficha/.test(tipBase?.text ?? '') && cursor === 'pointer',
+    { tip: tipBase?.text, cursor });
   if (base) {
     await page.mouse.click(base.x, base.y);
     await sleep(800);

@@ -3,7 +3,8 @@
  * qa-fontes-protegidas — fontes protegidas do IDR (bucket privado):
  *   1. a camada carrega um ponto por fonte e o hover mostra produtor e tipo;
  *   2. o clique numa fonte ligada à CAF abre o cadastro da família, que cita a fonte;
- *   3. a ficha municipal traz "Proteção de fontes · IDR".
+ *   3. a ficha municipal traz "Proteção de fontes · IDR";
+ *   4. o tooltip do município traz a contagem de fontes.
  * Bucket privado servido de data/privado/ (interceptação), como no qa-caf.
  *
  * Uso: node scripts/qa-fontes-protegidas.mjs [--url http://localhost:5173] [--shot arquivo.png]
@@ -42,6 +43,13 @@ page.on('request', (req) => {
 try {
   await openApp(page, url);
   await page.keyboard.press('Escape');
+
+  // 0. Tooltip do município (sem outra camada sob o cursor): contagem de fontes.
+  await setCamera(page, { lon: LON, lat: LAT, alt: 60_000 });
+  await waitMapIdle(page, 60_000);
+  const tmun = await hoverTooltip(page, LON, LAT, /Fontes protegidas/);
+  check('tooltip do município: fontes protegidas', tmun.includes(`Fontes protegidas (IDR)${fmt(F.municipios[IBGE].total)}`), tmun.slice(0, 250));
+
   await setLayer(page, 'datageo-fontes-protegidas', true);
   const { stats } = await waitForStats(page, 'datageo-fontes-protegidas', 's => s.count > 0 || s.error', 120_000);
   check('camada carrega um ponto por fonte', stats?.count === F.p.length, { stats, esperado: F.p.length });

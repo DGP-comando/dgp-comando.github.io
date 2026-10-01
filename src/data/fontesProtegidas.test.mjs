@@ -36,3 +36,15 @@ test('fontes: pontos por tipo, vazado fora do município e vínculo com a famíl
   assert.match(html, /Construção Junho 2023/);
   assert.match(html, /Água Boa/);
 });
+
+import { fontesTexto, municipioTooltipHtml } from './municipioTooltip.js';
+
+test('tooltip do município: fontes protegidas só com o dado carregado', () => {
+  assert.equal(fontesTexto(D.municipios['4100103'], true), '3 (2 construção · 1 reforma)');
+  assert.equal(fontesTexto(undefined, true), 'nenhuma');
+  assert.equal(fontesTexto(D.municipios['4100103'], false), '');
+  const html = municipioTooltipHtml('Abatiá', { prefeito: 'Fulano', partido: 'X', cadeia: 'Soja' }, D.municipios['4100103'], true);
+  assert.match(html, /Abatiá/);
+  assert.match(html, /Fontes protegidas \(IDR\)/);
+  assert.doesNotMatch(municipioTooltipHtml('Abatiá', null, null, false), /Fontes protegidas/);
+});

@@ -1,11 +1,14 @@
 // src/maplibre/layers/municipios.js
 //
 // Municípios do PR no protótipo: os 399 polígonos com divisa ciano brilhante,
-// hover que só destaca (sem tooltip: a camada-base não cobre o tooltip das
-// camadas de baixo; prefeito/VBP/cadeia estão na ficha), clique que abre a
-// ficha municipal (src/datageoFicha.js) e destaque do município selecionado.
+// hover que destaca e mostra o tooltip (prefeito, VBP, cadeia, fontes
+// protegidas) só quando nenhuma camada ligada está sob o cursor (a base cede o
+// hover), clique que abre a ficha municipal (src/datageoFicha.js) e destaque
+// do município selecionado.
 
 import { openFicha } from '../../datageoFicha.js';
+import { loadFontes } from '../../data/fontesProtegidas.js';
+import { municipioTooltipHtml } from '../../data/municipioTooltip.js';
 import { defineLayer, LABEL_PAINT, TEXT_FONT } from '../kit.js';
 
 export const MUNICIPIOS_URL = '/data/municipios-pr.geojson';
@@ -21,6 +24,15 @@ export function loadMunicipiosInfo() {
       return null;
     });
   return infoPromise;
+}
+
+// Dados do tooltip, carregados uma vez (o hover é síncrono). Fontes protegidas
+// vêm do bucket privado: sem sessão a linha some e tenta de novo depois.
+let infoTip = null;
+let fontesTip = null;
+function carregaTooltip() {
+  if (!infoTip) loadMunicipiosInfo().then((i) => { infoTip = i; });
+  if (!fontesTip) loadFontes().then((f) => { fontesTip = f; });
 }
 
 export async function openMunicipioFicha(ibge, nome) {
@@ -100,7 +112,15 @@ export const municipiosLayer = defineLayer({
   interactive: ['dg-municipios-fill'],
   underlay: true,
   hoverState: 'dg-municipios',
-  count: async () => 399,
+  count: async () => {
+    carregaTooltip();
+    return 399;
+  },
+  tooltip: (p) => {
+    if (!fontesTip) carregaTooltip(); // login depois do boot
+    const ibge = String(p.CD_MUN);
+    return municipioTooltipHtml(p.NM_MUN, infoTip?.municipios?.[ibge], fontesTip?.municipios?.[ibge], Boolean(fontesTip));
+  },
   click: (p) => {
     openMunicipioFicha(p.CD_MUN, p.NM_MUN);
   },

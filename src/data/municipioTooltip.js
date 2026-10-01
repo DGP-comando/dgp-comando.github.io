@@ -1,8 +1,10 @@
 // src/data/municipioTooltip.js
 //
-// HTML do tooltip de hover dos municípios (prefeito, VBP, cadeia líder), sem
-// dependência de engine: usado pela camada Cesium (datageoMunicipios.js) e pelo
-// protótipo MapLibre. As classes .mt-* são estilizadas por quem mostra.
+// Tooltip de hover dos municípios (camada-base): prefeito, VBP, cadeia líder
+// e fontes protegidas pelo IDR. Só aparece quando nenhuma camada ligada está
+// sob o cursor (a base cede o hover, ver layerHost.hoverHit).
+
+import { fmtInt, tipCard } from '../maplibre/tooltipCard.js';
 
 const fmtBRL = (reais) => {
   if (reais >= 1e9) return `R$ ${(reais / 1e9).toFixed(1).replace('.', ',')} bi`;
@@ -10,36 +12,30 @@ const fmtBRL = (reais) => {
   return `R$ ${Math.round(reais).toLocaleString('pt-BR')}`;
 };
 
-export function municipioTooltipHtml(nome, info) {
-  const lines = [`<div class="mt-nome">${nome}</div>`];
+/** Texto das fontes protegidas: '' sem acesso ao dado, 'nenhuma' sem fonte. */
+export function fontesTexto(fontes, carregado) {
+  if (!carregado) return '';
+  if (!fontes?.total) return 'nenhuma';
+  const tipos = Object.entries(fontes.tipos ?? {}).map(([t, n]) => `${fmtInt(n)} ${t.toLowerCase()}`).join(' · ');
+  return `${fmtInt(fontes.total)}${tipos ? ` (${tipos})` : ''}`;
+}
 
-  if (info?.prefeito) {
-    lines.push(`Prefeito: ${info.prefeito} <span class="mt-dim">(${info.partido})</span>`);
-  } else {
-    lines.push('Prefeito: <span class="mt-dim">—</span>');
-  }
-
-  if (info?.vbp) {
-    const { anoA, anoB, valB, deltaPct } = info.vbp;
-    const up = deltaPct >= 0;
-    const arrow = up ? '▲' : '▼';
-    const cls = up ? 'mt-up' : 'mt-down';
-    const pct = `${up ? '+' : ''}${String(deltaPct).replace('.', ',')}%`;
-    lines.push(
-      `VBP ${anoA.slice(2)}→${anoB.slice(2)}: ` +
-        `<span class="${cls}">${arrow} ${pct}</span> ` +
-        `<span class="mt-dim">(${fmtBRL(valB)})</span>`,
-    );
-  } else {
-    lines.push('VBP: <span class="mt-dim">sem dado</span>');
-  }
-
-  if (info?.cadeia) {
-    lines.push(`Cadeia líder: ${info.cadeia}`);
-  }
-
-  lines.push(
-    '<div class="mt-fontes">Clique para abrir a ficha completa<br/>TSE 2024 · VBP SEAB/DERAL 24-25</div>',
-  );
-  return lines.join('<br/>').replace('<br/><div class="mt-fontes">', '<div class="mt-fontes">');
+/**
+ * `info`: entrada de municipios-info.json; `fontes`: entrada do município em
+ * fontes-protegidas.json; `fontesCarregadas`: o arquivo privado veio (logado).
+ */
+export function municipioTooltipHtml(nome, info, fontes = null, fontesCarregadas = false) {
+  const vbp = info?.vbp;
+  return tipCard({
+    icon: '🏛️',
+    title: nome,
+    rows: [
+      ['Prefeito', info?.prefeito ? `${info.prefeito} (${info.partido})` : ''],
+      ['VBP', vbp ? `${fmtBRL(vbp.valB)} em ${vbp.anoB} (${vbp.deltaPct >= 0 ? '▲ +' : '▼ '}${String(vbp.deltaPct).replace('.', ',')}%)` : ''],
+      ['Cadeia líder', info?.cadeia ?? ''],
+      ['Fontes protegidas (IDR)', fontesTexto(fontes, fontesCarregadas)],
+    ],
+    note: 'Clique para abrir a ficha completa',
+    source: 'TSE 2024 · SEAB/DERAL · IDR-Paraná',
+  });
 }
