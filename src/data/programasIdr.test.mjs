@@ -135,3 +135,32 @@ test('grupo Programas IDR: ícone próprio por camada e contorno próprio por pr
   assert.equal(contornos.length, 4);
   assert.equal(new Set(contornos).size, 4, contornos.join(' '));
 });
+
+test('tooltip do município: URs por programa, sem o desligado', async () => {
+  const { ursPorMunicipio } = await import('./programasIdr.js');
+  const { municipioTooltipHtml, ursTexto } = await import('./municipioTooltip.js');
+  const pt = (ibge, extra = {}) => ({ properties: { ibge, ...extra } });
+  const por = ursPorMunicipio([
+    { features: [pt('4113700'), pt('4113700'), pt('')] },
+    { features: [pt('4113700')] },
+    null,
+    { features: [pt('4102307', { 'Observação': 'Produtor foi desligado do Programa.' }), pt('4102307')] },
+  ]);
+  assert.deepEqual(por['4113700'], { total: 3, programas: { 'Grãos': 2, 'Café': 1 } });
+  assert.deepEqual(por['4102307'], { total: 1, programas: { 'Pecuária de Corte': 1 } });
+  assert.equal(ursTexto(por['4113700']), '3 (Grãos 2 · Café 1)');
+  assert.equal(ursTexto(undefined), '');
+  assert.match(municipioTooltipHtml('Londrina', null, null, false, null, por['4113700']),
+    /<dt>URs dos programas \(IDR\)<\/dt><dd[^>]*>3 \(Grãos 2 · Café 1\)<\/dd>/);
+  assert.doesNotMatch(municipioTooltipHtml('Curitiba', null, null, false, null, undefined), /URs dos programas/);
+});
+
+test('dado real: soma das URs por município bate com os pontos ativos', { skip: !PONTOS.every(([a]) => existsSync(PRIV(a))) }, async () => {
+  const { ursPorMunicipio } = await import('./programasIdr.js');
+  const colecoes = PONTOS.map(([a]) => ({ features: real(a) }));
+  const ativos = colecoes.flatMap((c) => c.features)
+    .filter((f) => f.properties.ibge && !/desligad/i.test(f.properties['Observação'] ?? '')).length;
+  const por = ursPorMunicipio(colecoes);
+  assert.equal(Object.values(por).reduce((a, m) => a + m.total, 0), ativos);
+  assert.ok(ativos >= 340, `só ${ativos} URs ativas`);
+});

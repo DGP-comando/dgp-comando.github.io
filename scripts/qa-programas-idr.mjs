@@ -7,7 +7,8 @@
  *      traz a contagem de cada grupo igual à dos dados;
  *   3. o hover num ponto isolado abre o tooltip com produtor e município acentuados;
  *   4. o uso do solo das queijarias carrega os polígonos e o hover mostra classe,
- *      área e imóvel do CAR.
+ *      área e imóvel do CAR;
+ *   5. sem camada ligada, o tooltip do município traz a contagem de URs por programa.
  * O bucket privado é servido de data/privado/ (interceptação de
  * /storage/v1/object/authenticated/datageo-privado/*), porque o dev roda sem
  * login. Requer os arquivos de scripts/build_urs_programas.py.
@@ -19,9 +20,11 @@ import {
   argValue, createReport, hoverTooltip, launchQaBrowser, openApp, setCamera, setLayer, sleep, waitForStats, waitMapIdle,
 } from './lib/qaBrowser.mjs';
 import {
-  CAFE_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, cafeEstilo, graosEstilo, pecuariaEstilo,
+  CAFE_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, cafeEstilo, coordenadaConferida, graosEstilo, pecuariaEstilo,
   pisciculturaEstilo,
 } from '../src/data/programasIdrEstilos.js';
+import { ursPorMunicipio } from '../src/data/programasIdr.js';
+import { ursTexto } from '../src/data/municipioTooltip.js';
 
 const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
 const shot = argValue('--shot', '');
@@ -103,6 +106,21 @@ try {
   for (const id of PROGRAMAS) check(`${id} sob "Programas IDR"`, grupoDe[id] === 'Programas IDR', grupoDe[id]);
   check('Logística agro sem programas do IDR', grupoDe['datageo-armazens'] === 'Logística agro'
     && !PROGRAMAS.some((id) => grupoDe[id] === 'Logística agro'), { armazens: grupoDe['datageo-armazens'] });
+
+  // 5. Tooltip do município (nenhuma camada ligada): o município com mais
+  // programas, hover num ponto dele com coordenada conferida.
+  const porMun = ursPorMunicipio(PONTOS.map(({ arq }) => ({ features: ler(arq) })));
+  const [ibgeMun, urs] = Object.entries(porMun)
+    .sort((a, b) => Object.keys(b[1].programas).length - Object.keys(a[1].programas).length || b[1].total - a[1].total)[0];
+  const alvoMun = PONTOS.flatMap(({ arq }) => ler(arq))
+    .find((f) => f.properties.ibge === ibgeMun && coordenadaConferida(f.properties));
+  const [mlon, mlat] = alvoMun.geometry.coordinates;
+  await setCamera(page, { lon: mlon, lat: mlat, alt: 60_000 });
+  await waitMapIdle(page, 60_000);
+  const tm = await hoverTooltip(page, mlon, mlat, /URs dos programas/);
+  const esperadoMun = `URs dos programas (IDR)${ursTexto(urs)}`;
+  check(`tooltip do município (${alvoMun.properties['Município']}): ${ursTexto(urs)}`,
+    tm.includes(esperadoMun) && tm.includes(alvoMun.properties['Município']), { tm: tm.slice(0, 400), esperadoMun });
 
   // 2 e 3. Pontos: contagem, legenda e tooltip.
   for (const { id, arq, estilo, legenda } of PONTOS) {
