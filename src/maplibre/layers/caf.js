@@ -14,6 +14,7 @@
 
 import { CAF_CORES, loadCafFamilias, loadCafPj, loadCafPontos, periodo, pjsPorFamilia } from '../../data/cafFamilias.js';
 import { familiaHtml } from '../../datageoCaf.js';
+import { fontesPorFamilia, loadFontes } from '../../data/fontesProtegidas.js';
 import { openPainel } from '../../datageoFicha.js';
 import { EMPTY_FC, defineLayer, fc, fmtInt, fmtNum, tipCard } from '../kit.js';
 import { carImovelEm } from './territorios.js';
@@ -25,6 +26,8 @@ const LOCAL = ['ok', 'corrigida', 'fora_municipio'];
 
 let dados = null; // caf-pontos.json
 let legenda = [];
+let fontesDe = null; // nr_caf PF -> fontes protegidas
+let tiposFonte = [];
 let porFamilia = null; // nr_caf PF -> PJs de que é sócia (caf-pj.json)
 let selecao = 0; // clique mais recente: resposta atrasada de outro clique não redesenha
 
@@ -129,27 +132,47 @@ export default [defineLayer({
   },
   click: (_p, feature, ctx) => {
     const f = linha(feature?.id);
-    if (!f) return;
-    const meu = ++selecao;
-    destacar(ctx, f, null);
-    openPainel({
-      nome: f.nome || `CAF ${f.caf}`,
-      meta: `CAF ${f.caf} · MDA ${periodo(dados.referencia)} · acesso restrito`,
-      carregar: async () => {
-        const ligado = ctx.isOn('datageo-car');
-        const [mun, imovel, pj] = await Promise.all([
-          loadCafFamilias(f.ibge),
-          ligado ? carImovelEm(f.lon, f.lat).catch(() => null) : null,
-          loadCafPj(),
-        ]);
-        const fam = mun?.familias?.[f.caf];
-        if (!fam) return null;
-        if (meu === selecao && ctx.isOn('datageo-caf')) destacar(ctx, f, imovel);
-        porFamilia ??= pj ? pjsPorFamilia(pj) : null;
-        const pjs = porFamilia?.get(f.caf) ?? [];
-        return familiaHtml(fam, { car: { ligado, imovel }, grupos: dados.grupos, grupo: f.g, pjs });
-      },
-    });
+    if (f) abrirFamilia(f, ctx);
   },
   rowControls: () => ({ legend: legenda }),
 })];
+
+/** Cadastro da família no painel; destaque no mapa só com a camada CAF ligada. */
+function abrirFamilia(f, ctx) {
+  const meu = ++selecao;
+  if (ctx.isOn('datageo-caf')) destacar(ctx, f, null);
+  openPainel({
+    nome: f.nome || `CAF ${f.caf}`,
+    meta: `CAF ${f.caf} · MDA ${periodo(dados.referencia)} · acesso restrito`,
+    carregar: async () => {
+      const ligado = ctx.isOn('datageo-car');
+      const [mun, imovel, pj, fontes] = await Promise.all([
+        loadCafFamilias(f.ibge),
+        ligado ? carImovelEm(f.lon, f.lat).catch(() => null) : null,
+        loadCafPj(),
+        loadFontes(),
+      ]);
+      if (fontes && !fontesDe) {
+        fontesDe = fontesPorFamilia(fontes);
+        tiposFonte = fontes.tipos;
+      }
+      const fam = mun?.familias?.[f.caf];
+      if (!fam) return null;
+      if (meu === selecao && ctx.isOn('datageo-caf')) destacar(ctx, f, imovel);
+      porFamilia ??= pj ? pjsPorFamilia(pj) : null;
+      const pjs = porFamilia?.get(f.caf) ?? [];
+      return familiaHtml(fam, {
+        car: { ligado, imovel }, grupos: dados.grupos, grupo: f.g, pjs, fontes: fontesDe?.get(f.caf) ?? [], tiposFonte,
+      });
+    },
+  });
+}
+
+/** Abre o cadastro da família pelo nº da CAF PF (de outra camada); false se não houver ponto. */
+export async function abrirFamiliaCaf(caf, ctx) {
+  dados ??= await loadCafPontos();
+  const id = dados?.p?.findIndex((r) => String(r[2]) === String(caf)) ?? -1;
+  const f = id >= 0 ? linha(id) : null;
+  if (f) abrirFamilia(f, ctx);
+  return Boolean(f);
+}

@@ -162,7 +162,7 @@ export function carHtml(car, areaCaf) {
 }
 
 /** Cadastro completo de uma família (painel do clique). */
-export function familiaHtml(f, { car = null, grupos = [], grupo = null, pjs = [] } = {}) {
+export function familiaHtml(f, { car = null, grupos = [], grupo = null, pjs = [], fontes = [], tiposFonte = [] } = {}) {
   const out = [];
   if (f.alertas?.length) out.push(section('Conferir', f.alertas.map((a) => `<div class="fx-warn">${esc(a)}</div>`).join('')));
 
@@ -181,6 +181,11 @@ export function familiaHtml(f, { car = null, grupos = [], grupo = null, pjs = []
     out.push(section(`Sócia de CAF jurídica (${pjs.length})`, pjs.map((p) =>
       `<div><b>${esc(p.fantasia || p.razao)}</b> <span class="fx-dim">· ${esc(p.tipo)} · ${esc(p.endereco?.municipio)}</span></div>`).join('') +
       '<div class="fx-dim">Ligue a camada CAF jurídicas e clique na entidade para ver os demais sócios</div>'));
+  }
+  if (fontes.length) {
+    out.push(section(`Fonte protegida pelo IDR (${fontes.length})`, fontes.map(([, , , comunidade, , t, ano, mes]) =>
+      `<div>${esc(tiposFonte[t] ?? '')} ${esc([mes, ano].filter(Boolean).join(' '))}${comunidade ? ` <span class="fx-dim">· ${esc(comunidade)}</span>` : ''}</div>`).join('') +
+      '<div class="fx-dim">Solo-cimento para captação · camada Fontes protegidas</div>'));
   }
   out.push(section(`Membros da família (${f.membros.length})`, f.membros.map(membroHtml).join('')));
 

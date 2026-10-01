@@ -25,6 +25,7 @@ import { getSusaf } from './data/susaf.js';
 import { gerenteDaRegional, getGerentes } from './data/gerentesIdr.js';
 import { getOutorgasMunicipios } from './maplibre/layers/outorgas.js';
 import { getCaf } from './data/cafFamilias.js';
+import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
 
 const esc = (t) =>
@@ -531,6 +532,22 @@ const SECTIONS = [
       `<div class="fx-dim">IAT/GeoPR · SIGARH ${fmtN(out.sigarh)} + CRH ${fmtN(out.crh)} · inclui usos independentes de outorga · consulta ao vivo · pontos na camada Outorgas de uso da água</div>`);
   },
 
+  /** Fontes protegidas pelo IDR (solo-cimento para captação), por tipo e ano. */
+  function fontesProtegidas({ fontes }) {
+    if (!fontes) return null;
+    const fonteRef = 'IDR-Paraná · Proteção de Fontes, planilha de ' + fontes.referencia.split('-').reverse().join('/');
+    if (!fontes.total) {
+      return section('Proteção de fontes · IDR', `<div>Nenhuma fonte protegida na planilha</div><div class="fx-dim">${esc(fonteRef)}</div>`);
+    }
+    const tipos = Object.entries(fontes.tipos).map(([t, n]) => `${fmtN(n)} ${esc(t.toLowerCase())}`).join(' · ');
+    const anos = Object.entries(fontes.porAno).sort(([a], [b]) => a.localeCompare(b)).slice(-6)
+      .map(([a, n]) => `${esc(a)} <b>${fmtN(n)}</b>`).join(' · ');
+    return section('Proteção de fontes · IDR',
+      `<div>Fontes protegidas: <b>${fmtN(fontes.total)}</b> <span class="fx-dim">(${tipos})</span></div>` +
+      (anos ? `<div class="fx-sub">Últimos anos: ${anos}</div>` : '') +
+      `<div class="fx-dim">${esc(fonteRef)} · nascentes com solo-cimento para captação · pontos na camada Fontes protegidas</div>`);
+  },
+
   function hidro({ ficha }) {
     const rios = Array.isArray(ficha.rios) ? ficha.rios : [];
     const cemaden = Array.isArray(ficha.cemaden) ? ficha.cemaden : [];
@@ -711,7 +728,7 @@ function ensurePanel() {
     <button class="fx-watch" type="button" aria-pressed="false" hidden>VIGIAR</button>
     <div class="fx-header"><div class="fx-nome"></div><div class="fx-meta"></div></div>
     <div class="fx-body"></div>
-    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · INCRA · SICAR/SFB · MDA · MDS · IAT · DataGeo PR</div>
+    <div class="fx-fontes">SEAB/DERAL · IBGE · SINESP · TSE 2024 · InfoDengue · FIRMS · INMET · BR-DWGD · ANA · CEMADEN · AQICN · INCRA · SICAR/SFB · MDA · MDS · IAT · IDR · DataGeo PR</div>
   `;
   document.body.appendChild(_panel);
   _panel.querySelector('.fx-close').addEventListener('click', closeFicha);
@@ -836,7 +853,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -848,8 +865,9 @@ export async function openFicha({ ibge, nome, info }) {
       getGerentes(),
       getOutorgasMunicipios([ibge]),
       getCaf([ibge]),
+      getFontes([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes };
   });
 }
 
@@ -900,7 +918,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, caf] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, caf, fontes] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -910,8 +928,9 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getGerentes(),
       getOutorgasMunicipios(ibges),
       getCaf(ibges),
+      getFontes(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, caf };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, caf, fontes };
   });
 }
 
