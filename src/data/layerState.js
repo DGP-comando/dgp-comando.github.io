@@ -17,12 +17,13 @@ const PENDING_TRACKING_POLL_MS = 1_000;
  */
 const TRACKING_ID_GRAMMAR = /^[0-9a-z~_-]{1,16}$/;
 /**
- * Ceilings for the untrusted v2 layer fields. Both are far above any legitimate
- * payload (16 one-character tokens; a dozen short option assignments), so a
- * value past them is malformed or hostile. Reject the WHOLE payload, matching
- * the unknown-token rule — never salvage a prefix.
+ * Ceilings for the untrusted v2 layer fields. Both are above any legitimate
+ * payload (every registered layer at once, with two-character tokens, is ~140
+ * chars; a dozen short option assignments), so a value past them is malformed
+ * or hostile. Reject the WHOLE payload, matching the unknown-token rule —
+ * never salvage a prefix.
  */
-const MAX_ENABLED_LAYERS_CHARS = 64;
+const MAX_ENABLED_LAYERS_CHARS = 256;
 const MAX_LAYER_OPTIONS_CHARS = 512;
 export const LAYER_STATE_STORAGE_KEY = 'gev:layer-state:v2';
 export const LAYER_RESTORE_ORIGINS = Object.freeze({
@@ -338,6 +339,13 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-fontes-protegidas', token: 'X', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-faxinais', token: 'Y', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-faxinais-territorios', token: 'Z', disposition: 'enabled-only' }),
+  // Dois caracteres desde 2026-10-01 (os 62 de um caractere acabaram com os
+  // faxinais). Prefixo 'P' = Programas IDR.
+  Object.freeze({ id: 'datageo-urs-graos', token: 'Pa', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-urs-cafe', token: 'Pb', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-urs-piscicultura', token: 'Pc', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-urs-pecuaria-corte', token: 'Pd', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-usosolo-queijarias', token: 'Pe', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));
@@ -404,10 +412,13 @@ export function validateLayerStateRegistry(registry = LAYER_STATE_REGISTRY) {
     if (!/^[a-z0-9-]+$/.test(entry.id)) throw new Error(`Invalid layer-state id: ${entry.id}`);
     if (ids.has(entry.id)) throw new Error(`Duplicate layer-state id: ${entry.id}`);
     ids.add(entry.id);
-    // Espaco estendido para A-Z em 2026-08-26: os 36 tokens [a-z0-9]
-    // esgotaram. Encode/decode preservam case de ponta a ponta (join/split
-    // por '.' + Map por token), entao maiuscula e segura no hash.
-    if (!/^[a-zA-Z0-9]$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
+    // Espaco estendido para A-Z em 2026-08-26 (os 36 tokens [a-z0-9]
+    // esgotaram) e para DOIS caracteres em 2026-10-01 (os 62 de um caractere
+    // esgotaram). Encode/decode tratam o token como string opaca de ponta a
+    // ponta: `l` e join/split por '.', `lo` e split por '_' e depois por '.',
+    // e a busca e um Map por token. Nenhum token contem '.' ou '_', entao o
+    // tamanho nao importa, e os links antigos (um caractere) decodificam igual.
+    if (!/^[a-zA-Z0-9]{1,2}$/.test(entry.token || '')) throw new Error(`Invalid layer-state token: ${entry.id}`);
     if (tokens.has(entry.token)) throw new Error(`Duplicate layer-state token: ${entry.token}`);
     tokens.add(entry.token);
     if (!VALID_DISPOSITIONS.has(entry.disposition)) {

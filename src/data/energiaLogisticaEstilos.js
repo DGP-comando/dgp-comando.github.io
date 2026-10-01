@@ -1,8 +1,8 @@
 // src/data/energiaLogisticaEstilos.js
 //
-// Estilo e tooltip dos pontos de Infraestrutura (subestações, usinas) e de
-// Logística agro (armazéns, agroindústrias, cadastro IDR, rotas turísticas,
-// CEASAs), SEM dependência de engine de mapa: usado pelas camadas Cesium
+// Estilo e tooltip dos pontos de Infraestrutura (subestações, usinas), de
+// Logística agro (armazéns, agroindústrias SIGSIF, CEASAs) e de Programas IDR
+// (agroindústrias do cadastro IDR, rotas turísticas), SEM dependência de engine de mapa: usado pelas camadas Cesium
 // (datageoEnergia.js / datageoLogistica.js, que convertem a cor) e pelo
 // protótipo MapLibre (src/maplibre/layers/energiaLogistica.js).
 //

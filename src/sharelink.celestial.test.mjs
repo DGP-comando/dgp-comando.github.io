@@ -66,7 +66,7 @@ test('share links parse explicit celestial on and off states', () => {
 });
 
 test('unknown-only v2 layer tokens are invalid, while historical l fields stay inert', () => {
-  // 'ZZ': fora do registry (os 62 tokens de um caractere estao todos atribuidos)
+  // 'ZZ': fora do registry (token reservado como desconhecido nos testes)
   const invalid = makeManager('#v=2&lat=10&lon=20&l=ZZ').parseInitialHash();
   assert.equal(invalid.layerState, null);
   assert.equal(invalid.layerStateInvalid, true);

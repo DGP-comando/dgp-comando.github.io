@@ -156,14 +156,14 @@ function encode(state) {
 
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  // 16 camadas de contexto do GEV (em ordem alfabética) seguidas das 46 do
+  // 16 camadas de contexto do GEV (em ordem alfabética) seguidas das 51 do
   // DataGeo (prefixo datageo-, na ordem em que os tokens foram atribuídos).
   const gev = REGISTERED_LAYER_IDS.filter((id) => !id.startsWith('datageo-'));
   const datageo = REGISTERED_LAYER_IDS.filter((id) => id.startsWith('datageo-'));
   assert.equal(gev.length, 16);
-  assert.equal(datageo.length, 46);
-  assert.equal(REGISTERED_LAYER_IDS.length, 62);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 62);
+  assert.equal(datageo.length, 51);
+  assert.equal(REGISTERED_LAYER_IDS.length, 67);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 67);
   assert.deepEqual(gev, [...gev].sort());
   assert.deepEqual(REGISTERED_LAYER_IDS, [...gev, ...datageo]);
   assert.throws(
@@ -231,10 +231,44 @@ test('v2 codec distinguishes absent from empty and keeps canonical deterministic
 });
 
 test('unknown enabled-layer tokens reject the payload instead of becoming an empty set', () => {
-  // Os 62 tokens [a-zA-Z0-9] estao todos atribuidos desde 2026-10-01 ('Z'
-  // virou datageo-faxinais-territorios): 'ZZ' nao existe no registry.
+  // 'ZZ' fica reservado como token desconhecido nos testes: nunca atribuir.
+  assert.ok(!LAYER_STATE_REGISTRY.some((e) => e.token === 'ZZ'));
   assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=ZZ')), null);
   assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=c.ZZ')), null);
+  // Três caracteres nunca é token (o registro só aceita 1 ou 2).
+  assert.equal(decodeLayerStateParams(new URLSearchParams('v=2&l=Paa')), null);
+});
+
+test('tokens de dois caracteres: round-trip e links antigos de um caractere decodificam igual', () => {
+  assert.ok(LAYER_STATE_REGISTRY.every((e) => /^[a-zA-Z0-9]{1,2}$/.test(e.token)));
+  assert.throws(
+    () => validateLayerStateRegistry([{ id: 'x-layer', token: 'abc', disposition: 'enabled-only' }]),
+    /Invalid layer-state token/,
+  );
+  const dois = LAYER_STATE_REGISTRY.filter((e) => e.token.length === 2);
+  assert.ok(dois.length >= 5);
+
+  // Mistura de 1 e 2 caracteres, com opções de um dono de um caractere.
+  const state = normalizeLayerState({
+    enabledLayerIds: ['flights', 'datageo-faxinais-territorios', ...dois.map((e) => e.id)],
+    options: { flights: { models3dMode: 'all', models3d: true } },
+  });
+  const params = new URLSearchParams(encode(state));
+  assert.equal(params.get('l'), ['f', 'Z', ...dois.map((e) => e.token)].join('.'));
+  assert.deepEqual(decodeLayerStateParams(params), state);
+
+  // Todas as camadas ligadas ao mesmo tempo cabem no teto do campo `l`.
+  const tudo = normalizeLayerState({ enabledLayerIds: REGISTERED_LAYER_IDS });
+  const tudoParams = new URLSearchParams(encode(tudo));
+  assert.deepEqual(decodeLayerStateParams(tudoParams).enabledLayerIds, [...REGISTERED_LAYER_IDS]);
+
+  // Link de antes dos tokens de dois caracteres: mesmo resultado de sempre.
+  const antigo = decodeLayerStateParams(new URLSearchParams('v=2&l=f.N.O.Y.Z&lo=f.m.a'));
+  assert.deepEqual(antigo.enabledLayerIds, [
+    'flights', 'datageo-agroindustrias-idr', 'datageo-rotas-turisticas', 'datageo-faxinais', 'datageo-faxinais-territorios',
+  ]);
+  assert.equal(antigo.options.flights.models3dMode, 'all');
+  assert.equal(antigo.options.flights.models3d, false, 'omitido continua OFF em link v2');
 });
 
 test('unknown and forbidden option fields are ignored while missing options use codec defaults', () => {

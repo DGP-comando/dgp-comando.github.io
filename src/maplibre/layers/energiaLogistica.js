@@ -1,7 +1,10 @@
 // src/maplibre/layers/energiaLogistica.js
 //
 // Grupo ENERGIA (classe Infraestrutura) + LOGÍSTICA AGRO do protótipo, portado
-// de src/data/datageoEnergia.js, datageoDistribuicao.js e datageoLogistica.js:
+// de src/data/datageoEnergia.js, datageoDistribuicao.js e datageoLogistica.js.
+// Agroindústrias (cadastro IDR) e Rotas turísticas moram aqui (mesmo
+// makePointsLayer), mas aparecem no grupo PROGRAMAS IDR do painel, junto das
+// URs dos programas (programasIdr.js):
 //
 //   - Linhas de transmissão (EPE): cor/largura por tensão, planejadas
 //     tracejadas em âmbar.
@@ -34,6 +37,7 @@ import { createCursorMunicipio } from './territoriosFeatures.js';
 
 const LOGISTICA = 'Logística agro';
 const INFRA = 'Infraestrutura';
+const PROGRAMAS_IDR = 'Programas IDR';
 
 // ------------------------------------------------------------ utilitários
 
@@ -94,9 +98,12 @@ export function legendWithCounts(legend, counts) {
  * Camada de pontos equivalente ao `makePointsLayer` do app.
  * `labelDists`: todos os `labelMaxDist` que `estilo` pode devolver (um layer
  * de rótulo por teto; o teste confere contra os dados reais).
+ * `stroke`: contorno do círculo ({color, width}), para distinguir camadas
+ * vizinhas sem depender só da cor do preenchimento.
  */
 export function makePointsLayer({
   id, name, category = LOGISTICA, icon, source, url, estilo, legend, labelDists, tooltip,
+  stroke = { color: 'rgba(0,0,0,0.55)', width: 1 },
 }) {
   const slug = id.replace(/^datageo-/, '');
   const sourceId = `dg-${slug}`;
@@ -143,8 +150,8 @@ export function makePointsLayer({
             Z_FAR, ['*', ['get', '__size'], 0.45 / 2],
             Z_NEAR, ['*', ['get', '__size'], 0.5],
           ],
-          'circle-stroke-color': 'rgba(0,0,0,0.55)',
-          'circle-stroke-width': 1,
+          'circle-stroke-color': stroke.color,
+          'circle-stroke-width': stroke.width,
         },
       },
       ...labelLayers,
@@ -423,6 +430,7 @@ const agroindustriasLayer = makePointsLayer({
 const agroindustriasIdrLayer = makePointsLayer({
   id: 'datageo-agroindustrias-idr',
   name: 'Agroindústrias (cadastro IDR)',
+  category: PROGRAMAS_IDR,
   icon: '🧺',
   source: 'IDR-Paraná 2023',
   url: '/privado/agroindustrias-idr-pr.geojson',
@@ -435,6 +443,7 @@ const agroindustriasIdrLayer = makePointsLayer({
 const rotasTuristicasLayer = makePointsLayer({
   id: 'datageo-rotas-turisticas',
   name: 'Rotas turísticas',
+  category: PROGRAMAS_IDR,
   icon: '🧀',
   source: 'Rota do Queijo · Rota da Uva e Vinho',
   url: '/data/rotas-turisticas-pr.geojson',

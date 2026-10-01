@@ -100,6 +100,12 @@ export const DATA_CREDITS = [
       'frigoríficos e laticínios do SIGSIF/MAPA',
   },
   {
+    key: 'idr-programas-urs',
+    html:
+      'Unidades de Referência (Grãos, Café, Piscicultura, Pecuária de Corte) e uso do solo das queijarias da ' +
+      'Rota do Queijo: IDR-Paraná, Ações Integradas de Recursos Naturais e Sustentabilidade',
+  },
+  {
     key: 'mds-equipamentos-suas',
     html:
       'CRAS, CREAS, Centros POP, postos do CadÚnico e equipamentos de segurança alimentar: ' +

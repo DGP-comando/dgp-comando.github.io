@@ -25,6 +25,10 @@ test('ids na ordem do painel, com fontes/layers dg-', () => {
   assert.equal(byId['datageo-transmissao'].category, 'Infraestrutura');
   assert.equal(byId['datageo-geracao'].category, 'Infraestrutura');
   assert.equal(byId['datageo-armazens'].category, 'Logística agro');
+  assert.equal(byId['datageo-agroindustrias'].category, 'Logística agro');
+  // Programas do IDR saem da Logística agro para o grupo próprio.
+  assert.equal(byId['datageo-agroindustrias-idr'].category, 'Programas IDR');
+  assert.equal(byId['datageo-rotas-turisticas'].category, 'Programas IDR');
   assert.equal(byId['datageo-ceasas'].icon, '🥬');
 });
 
