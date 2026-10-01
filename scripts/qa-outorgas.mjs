@@ -56,6 +56,26 @@ try {
     const txt = g ? await hoverTooltip(page, g.lon, g.lat, re) : '';
     check(`CRH ${grupo}: ponto e tooltip`, re.test(txt), txt.slice(0, 300) || g);
   }
+  // Ficha municipal (Palotina) e regional: seção de outorgas por tipo.
+  const secaoOutorgas = async () => {
+    await page.waitForFunction(() => [...document.querySelectorAll('#datageo-ficha .fx-section h3')]
+      .some((h) => h.textContent.startsWith('Outorgas de água')), { timeout: 60_000 }).catch(() => {});
+    return page.evaluate(() => [...document.querySelectorAll('#datageo-ficha .fx-section')]
+      .find((x) => (x.querySelector('h3')?.textContent ?? '').startsWith('Outorgas de água'))?.textContent ?? null);
+  };
+  await page.evaluate(async () => {
+    const { openMunicipioFicha } = await import('/src/maplibre/layers/municipios.js');
+    await openMunicipioFicha('4117909', 'Palotina');
+  });
+  const ficha = await secaoOutorgas();
+  check('ficha municipal: outorgas por tipo', /Outorgas vigentes: \d/.test(ficha ?? '') && /Capt\. superficial/.test(ficha ?? ''),
+    ficha?.slice(0, 300));
+  await page.evaluate(async () => {
+    const { openFichaRegiao } = await import('/src/datageoFicha.js');
+    await openFichaRegiao({ nome: 'Teste', meta: '', ibges: ['4117909', '4106407'] });
+  });
+  const reg = await secaoOutorgas();
+  check('ficha regional: outorgas somadas', /Outorgas vigentes: \d/.test(reg ?? ''), reg?.slice(0, 300));
   if (shot) await page.screenshot({ path: shot });
   check('sem erros de página', errors.length === 0, errors.slice(0, 5));
 } finally {

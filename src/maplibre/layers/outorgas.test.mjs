@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SISTEMAS, consertaUtf8, crhEfluenteProps, crhHidreletricoProps, crhProps, exportTileUrl, grupoCrh, grupoSigarh, outorgaTooltipHtml, sigarhProps } from './outorgas.js';
+import { SISTEMAS, consertaUtf8, crhEfluenteProps, filtroMunicipios, crhHidreletricoProps, crhProps, exportTileUrl, grupoCrh, grupoSigarh, outorgaTooltipHtml, sigarhProps } from './outorgas.js';
 
 test('UTF-8 quebrado do SIGARH volta a acentuar', () => {
   assert.equal(consertaUtf8('Aqu�­fero Serra Geral'), 'Aquífero Serra Geral');
@@ -55,4 +55,10 @@ test('efluentes e hidrelétricas do CRH', () => {
   assert.ok(!JSON.stringify([e, h]).includes('FULANO'));
   assert.deepEqual(SISTEMAS.map((x) => x.servico),
     ['outorgas_sigarh', 'out_captacao_crh', 'out_efluentes_crh', 'out_aproveitamento_hidreletrico']);
+});
+
+test('filtro de municípios aceita só IBGE de 7 dígitos', () => {
+  assert.equal(filtroMunicipios({ campo: 'mun_ibge' }, ['4117909', 4106407, '4117909']), 'mun_ibge IN (4117909,4106407)');
+  assert.equal(filtroMunicipios({ campo: 'cod', texto: true }, ['4117909', "1') OR 1=1--"]), "cod IN ('4117909')");
+  assert.equal(filtroMunicipios({ campo: 'mun_ibge' }, ['x']), null);
 });

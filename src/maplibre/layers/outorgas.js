@@ -19,11 +19,11 @@ const SRC_VEC = 'dg-outorgas';
 const PT = 'dg-outorgas-pt';
 
 export const OUTORGA_LEGENDA = Object.freeze([
-  { grupo: 'sup', label: 'Captação superficial', color: '#22d3ee' },
-  { grupo: 'sub', label: 'Captação subterrânea', color: '#a78bfa' },
-  { grupo: 'efl', label: 'Lançamento de efluentes', color: '#f97316' },
-  { grupo: 'hid', label: 'Aproveitamento hidrelétrico', color: '#facc15' },
-  { grupo: 'obr', label: 'Obras e intervenções', color: '#94a3b8' },
+  { grupo: 'sup', label: 'Captação superficial', curto: 'Capt. superficial', color: '#22d3ee' },
+  { grupo: 'sub', label: 'Captação subterrânea', curto: 'Capt. subterrânea', color: '#a78bfa' },
+  { grupo: 'efl', label: 'Lançamento de efluentes', curto: 'Efluentes', color: '#f97316' },
+  { grupo: 'hid', label: 'Aproveitamento hidrelétrico', curto: 'Hidrelétricas', color: '#facc15' },
+  { grupo: 'obr', label: 'Obras e intervenções', curto: 'Obras/interv.', color: '#94a3b8' },
 ]);
 const COR = Object.fromEntries(OUTORGA_LEGENDA.map((g) => [g.grupo, g.color]));
 
@@ -148,6 +148,8 @@ export const SISTEMAS = Object.freeze([
     servico: 'outorgas_sigarh',
     where: SIGARH_WHERE,
     props: sigarhProps,
+    mun: { campo: 'cod_municipio_emp', texto: true },
+    porTipo: { campo: 'nm_tipo_interferencia', grupo: grupoSigarh },
     fields: ['nm_tipo_interferencia', 'desc_finalidades', 'nm_tipo_usuario', 'nm_corpo_hidrico_popular',
       'nm_tipo_corpo_hidrico', 'nm_aquifero', 'nm_tipo_documento', 'nr_portaria', 'st_portaria', 'dt_vencimento',
       'nm_municipio_emp', 'nm_bacia_hidrografica', ...MESES.map((m) => `vlr_vazao_capt_lanc_${m}`)],
@@ -163,6 +165,8 @@ export const SISTEMAS = Object.freeze([
     servico: 'out_captacao_crh',
     where: CRH_WHERE,
     props: crhProps,
+    mun: { campo: 'mun_ibge' },
+    porTipo: { campo: 'tipo_manancial', grupo: grupoCrh },
     fields: ['uso', 'finalidades', 'finalidade_principal', 'tipo_manancial', 'rio_nome', 'aqu_descricao',
       'vazao_outorgada__m3_h_', 'portaria', 'modalidade', 'condicao', 'vencimento', 'municipio', 'bac_nome'],
     renderer: {
@@ -177,6 +181,8 @@ export const SISTEMAS = Object.freeze([
     servico: 'out_efluentes_crh',
     where: CRH_WHERE,
     props: crhEfluenteProps,
+    mun: { campo: 'mun_codigo' },
+    grupo: 'efl',
     fields: ['uso', 'tpo_nome', 'atv_nome', 'rio_nome', 'eflo_out_vazao__m3_h_', 'portaria', 'modalidade', 'condicao',
       'vencimento', 'municipio', 'bac_nome'],
     renderer: simples('efl'),
@@ -186,6 +192,8 @@ export const SISTEMAS = Object.freeze([
     servico: 'out_aproveitamento_hidreletrico',
     where: CRH_WHERE,
     props: crhHidreletricoProps,
+    mun: { campo: 'mun_ibge' },
+    grupo: 'hid',
     fields: ['uso', 'localidade', 'rio_nome', 'potencial_instalado__mww_', 'portaria', 'modalidade', 'condicao',
       'vencimento', 'municipio', 'bac_nome'],
     renderer: simples('hid'),
@@ -238,6 +246,55 @@ async function pontosDaVista(bounds, signal) {
     f.geometry?.x, f.geometry?.y, SISTEMAS[k].props(limpa(f.attributes)), `${SISTEMAS[k].key}-${i}`,
   ))).filter(Boolean);
   return { features, truncado: respostas.some((j) => j.exceededTransferLimit) };
+}
+
+const COUNT_STAT = JSON.stringify([{ statisticType: 'count', onStatisticField: 'objectid', outStatisticFieldName: 'n' }]);
+
+/** Cláusula `campo IN (...)` com os códigos IBGE (só dígitos: nada de texto livre na consulta). */
+export function filtroMunicipios({ campo, texto }, ibges) {
+  const cods = [...new Set(ibges.map(String).filter((c) => /^\d{7}$/.test(c)))];
+  if (!cods.length) return null;
+  return `${campo} IN (${cods.map((c) => (texto ? `'${c}'` : c)).join(',')})`;
+}
+
+/** Contagens de um sistema por grupo da legenda: {sup: n, sub: n, ...}. */
+async function contagemSistema(s, filtroMun) {
+  const where = `(${s.where}) AND ${filtroMun}`;
+  if (!s.porTipo) {
+    const j = await query(s.servico, where, [], { returnCountOnly: 'true' });
+    return { [s.grupo]: j.count ?? 0 };
+  }
+  const j = await query(s.servico, where, [], { groupByFieldsForStatistics: s.porTipo.campo, outStatistics: COUNT_STAT });
+  const out = {};
+  for (const { attributes: a } of j.features ?? []) {
+    const g = s.porTipo.grupo(consertaUtf8(a[s.porTipo.campo]));
+    out[g] = (out[g] ?? 0) + Number(a.n ?? 0);
+  }
+  return out;
+}
+
+/**
+ * Outorgas vigentes por tipo nos municípios (ficha municipal e regional), ao
+ * vivo. Devolve {total, linhas: [{grupo, label, color, n}], sigarh, crh} ou
+ * null se o GeoPR não responder (a ficha só omite a seção).
+ */
+export async function getOutorgasMunicipios(ibges) {
+  try {
+    const partes = await Promise.all(SISTEMAS.map((s) => {
+      const f = filtroMunicipios(s.mun, ibges);
+      return f ? contagemSistema(s, f) : {};
+    }));
+    const soma = (p) => Object.values(p).reduce((a, b) => a + b, 0);
+    const linhas = OUTORGA_LEGENDA
+      .map(({ grupo, label, curto, color }) => ({ grupo, label, curto, color, n: partes.reduce((a, p) => a + (p[grupo] ?? 0), 0) }))
+      .filter((l) => l.n > 0);
+    const sigarh = soma(partes[0]);
+    const crh = partes.slice(1).reduce((a, p) => a + soma(p), 0);
+    return { total: sigarh + crh, linhas, sigarh, crh };
+  } catch (err) {
+    console.warn('[DataGeo:ficha] outorgas IAT indisponíveis:', err?.message);
+    return null;
+  }
 }
 
 let ctxRef = null;
