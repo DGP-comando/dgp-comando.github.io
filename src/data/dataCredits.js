@@ -106,6 +106,12 @@ export const DATA_CREDITS = [
       'Rota do Queijo: IDR-Paraná, Ações Integradas de Recursos Naturais e Sustentabilidade',
   },
   {
+    key: 'adapar-cadastros',
+    html:
+      'Propriedades com exploração pecuária, comércio de produtos veterinários, de animais vivos, de agrotóxicos ' +
+      'e de fertilizantes, Unidades de Consolidação e indústrias de produtos de origem animal: ADAPAR, Agência de Defesa Agropecuária do Paraná',
+  },
+  {
     key: 'mds-equipamentos-suas',
     html:
       'CRAS, CREAS, Centros POP, postos do CadÚnico e equipamentos de segurança alimentar: ' +

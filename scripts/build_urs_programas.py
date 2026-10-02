@@ -88,7 +88,9 @@ class Base:
         """(código, nome oficial) ou None. "Califórnia (Ortigueira)" -> Ortigueira."""
         m = re.search(r'\(([^)]+)\)', nome or '')
         k = re.sub(r' doeste$', ' d oeste', chave(m.group(1) if m else nome))  # "Pérola DOeste"
-        return self.por_nome.get(ALIAS.get(k, k))
+        k = ALIAS.get(k, k)
+        # "DIAMANTE DO OESTE" (ADAPAR) = "Diamante D'Oeste" (IBGE); só na falta do nome exato.
+        return self.por_nome.get(k) or self.por_nome.get(re.sub(r' do oeste$', ' d oeste', k))
 
     def ponto(self, lat, lon, nome_mun):
         """(lon, lat, props de município e checagem) para uma linha da planilha.

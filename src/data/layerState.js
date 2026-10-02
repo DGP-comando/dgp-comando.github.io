@@ -346,6 +346,14 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-urs-piscicultura', token: 'Pc', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-urs-pecuaria-corte', token: 'Pd', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-usosolo-queijarias', token: 'Pe', disposition: 'enabled-only' }),
+  // Prefixo 'D' = Defesa Agropecuária (cadastros da ADAPAR).
+  Object.freeze({ id: 'datageo-adapar-exploracoes', token: 'Da', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-adapar-veterinarios', token: 'Db', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-adapar-animais-vivos', token: 'Dc', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-adapar-agrotoxicos', token: 'Dd', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-adapar-fertilizantes', token: 'De', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-adapar-unidades-consolidacao', token: 'Df', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-adapar-industrias-poa', token: 'Dg', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));

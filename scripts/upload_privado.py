@@ -31,7 +31,8 @@ def main():
     if not arquivos:
         sys.exit(f'nada em {PASTA}')
     for p in arquivos:
-        tipo = 'application/geo+json' if p.suffix == '.geojson' else mimetypes.guess_type(p.name)[0]
+        # .json.gz sobe como gzip (guess_type diria application/json): o front descomprime.
+        tipo = {'.geojson': 'application/geo+json', '.gz': 'application/gzip'}.get(p.suffix) or mimetypes.guess_type(p.name)[0]
         req = urllib.request.Request(
             f'{SUPABASE_URL}/storage/v1/object/{BUCKET}/{p.relative_to(PASTA).as_posix()}',
             data=p.read_bytes(),

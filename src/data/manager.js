@@ -36,6 +36,7 @@ const LAYER_CATEGORY_ORDER = Object.freeze([
   'Proteção social',
   'Infraestrutura',
   'Programas IDR',
+  'Defesa Agropecuária',
   'Logística agro',
   'Clima',
   'Hidrologia',

@@ -20,3 +20,5 @@ data/estradas-conveniadas/
 data/radios/
 data/unidades-idr/
 data/regionais-idr/
+# prints de QA com nome de produtor (scripts/qa-*.mjs --shot)
+/qa-*.png

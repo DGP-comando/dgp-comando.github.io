@@ -19,6 +19,7 @@ import cafPj from './cafPj.js';
 import fontesProtegidas from './fontesProtegidas.js';
 import faxinais from './faxinais.js';
 import programasIdr from './programasIdr.js';
+import defesaAgropecuaria from './defesaAgropecuaria.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
@@ -33,6 +34,9 @@ export const LAYER_ORDER = [
   'datageo-transmissao', 'datageo-distribuicao', 'datageo-subestacoes', 'datageo-geracao',
   'datageo-agroindustrias-idr', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
   'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas', 'datageo-usosolo-queijarias',
+  'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
+  'datageo-adapar-agrotoxicos', 'datageo-adapar-fertilizantes', 'datageo-adapar-unidades-consolidacao',
+  'datageo-adapar-industrias-poa',
   'datageo-armazens', 'datageo-agroindustrias', 'datageo-ceasas',
   'datageo-conectividade',
   'datageo-clima-historico', 'datageo-precipitacao', 'datageo-ventos',
@@ -57,6 +61,7 @@ const all = [
   ...fontesProtegidas,
   ...faxinais,
   ...programasIdr,
+  ...defesaAgropecuaria,
 ];
 
 const rank = (id) => {
