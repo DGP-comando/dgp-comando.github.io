@@ -4,12 +4,12 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 import {
-  CAFE_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, UR_LABEL_DIST, USO_SOLO_CLASSES,
+  CAFE_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, UR_LABEL_DIST,
   cafeEstilo, coordenadaConferida, graosEstilo, graosGrupo, graosTooltip, pecuariaEstilo, pecuariaTooltip,
-  pisciculturaEstilo, usoSoloCor, usoSoloTooltip,
+  pisciculturaEstilo,
 } from './programasIdrEstilos.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
-import layers, { PROGRAMAS_IDR, usoSoloFeatures } from '../maplibre/layers/programasIdr.js';
+import layers, { PROGRAMAS_IDR } from '../maplibre/layers/programasIdr.js';
 
 // data/privado/ fica fora do git: os testes com dado real só rodam onde o arquivo existe.
 const PRIV = (n) => new URL(`../../data/privado/${n}`, import.meta.url);
@@ -25,7 +25,6 @@ const PONTOS = [
 test('camadas: categoria Programas IDR, arquivos do bucket privado e token no share link', () => {
   assert.deepEqual(layers.map((l) => l.id), [
     'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura', 'datageo-urs-pecuaria-corte',
-    'datageo-usosolo-queijarias',
   ]);
   for (const l of layers) {
     assert.equal(l.category, PROGRAMAS_IDR);
@@ -67,29 +66,6 @@ test('produtor desligado: grupo próprio, selo e observação visíveis (UTF-8)'
   assert.equal(pecuariaEstilo({ ...p, 'Observação': '' }).grupo, 'Programa Purunã');
 });
 
-test('uso do solo: cor por classe, legenda com ha e tooltip com o imóvel do CAR', () => {
-  const gj = {
-    features: [
-      { properties: { Classe: 'Floresta Nativa', 'Área (ha)': 2.5 }, geometry: { type: 'Polygon', coordinates: [] } },
-      { properties: { Classe: 'Floresta Nativa', 'Área (ha)': 1 }, geometry: { type: 'Polygon', coordinates: [] } },
-      { properties: { Classe: 'Mangue', 'Área (ha)': 1 }, geometry: { type: 'Polygon', coordinates: [] } },
-      { properties: { Classe: 'Pastagem/Campo' }, geometry: null },
-    ],
-  };
-  const { features, props, legend } = usoSoloFeatures(gj);
-  assert.equal(features.length, 3);
-  assert.equal(props.length, 3);
-  assert.equal(features[0].properties.__color, usoSoloCor({ Classe: 'Floresta Nativa' }));
-  assert.deepEqual(legend.map((l) => [l.label, l.count]), [['Floresta Nativa · 3,5 ha', 2], ['Mangue · 1,0 ha', 1]]);
-  const html = usoSoloTooltip({
-    Classe: 'Corpos d’Água', 'Área (ha)': 0.36, 'Município': 'Pinhão', 'Imóvel CAR': 'PR-4119301-X', 'Módulos fiscais': 0.36,
-  });
-  assert.match(html, /Corpos d’Água/);
-  assert.match(html, /Pinhão/);
-  assert.match(html, /PR-4119301-X/);
-  assert.match(html, /0,36 ha/);
-});
-
 for (const [arq, estilo, legenda, minimo] of PONTOS) {
   test(`dado real ${arq}: grupos da legenda, rótulos e UTF-8`, { skip: !existsSync(PRIV(arq)) }, () => {
     const feats = real(arq);
@@ -112,17 +88,6 @@ for (const [arq, estilo, legenda, minimo] of PONTOS) {
 test('dado real: pecuária com os três programas e acentos', { skip: !existsSync(PRIV('urs-pecuaria-corte-pr.geojson')) }, () => {
   const progs = new Set(real('urs-pecuaria-corte-pr.geojson').map((f) => f.properties.Programa));
   for (const p of ['Programa Purunã', 'Pecuária Moderna', 'Associação Purunã']) assert.ok(progs.has(p), p);
-});
-
-test('dado real: uso do solo das queijarias com classes conhecidas', { skip: !existsSync(PRIV('usodosolo-queijarias-pr.geojson')) }, () => {
-  const feats = real('usodosolo-queijarias-pr.geojson');
-  assert.ok(feats.length >= 100);
-  const conhecidas = new Set(USO_SOLO_CLASSES.map((c) => c.classe));
-  for (const f of feats) {
-    assert.ok(conhecidas.has(f.properties.Classe), f.properties.Classe);
-    assert.match(f.properties['Imóvel CAR'], /^PR-\d{7}-/);
-    assert.ok(['Polygon', 'MultiPolygon'].includes(f.geometry.type));
-  }
 });
 
 test('grupo Programas IDR: ícone próprio por camada e contorno próprio por programa de URs', async () => {

@@ -15,15 +15,9 @@ uma subpasta por programa:
     Umuarama; a 2ª, em base64, é o mesmo Ortigueira_<produtor>.kml solto na
     pasta (polígono do imóvel no CAR). As 5 coordenadas preenchem as linhas da
     planilha que diziam "Enviado por whatsapp formato kml" (mesmo produtor).
-  - Turismo Rural/shp/usodosolo_rotadoqueijo.shp (EPSG:31982): uso do solo
-    dos imóveis do CAR das queijarias da Rota do Queijo. Preferido à camada
-    usodosolo_rotadoqueijo do 00-VETORES/vetores.gpkg (116 feições, EPSG:4674):
-    o gpkg é o shp deduplicado por OBJECTID, o que apagou 1 imóvel de
-    Pinhão (área sobreposta a outro imóvel) e 4 classes de 1 imóvel de Toledo.
-    No shp, as classes de cada imóvel somam a área
-    do imóvel no CAR. Geometria idêntica em dois imóveis vira uma feição só,
-    com os dois códigos.
-  - Fora daqui: Mapa Rota do Queijo Paranaense.kml (27 queijarias, todas a
+  - Fora daqui: Turismo Rural/shp/usodosolo_rotadoqueijo.shp (uso do solo
+    dos imóveis do CAR das queijarias; a camada foi removida em 2026-10-02),
+    Mapa Rota do Queijo Paranaense.kml (27 queijarias, todas a
     menos de 100 m de um ponto da camada Rotas turísticas) e
     Agroindústrias/coordenadas.xlsx (1.023 linhas idênticas às do diagnóstico
     já em agroindustrias-idr-pr.geojson).
@@ -33,14 +27,14 @@ lat/lon trocados), conferida contra o município declarado; o resultado fica em
 "Checagem da coordenada". Sem coordenada utilizável (vazia ou fora do PR), o
 ponto vai para o centro do município declarado e a checagem diz isso.
 
-LGPD: nome do produtor + coordenada da propriedade (e código do imóvel no CAR)
-= dado pessoal. Saída só em data/privado/ (bucket datageo-privado):
-urs-graos-pr, urs-cafe-pr, urs-piscicultura-pr, urs-pecuaria-corte-pr e
-usodosolo-queijarias-pr (.geojson, lon/lat SIRGAS 2000 ~ WGS84, 5 casas, UTF-8).
+LGPD: nome do produtor + coordenada da propriedade = dado pessoal. Saída só
+em data/privado/ (bucket datageo-privado): urs-graos-pr, urs-cafe-pr,
+urs-piscicultura-pr e urs-pecuaria-corte-pr (.geojson, lon/lat SIRGAS 2000 ~
+WGS84, 5 casas, UTF-8).
 
 Uso:
   py -3 scripts/build_urs_programas.py
-  SUPABASE_SERVICE_ROLE_KEY=... py -3 scripts/upload_privado.py urs- usodosolo-
+  SUPABASE_SERVICE_ROLE_KEY=... py -3 scripts/upload_privado.py urs-
 """
 
 import base64
@@ -54,12 +48,12 @@ from xml.etree import ElementTree as ET
 import geopandas as gpd
 import openpyxl
 import pandas as pd
-from shapely.geometry import Point, mapping, shape
+from shapely.geometry import Point, shape
 from shapely.ops import unary_union
 
 from build_agroindustrias_idr import chave, ler_coord
 from build_faxinais import Municipios
-from build_limites_ambientais import _round_coords, _text
+from build_limites_ambientais import _text
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = Path(r'H:\IDR-PARANA\RECURSOS NATURAIS E SUSTENTABILIDADE\000-Ações Integradas')
@@ -308,33 +302,6 @@ def build_pecuaria(base):
     write('urs-pecuaria-corte-pr.geojson', feats)
 
 
-# ----------------------------------------------------- uso do solo (queijo)
-
-def build_usosolo(base):
-    g = gpd.read_file(SRC / 'Turismo Rural' / 'shp' / 'usodosolo_rotadoqueijo.shp').to_crs(4674)
-    grupos = {}
-    for r in g.itertuples(index=False):
-        k = (int(r.OBJECTID), r.geometry.wkb)
-        grupos.setdefault(k, []).append(r)
-    feats = []
-    for rows in grupos.values():
-        r = rows[0]
-        ibge = r.cod_imovel.split('-')[1]
-        props = {
-            'Classe': _text(r.NIVEL_II), 'Nível I': _text(r.NIVEL_I), 'Nível III': _text(r.NIVEL_III),
-            'Área (ha)': round(float(r.Area_ha), 2), 'Município': base.nome[ibge], 'ibge': ibge,
-            'Imóvel CAR': ' · '.join(x.cod_imovel for x in rows),
-            'Área do imóvel (ha)': round(float(r.num_area), 2), 'Módulos fiscais': round(float(r.mod_fiscal), 2),
-            'Condição no CAR': _text(r.des_condic),
-        }
-        geom = mapping(r.geometry)
-        feats.append({'type': 'Feature', 'properties': props,
-                      'geometry': {'type': geom['type'], 'coordinates': _round_coords(geom['coordinates'])}})
-    print(f'  uso do solo: {len(g)} feições do shp, {len(g) - len(feats)} geometrias repetidas entre imóveis fundidas, '
-          f'{g.cod_imovel.nunique()} imóveis do CAR')
-    write('usodosolo-queijarias-pr.geojson', feats)
-
-
 def main():
     PRIV.mkdir(parents=True, exist_ok=True)
     base = Base()
@@ -342,7 +309,6 @@ def main():
     build_cafe(base)
     build_piscicultura(base)
     build_pecuaria(base)
-    build_usosolo(base)
 
 
 if __name__ == '__main__':

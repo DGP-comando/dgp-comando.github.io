@@ -345,7 +345,8 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-urs-cafe', token: 'Pb', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-urs-piscicultura', token: 'Pc', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-urs-pecuaria-corte', token: 'Pd', disposition: 'enabled-only' }),
-  Object.freeze({ id: 'datageo-usosolo-queijarias', token: 'Pe', disposition: 'enabled-only' }),
+  // 'Pe' foi do uso do solo das queijarias (removido em 2026-10-02): não reatribuir,
+  // link antigo com 'Pe' deve só ignorar o token.
   // Prefixo 'D' = Defesa Agropecuária (cadastros da ADAPAR).
   Object.freeze({ id: 'datageo-adapar-exploracoes', token: 'Da', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-adapar-veterinarios', token: 'Db', disposition: 'enabled-only' }),

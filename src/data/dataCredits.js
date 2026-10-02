@@ -102,8 +102,8 @@ export const DATA_CREDITS = [
   {
     key: 'idr-programas-urs',
     html:
-      'Unidades de Referência (Grãos, Café, Piscicultura, Pecuária de Corte) e uso do solo das queijarias da ' +
-      'Rota do Queijo: IDR-Paraná, Ações Integradas de Recursos Naturais e Sustentabilidade',
+      'Unidades de Referência (Grãos, Café, Piscicultura, Pecuária de Corte): ' +
+      'IDR-Paraná, Ações Integradas de Recursos Naturais e Sustentabilidade',
   },
   {
     key: 'adapar-cadastros',

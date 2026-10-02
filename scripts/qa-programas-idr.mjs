@@ -6,9 +6,7 @@
  *   2. cada camada de URs carrega todos os pontos do arquivo e a legenda do painel
  *      traz a contagem de cada grupo igual à dos dados;
  *   3. o hover num ponto isolado abre o tooltip com produtor e município acentuados;
- *   4. o uso do solo das queijarias carrega os polígonos e o hover mostra classe,
- *      área e imóvel do CAR;
- *   5. sem camada ligada, o tooltip do município traz a contagem de URs por programa.
+ *   4. sem camada ligada, o tooltip do município traz a contagem de URs por programa.
  * O bucket privado é servido de data/privado/ (interceptação de
  * /storage/v1/object/authenticated/datageo-privado/*), porque o dev roda sem
  * login. Requer os arquivos de scripts/build_urs_programas.py.
@@ -37,8 +35,7 @@ const PONTOS = [
   { id: 'datageo-urs-piscicultura', arq: 'urs-piscicultura-pr.geojson', estilo: pisciculturaEstilo, legenda: PISCICULTURA_LEGENDA },
   { id: 'datageo-urs-pecuaria-corte', arq: 'urs-pecuaria-corte-pr.geojson', estilo: pecuariaEstilo, legenda: PECUARIA_LEGENDA },
 ];
-const USO = { id: 'datageo-usosolo-queijarias', arq: 'usodosolo-queijarias-pr.geojson' };
-const PROGRAMAS = ['datageo-agroindustrias-idr', 'datageo-rotas-turisticas', ...PONTOS.map((c) => c.id), USO.id];
+const PROGRAMAS = ['datageo-agroindustrias-idr', 'datageo-rotas-turisticas', ...PONTOS.map((c) => c.id)];
 
 /** Ponto sem vizinho a menos de ~2 km (o hover não cai no do lado), de preferência com acento. */
 function isolado(feats) {
@@ -48,18 +45,7 @@ function isolado(feats) {
   return longe.find((f) => /[ãçéáíóúâêô]/i.test(`${f.properties.Produtor ?? ''}${f.properties['Município']}`)) ?? longe[0];
 }
 
-/** Ponto dentro do anel externo (ray casting). */
-const dentro = ([x, y], ring) => {
-  let ok = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i];
-    const [xj, yj] = ring[j];
-    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) ok = !ok;
-  }
-  return ok;
-};
-
-for (const { arq } of [...PONTOS, USO]) {
+for (const { arq } of PONTOS) {
   if (!existsSync(new URL(arq, PRIVADO))) {
     console.error(`falta data/privado/${arq}: rode py -3 scripts/build_urs_programas.py`);
     process.exit(2);
@@ -107,7 +93,7 @@ try {
   check('Logística agro sem programas do IDR', grupoDe['datageo-armazens'] === 'Logística agro'
     && !PROGRAMAS.some((id) => grupoDe[id] === 'Logística agro'), { armazens: grupoDe['datageo-armazens'] });
 
-  // 5. Tooltip do município (nenhuma camada ligada): o município com mais
+  // 4. Tooltip do município (nenhuma camada ligada): o município com mais
   // programas, hover num ponto dele com coordenada conferida.
   const porMun = ursPorMunicipio(PONTOS.map(({ arq }) => ({ features: ler(arq) })));
   const [ibgeMun, urs] = Object.entries(porMun)
@@ -153,36 +139,7 @@ try {
     await page.mouse.move(10, 10);
   }
 
-  // 4. Uso do solo das queijarias.
-  const polis = ler(USO.arq);
-  await setLayer(page, USO.id, true);
-  const su = await waitForStats(page, USO.id, 's => s.count > 0 || s.error', 60_000);
-  check(`${USO.id}: ${polis.length} polígonos`, su.stats?.count === polis.length, su.stats);
-  await sleep(800);
-  const legUso = await legendaDe(USO.id);
-  check(`${USO.id}: legenda por classe com ha`, legUso.length >= 5 && legUso.every((l) => / ha \d/.test(l)), legUso);
-  const maior = polis.filter((f) => f.geometry.type === 'Polygon')
-    .sort((a, b) => b.properties['Área (ha)'] - a.properties['Área (ha)'])
-    .map((f) => {
-      const ring = f.geometry.coordinates[0];
-      const xs = ring.map((c) => c[0]);
-      const ys = ring.map((c) => c[1]);
-      const c = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
-      return { f, c: dentro(c, ring) ? c : null };
-    })
-    .find((x) => x.c);
-  const [ulon, ulat] = maior.c;
-  await setCamera(page, { lon: ulon, lat: ulat, alt: 2_500 });
-  await waitMapIdle(page, 60_000);
-  await sleep(1_000);
-  const tu = await hoverTooltip(page, ulon, ulat, /Imóvel CAR/);
-  check(`${USO.id}: tooltip com classe, município e imóvel do CAR`,
-    tu.includes(maior.f.properties.Classe) && tu.includes(maior.f.properties['Município'])
-      && tu.includes(maior.f.properties['Imóvel CAR'].split(' · ')[0]) && / ha/.test(tu), tu.slice(0, 300));
-  if (shot) await page.screenshot({ path: shot.replace(/\.png$/, `-${USO.id}.png`) });
-
   if (shot) {
-    await setLayer(page, USO.id, false);
     for (const { id } of PONTOS) await setLayer(page, id, true);
     await setCamera(page, { lon: -51.6, lat: -24.6, alt: 750_000 });
     await waitMapIdle(page, 60_000);

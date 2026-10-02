@@ -33,7 +33,7 @@ export const LAYER_ORDER = [
   'datageo-ferrovias', 'datageo-rodovias', 'datageo-estradas', 'datageo-estradas-conveniadas',
   'datageo-transmissao', 'datageo-distribuicao', 'datageo-subestacoes', 'datageo-geracao',
   'datageo-agroindustrias-idr', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
-  'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas', 'datageo-usosolo-queijarias',
+  'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas',
   'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
   'datageo-adapar-agrotoxicos', 'datageo-adapar-fertilizantes', 'datageo-adapar-unidades-consolidacao',
   'datageo-adapar-industrias-poa',

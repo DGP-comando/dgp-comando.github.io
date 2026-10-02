@@ -1,10 +1,9 @@
 // src/data/programasIdrEstilos.js
 //
 // Estilo, legenda e tooltip das Unidades de Referência (URs) dos programas do
-// IDR-Paraná (Grãos, Café, Piscicultura, Pecuária de Corte) e do uso do solo
-// dos imóveis das queijarias da Rota do Queijo. Camadas em
+// IDR-Paraná (Grãos, Café, Piscicultura, Pecuária de Corte). Camadas em
 // src/maplibre/layers/programasIdr.js; dados em data/privado/ (bucket
-// datageo-privado, nome do produtor e imóvel do CAR) gerados por
+// datageo-privado, nome do produtor) gerados por
 // scripts/build_urs_programas.py.
 //
 // `*Estilo(props)` segue o contrato de energiaLogisticaEstilos.js:
@@ -132,37 +131,3 @@ export const pisciculturaTooltip = urTooltip({
   icon: '🐟', programa: 'Piscicultura', source: 'IDR-Paraná · Programa Estadual de Piscicultura',
 });
 export const pecuariaTooltip = urTooltip({ icon: '🐂', programa: 'Pecuária de Corte', source: 'IDR-Paraná · Pecuária de Corte' });
-
-// ------------------------------------------------ uso do solo (queijarias)
-
-// Classe = NIVEL_II do mapeamento de uso do solo; verde = vegetação, quente = uso agrícola.
-export const USO_SOLO_CLASSES = Object.freeze([
-  { classe: 'Floresta Nativa', color: '#15803d' },
-  { classe: 'Plantios Florestais', color: '#65a30d' },
-  { classe: 'Pastagem/Campo', color: '#fde047' },
-  { classe: 'Agricultura Anual', color: '#f59e0b' },
-  { classe: 'Área Construída', color: '#ef4444' },
-  { classe: 'Área Urbanizada', color: '#a855f7' },
-  { classe: 'Corpos d’Água', color: '#3b82f6' },
-]);
-const USO_COR = Object.fromEntries(USO_SOLO_CLASSES.map((c) => [c.classe, c.color]));
-export const USO_SOLO_OUTRA = '#94a3b8';
-export const usoSoloCor = (p) => USO_COR[p.Classe] ?? USO_SOLO_OUTRA;
-
-export function usoSoloTooltip(p) {
-  return tipCard({
-    icon: '🌱',
-    title: p.Classe || 'Uso do solo',
-    subtitle: `Imóvel de queijaria da Rota do Queijo · ${p['Município'] ?? ''}`,
-    rows: [
-      ['Área', fmtHa(p['Área (ha)'])],
-      ['Grupo', p['Nível I']],
-      ['Detalhe', p['Nível III']],
-      ['Imóvel CAR', p['Imóvel CAR']],
-      ['Área do imóvel', fmtHa(p['Área do imóvel (ha)'])],
-      ['Módulos fiscais', fmtDec(p['Módulos fiscais'])],
-      ['Condição no CAR', p['Condição no CAR']],
-    ],
-    source: 'IDR-Paraná · Turismo Rural · uso do solo × CAR',
-  });
-}
