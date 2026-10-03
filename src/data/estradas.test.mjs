@@ -78,7 +78,7 @@ test('nearestCells respeita o index e ignora o oceano', () => {
 
 test('camada registrada na classe Infraestrutura e no share link', () => {
   assert.equal(datageoEstradasLayer.id, 'datageo-estradas');
-  assert.equal(datageoEstradasLayer.category, 'Infraestrutura');
+  assert.equal(datageoEstradasLayer.category, 'Transporte');
   const entry = LAYER_STATE_REGISTRY.find((e) => e.id === 'datageo-estradas');
   assert.ok(entry, 'sem entrada no registro de estado');
   const tokens = LAYER_STATE_REGISTRY.map((e) => e.token);

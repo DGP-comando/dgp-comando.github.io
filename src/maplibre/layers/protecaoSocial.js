@@ -9,7 +9,7 @@ import { makePointsLayer } from './energiaLogistica.js';
 const equipamentosSuasLayer = makePointsLayer({
   id: 'datageo-equipamentos-suas',
   name: 'CRAS, CREAS e segurança alimentar',
-  category: 'Proteção social',
+  category: 'Saúde e proteção social',
   icon: '🤝',
   source: 'MDS · Mapa Social',
   url: '/data/equipamentos-suas-pr.geojson',

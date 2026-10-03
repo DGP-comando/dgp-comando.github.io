@@ -11,7 +11,7 @@ const torres = JSON.parse(readFileSync(new URL('../../../public/data/conectivida
 
 test('exporta as duas camadas na ordem, com os ids do app', () => {
   assert.deepEqual(layers.map((l) => l.id), ['datageo-conectividade', 'datageo-radios']);
-  for (const l of layers) assert.equal(l.category, 'Infraestrutura');
+  for (const l of layers) assert.equal(l.category, 'Energia e conectividade');
 });
 
 // Os valores esperados são os da camada Cesium antiga (datageoConectividade.js,

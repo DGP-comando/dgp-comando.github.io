@@ -91,7 +91,7 @@ test('camadas no painel e no share link', () => {
     assert.ok(ids.has(id), `${id} fora do painel`);
     assert.ok(LAYER_STATE_REGISTRY.find((e) => e.id === id), `${id} sem token`);
   }
-  assert.equal(faxinaisLayer.category, 'Limites');
+  assert.equal(faxinaisLayer.category, 'Territórios e povos');
 });
 
 test('tooltip do município: total do inventário 2010 e ARESUR dos perímetros atuais', () => {

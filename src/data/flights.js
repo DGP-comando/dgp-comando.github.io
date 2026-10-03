@@ -931,7 +931,7 @@ function _tooltipHtml(props) {
 export const flightsMapDef = defineLayer({
   id: LAYER_ID,
   name: 'Tráfego aéreo',
-  category: 'Infraestrutura',
+  category: 'Transporte',
   icon: '✈️',
   source: 'OpenSky Network',
   sources: {
@@ -1842,7 +1842,7 @@ function _removeInput() {
 const flightsLayer = {
   id: LAYER_ID,
   name: 'Tráfego aéreo',
-  category: 'Infraestrutura',
+  category: 'Transporte',
   icon: '✈️',
   source: 'OpenSky Network',
   /** @type {number} Intervalo (ms) entre polls. */

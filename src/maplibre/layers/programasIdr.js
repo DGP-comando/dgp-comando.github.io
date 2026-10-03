@@ -16,7 +16,7 @@ import {
 } from '../../data/programasIdrEstilos.js';
 import { makePointsLayer } from './energiaLogistica.js';
 
-export const PROGRAMAS_IDR = 'Programas IDR';
+export const PROGRAMAS_IDR = 'IDR-Paraná';
 
 const urs = (def) => makePointsLayer({ category: PROGRAMAS_IDR, labelDists: [UR_LABEL_DIST], ...def });
 

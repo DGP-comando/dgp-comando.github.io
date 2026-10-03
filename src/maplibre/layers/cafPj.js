@@ -81,7 +81,7 @@ const cor = ['match', ['get', 't'], ...PJ_CORES.flatMap((c, i) => [i, c]), '#e2e
 export default [defineLayer({
   id: 'datageo-caf-pj',
   name: 'CAF jurídicas (associações e cooperativas)',
-  category: 'Território',
+  category: 'Agricultura familiar e CAR',
   icon: '🤝',
   source: 'MDA · CAF PJ',
   sources: { [SRC]: { type: 'geojson', data: EMPTY_FC }, [REDE]: { type: 'geojson', data: EMPTY_FC } },

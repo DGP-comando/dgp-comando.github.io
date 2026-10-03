@@ -55,7 +55,7 @@ export function estacaoTooltipHtml(p, dados) {
 export const estacoesIdrLayer = defineLayer({
   id: 'datageo-estacoes-idr',
   name: 'Estações e polos de pesquisa (IDR)',
-  category: 'Limites',
+  category: 'IDR-Paraná',
   icon: '🔬',
   source: 'IDR-Paraná',
   sources: { [SRC]: { type: 'geojson', data: EMPTY_FC } },
@@ -178,7 +178,7 @@ export function unidadeTooltipHtml(p, dados = null, ger = null) {
 const unidadesBase = makePointsLayer({
   id: 'datageo-unidades-idr',
   name: 'Unidades do IDR (endereços)',
-  category: 'Limites',
+  category: 'IDR-Paraná',
   icon: '🏢',
   source: 'IDR-Paraná',
   url: '/privado/unidades-idr-pr.geojson',

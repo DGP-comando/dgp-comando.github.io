@@ -325,7 +325,7 @@ const imgSource = (s) => `dg-outorgas-${s.key}`;
 export const outorgasLayer = defineLayer({
   id: 'datageo-outorgas',
   name: 'Outorgas de uso da água (IAT)',
-  category: 'Ambiente',
+  category: 'Recursos hídricos',
   icon: '💧',
   source: 'IAT · SIGARH + CRH',
   sources: {

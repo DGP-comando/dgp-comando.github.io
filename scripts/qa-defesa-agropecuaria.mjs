@@ -95,7 +95,7 @@ try {
     const out = {};
     let atual = '';
     for (const el of hdr?.parentElement?.children ?? []) {
-      if (el.classList.contains('data-toggle-group-header')) atual = el.textContent.trim();
+      if (el.classList.contains('data-toggle-group-header')) atual = el.dataset.group;
       const id = el.getAttribute('data-layer-id') ?? el.querySelector('[data-layer-id]')?.getAttribute('data-layer-id');
       if (id) out[id] = atual;
     }

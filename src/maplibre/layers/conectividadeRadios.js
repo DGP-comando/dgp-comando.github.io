@@ -157,7 +157,7 @@ const conectividade = (() => {
   return defineLayer({
     id: 'datageo-conectividade',
     name: 'Conectividade',
-    category: 'Infraestrutura',
+    category: 'Energia e conectividade',
     icon: '📡',
     source: 'IDR-PR · ANATEL',
     sources: {
@@ -337,7 +337,7 @@ const radios = (() => {
   return defineLayer({
     id: 'datageo-radios',
     name: 'Rádios ao vivo',
-    category: 'Infraestrutura',
+    category: 'Energia e conectividade',
     icon: '📻',
     source: 'Anatel · radio.garden · Radio Browser',
     sources: {

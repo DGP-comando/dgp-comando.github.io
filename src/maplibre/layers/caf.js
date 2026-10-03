@@ -64,7 +64,7 @@ function destacar(ctx, f, imovel) {
 export default [defineLayer({
   id: 'datageo-caf',
   name: 'Agricultura familiar (CAF)',
-  category: 'Território',
+  category: 'Agricultura familiar e CAR',
   icon: '👨‍🌾',
   source: 'MDA · CAF',
   sources: { [SRC]: { type: 'geojson', data: EMPTY_FC }, [SEL]: { type: 'geojson', data: EMPTY_FC } },

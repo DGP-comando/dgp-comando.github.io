@@ -2,7 +2,7 @@
 /**
  * qa-programas-idr — Unidades de Referência dos programas do IDR (bucket privado):
  *   1. Agroindústrias (cadastro IDR), Rotas turísticas e as camadas novas
- *      aparecem sob o cabeçalho "Programas IDR", e nenhuma delas sob "Logística agro";
+ *      aparecem sob o cabeçalho "IDR-Paraná", e nenhuma delas sob "Logística agro";
  *   2. cada camada de URs carrega todos os pontos do arquivo e a legenda do painel
  *      traz a contagem de cada grupo igual à dos dados;
  *   3. o hover num ponto isolado abre o tooltip com produtor e município acentuados;
@@ -83,13 +83,13 @@ try {
     const out = {};
     let atual = '';
     for (const el of hdr?.parentElement?.children ?? []) {
-      if (el.classList.contains('data-toggle-group-header')) atual = el.textContent.trim();
+      if (el.classList.contains('data-toggle-group-header')) atual = el.dataset.group;
       const id = el.getAttribute('data-layer-id') ?? el.querySelector('[data-layer-id]')?.getAttribute('data-layer-id');
       if (id) out[id] = atual;
     }
     return out;
   });
-  for (const id of PROGRAMAS) check(`${id} sob "Programas IDR"`, grupoDe[id] === 'Programas IDR', grupoDe[id]);
+  for (const id of PROGRAMAS) check(`${id} sob "IDR-Paraná"`, grupoDe[id] === 'IDR-Paraná', grupoDe[id]);
   check('Logística agro sem programas do IDR', grupoDe['datageo-armazens'] === 'Logística agro'
     && !PROGRAMAS.some((id) => grupoDe[id] === 'Logística agro'), { armazens: grupoDe['datageo-armazens'] });
 

@@ -25,9 +25,9 @@ test('camadas na ordem e com os ids/categorias do app', () => {
     'datageo-ucs-federais', 'datageo-ucs-estaduais', 'datageo-regionais-idr', 'datageo-associacoes', 'datageo-car',
   ]);
   const cat = Object.fromEntries(layers.map((l) => [l.id, l.category]));
-  assert.equal(cat['datageo-terras-indigenas'], 'Limites');
+  assert.equal(cat['datageo-terras-indigenas'], 'Territórios e povos');
   assert.equal(cat['datageo-ucs-federais'], 'Ambiente');
-  assert.equal(cat['datageo-car'], 'Território');
+  assert.equal(cat['datageo-car'], 'Agricultura familiar e CAR');
   // Todas têm tooltip (UCs e CAR incluídos); o CAR responde por uma linha de pick larga.
   for (const l of layers) {
     assert.ok(l.interactive.length > 0 && typeof l.tooltip === 'function', l.id);

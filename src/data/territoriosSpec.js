@@ -406,6 +406,7 @@ export const TERRITORIO_SPECS = Object.freeze({
   },
   regionaisIdr: {
     id: 'datageo-regionais-idr',
+    category: 'Limites e regiões',
     name: 'Regionais do IDR',
     icon: '🗺️',
     source: 'IDR-Paraná',
@@ -422,6 +423,7 @@ export const TERRITORIO_SPECS = Object.freeze({
   // para o polígono ser "pickado" pelo tooltip.
   associacoes: {
     id: 'datageo-associacoes',
+    category: 'Limites e regiões',
     name: 'Associações de municípios',
     icon: '🤝',
     source: 'SECID-PR',

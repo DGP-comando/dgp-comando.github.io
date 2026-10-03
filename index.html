@@ -610,6 +610,14 @@
         <span class="panel-divider"></span>
         <button class="panel-collapse-btn" data-collapse-target="data-panel" title="Recolher painel">+</button>
       </div>
+      <div id="data-panel-tools" class="data-panel-tools">
+        <input id="data-panel-search" type="search" placeholder="Filtrar camadas…" aria-label="Filtrar camadas" autocomplete="off" spellcheck="false" />
+        <div class="data-panel-views" role="group" aria-label="Modo de exibição das camadas">
+          <button type="button" data-view="grupos" aria-pressed="true" title="Grupos recolhíveis" aria-label="Grupos recolhíveis"><span class="material-symbols-outlined" aria-hidden="true">view_agenda</span></button>
+          <button type="button" data-view="lista" aria-pressed="false" title="Lista compacta" aria-label="Lista compacta"><span class="material-symbols-outlined" aria-hidden="true">view_headline</span></button>
+          <button type="button" data-view="grade" aria-pressed="false" title="Grade de ícones" aria-label="Grade de ícones"><span class="material-symbols-outlined" aria-hidden="true">grid_view</span></button>
+        </div>
+      </div>
       <div id="data-toggles" class="data-toggle-list"></div>
     </div>
   </div>
@@ -883,7 +891,8 @@
         <p>Tudo o que aparece no mapa sai do painel <b>CAMADAS DE DADOS</b>, no canto esquerdo.</p>
         <ul class="tour-points">
           <li>Clique no <kbd>+</kbd> do painel, ou tecle <kbd>L</kbd>, para abrir a lista.</li>
-          <li>As camadas estão agrupadas por tema: Limites, Território, Proteção social, Infraestrutura, Programas IDR, Defesa Agropecuária, Logística agro, Clima, Hidrologia, Ambiente, Saúde e ar, Riscos e alertas.</li>
+          <li>As camadas estão agrupadas por tema: Limites e regiões, Territórios e povos, Agricultura familiar e CAR, IDR-Paraná, Defesa Agropecuária, Logística agro, Transporte, Energia e conectividade, Saúde e proteção social, Clima, Recursos hídricos, Ambiente, Riscos e alertas. Clique no nome do grupo para abrir ou recolher.</li>
+          <li>A caixa de busca filtra pelo nome; os três botões ao lado mudam a exibição: grupos, lista compacta ou grade de ícones.</li>
           <li>Clique numa camada para ligar ou desligar. A linha mostra a fonte, a contagem e a última atualização.</li>
           <li>Algumas só aparecem de perto, como as rodovias municipais e as linhas de distribuição: aproxime o zoom.</li>
           <li>Passe o mouse sobre um município para ver o resumo e clique para abrir a ficha completa.</li>
@@ -916,7 +925,7 @@
           <dt>ESTILOS VISUAIS</dt><dd>visual do mapa e fonte da imagem de fundo (teclas <kbd>1</kbd>–<kbd>7</kbd>)</dd>
           <dt>TELA</dt><dd>HUD (<kbd>H</kbd>), detecção e efeitos</dd>
           <dt>Visão limpa</dt><dd>esconde os painéis (<kbd>V</kbd>); tela cheia em <kbd>M</kbd></dd>
-          <dt>Cantos</dt><dd>CENAS, VIGILÂNCIA (<kbd>A</kbd>) e BRIEFING DIÁRIO</dd>
+          <dt>Cantos</dt><dd>CENAS e VIGILÂNCIA (<kbd>A</kbd>)</dd>
         </dl>
         <p class="tour-hint">Tecle <kbd>?</kbd> a qualquer momento para ver todos os atalhos.</p>
       </section>

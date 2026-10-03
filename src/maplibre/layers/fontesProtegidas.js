@@ -32,7 +32,7 @@ const cor = ['match', ['get', 't'], ...FONTE_CORES.flatMap((c, i) => [i, c]), '#
 export default [defineLayer({
   id: 'datageo-fontes-protegidas',
   name: 'Fontes protegidas (IDR)',
-  category: 'Ambiente',
+  category: 'IDR-Paraná',
   icon: '💧',
   source: 'IDR-Paraná · Proteção de Fontes',
   sources: { [SRC]: { type: 'geojson', data: EMPTY_FC } },

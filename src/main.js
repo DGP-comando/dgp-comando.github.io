@@ -17,7 +17,6 @@ import { createLayerHost } from './maplibre/layerHost.js';
 import { toManagerModule } from './maplibre/managerAdapter.js';
 import { LAYERS as MAPLIBRE_LAYERS } from './maplibre/layers/index.js';
 import { initDatageoTicker } from './datageoTicker.js';
-import { initDatageoBriefing } from './datageoBriefing.js';
 import { initDatageoAreaWatch } from './datageoAreaWatch.js';
 import { initDatageoShortcuts, openLayersPanel, openLocationSearch } from './datageoShortcuts.js';
 import {
@@ -176,9 +175,9 @@ async function init() {
     for (const id of ['local-datacenters', 'local-dams', 'telegeography-submarine-cables', 'local-firms']) {
       dataManager.register(maplibreModules.get(id));
     }
-    // Chrome DataGeo: ticker de noticias + briefing situacional diario
+    // Chrome DataGeo: ticker de noticias. O briefing diario (datageoBriefing.js)
+    // saiu da tela em 2026-10-02; o modulo fica para quando voltar.
     initDatageoTicker();
-    initDatageoBriefing();
     // Vigilancia de municipios (tripwire: focos/CEMADEN/incidentes novos) e
     // atalhos de teclado DataGeo; o botao VIGIAR da ficha fala por window.
     const areaWatch = initDatageoAreaWatch({
@@ -217,7 +216,7 @@ async function init() {
         return dataManager.unregisterForQa(layerId);
       };
     }
-    dataManager.buildTogglePanel(document.getElementById('data-toggles'));
+    dataManager.buildTogglePanel(document.getElementById('data-toggles'), document.getElementById('data-panel-tools'));
     styleManager.attachDataManager(dataManager);
 
     // Initialize deterministic scene playback for social clip capture

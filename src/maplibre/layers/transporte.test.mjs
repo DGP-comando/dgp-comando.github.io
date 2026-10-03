@@ -18,7 +18,7 @@ test('ids e ordem do grupo transporte', () => {
   assert.deepEqual(transporte.map((l) => l.id), [
     'datageo-ferrovias', 'datageo-rodovias', 'datageo-estradas', 'datageo-estradas-conveniadas',
   ]);
-  for (const l of transporte) assert.equal(l.category, 'Infraestrutura');
+  for (const l of transporte) assert.equal(l.category, 'Transporte');
 });
 
 test('cellFeatures decodifica uma célula real das estradas em MultiLineStrings por classe', () => {

@@ -31,21 +31,50 @@ const LIFECYCLE_LABELS = Object.freeze({
 // `category`; sem declaracao cai em "Contexto global" (camadas GEV herdadas
 // — terremotos, cabos, voos etc.). A ordem aqui e a ordem do painel.
 const LAYER_CATEGORY_ORDER = Object.freeze([
-  'Limites',
-  'Território',
-  'Proteção social',
-  'Infraestrutura',
-  'Programas IDR',
+  'Limites e regiões',
+  'Territórios e povos',
+  'Agricultura familiar e CAR',
+  'IDR-Paraná',
   'Defesa Agropecuária',
   'Logística agro',
+  'Transporte',
+  'Energia e conectividade',
+  'Saúde e proteção social',
   'Clima',
-  'Hidrologia',
+  'Recursos hídricos',
   'Ambiente',
-  'Saúde e ar',
   'Riscos e alertas',
   'Contexto global',
 ]);
 const DEFAULT_LAYER_CATEGORY = 'Contexto global';
+
+// Modos de exibicao do painel (botoes em #data-panel-tools). O DOM e o mesmo
+// nos tres — so a classe `view-*` da lista muda e o CSS reorganiza as linhas.
+const PANEL_VIEWS = Object.freeze(['grupos', 'lista', 'grade']);
+const PANEL_VIEW_KEY = 'gev:layer-panel-view';
+const PANEL_OPEN_KEY = 'gev:layer-panel-open';
+
+function readStoredJson(key) {
+  try {
+    const raw = globalThis.localStorage?.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredJson(key, value) {
+  try {
+    globalThis.localStorage?.setItem(key, JSON.stringify(value));
+  } catch {
+    // Armazenamento indisponivel (modo privado, cota): a preferencia so nao persiste.
+  }
+}
+
+/** Busca sem acento e sem caixa: "regioes" acha "Limites e regiões". */
+function foldText(value) {
+  return String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
 
 const SUPERSEDED_VISIBILITY_INTENT = Symbol('superseded-visibility-intent');
 const VALID_LAYER_SERIALIZATION_DISPOSITIONS = new Set([
@@ -2111,9 +2140,99 @@ export class DataLayerManager {
   /**
    * Build the toggle panel UI inside the given container element.
    */
-  buildTogglePanel(container) {
+  buildTogglePanel(container, tools = null) {
     this._toggleContainer = container;
+    this._panelFilter = '';
+    // null = automatico: abre os grupos que tem camada ligada. Vira Set na
+    // primeira acao do operador e persiste em localStorage.
+    const stored = readStoredJson(PANEL_OPEN_KEY);
+    this._openGroups = Array.isArray(stored) ? new Set(stored) : null;
+    const view = readStoredJson(PANEL_VIEW_KEY);
+    this._panelView = PANEL_VIEWS.includes(view) ? view : 'grupos';
+    if (tools) this._bindPanelTools(tools);
     this._renderToggles();
+  }
+
+  /** Liga a busca e os botoes de modo (#data-panel-tools) ao painel. */
+  _bindPanelTools(tools) {
+    this._panelTools = tools;
+    const search = tools.querySelector('input[type="search"]');
+    search?.addEventListener('input', () => {
+      this._panelFilter = foldText(search.value).trim();
+      this._applyPanelLayout();
+    });
+    for (const button of tools.querySelectorAll('[data-view]')) {
+      button.addEventListener('click', () => this.setPanelView(button.dataset.view));
+    }
+    this._syncPanelViewButtons();
+  }
+
+  setPanelView(view) {
+    if (!PANEL_VIEWS.includes(view)) return;
+    this._panelView = view;
+    writeStoredJson(PANEL_VIEW_KEY, view);
+    this._syncPanelViewButtons();
+    this._applyPanelLayout();
+  }
+
+  _syncPanelViewButtons() {
+    for (const button of this._panelTools?.querySelectorAll?.('[data-view]') || []) {
+      button.setAttribute('aria-pressed', button.dataset.view === this._panelView ? 'true' : 'false');
+    }
+  }
+
+  _isGroupOpen(group) {
+    if (this._openGroups) return this._openGroups.has(group);
+    return this.getAll().some((layer) => layer.enabled && (layer.category || DEFAULT_LAYER_CATEGORY) === group);
+  }
+
+  _toggleGroup(group) {
+    if (!this._openGroups) {
+      const cats = new Set(this.getAll().map((layer) => layer.category || DEFAULT_LAYER_CATEGORY));
+      this._openGroups = new Set([...cats].filter((cat) => this._isGroupOpen(cat)));
+    }
+    if (this._openGroups.has(group)) this._openGroups.delete(group);
+    else this._openGroups.add(group);
+    writeStoredJson(PANEL_OPEN_KEY, [...this._openGroups]);
+    this._applyPanelLayout();
+  }
+
+  /**
+   * Esconde/mostra linhas conforme grupo recolhido e filtro de busca, e
+   * atualiza o selo "ligadas/total" de cada cabecalho. O filtro ignora o
+   * recolhimento: quem busca quer ver o que achou.
+   */
+  _applyPanelLayout() {
+    const list = this._toggleContainer;
+    if (!list?.children) return;
+    for (const view of PANEL_VIEWS) list.classList?.toggle?.(`view-${view}`, view === this._panelView);
+    const byId = new Map(this.getAll().map((layer) => [layer.id, layer]));
+    const filter = this._panelFilter || '';
+    const counts = new Map();
+    for (const node of list.children) {
+      if (!node.dataset?.layerId) continue;
+      const layer = byId.get(node.dataset.layerId);
+      const group = node.dataset.group;
+      const stat = counts.get(group) || { on: 0, total: 0, shown: 0 };
+      const matches = !filter || foldText(`${layer?.name} ${group}`).includes(filter);
+      node.hidden = !matches || (!filter && !this._isGroupOpen(group));
+      stat.total += 1;
+      if (layer?.enabled) stat.on += 1;
+      if (matches) stat.shown += 1;
+      counts.set(group, stat);
+    }
+    for (const node of list.children) {
+      const group = node.dataset?.group;
+      if (node.dataset?.layerId || !group) continue;
+      const stat = counts.get(group) || { on: 0, total: 0, shown: 0 };
+      node.hidden = filter ? stat.shown === 0 : false;
+      const open = Boolean(filter) || this._isGroupOpen(group);
+      node.setAttribute('aria-expanded', open ? 'true' : 'false');
+      node.classList?.toggle?.('is-open', open);
+      node.classList?.toggle?.('has-on', stat.on > 0);
+      const badge = node.querySelector('.data-toggle-group-count');
+      if (badge) badge.textContent = stat.on ? `${stat.on}/${stat.total}` : String(stat.total);
+    }
   }
 
   _renderToggles() {
@@ -2140,17 +2259,30 @@ export class DataLayerManager {
       orderedLayers.push(...byCategory.get(cat));
     }
 
+    let currentGroup = DEFAULT_LAYER_CATEGORY;
     for (const layer of orderedLayers) {
       if (layer.__header) {
-        const header = document.createElement('div');
+        const group = layer.__header;
+        currentGroup = group;
+        const header = document.createElement('button');
+        header.type = 'button';
         header.className = 'data-toggle-group-header';
-        header.textContent = layer.__header;
+        header.dataset.group = group;
+        const label = document.createElement('span');
+        label.className = 'data-toggle-group-label';
+        label.textContent = group;
+        const badge = document.createElement('span');
+        badge.className = 'data-toggle-group-count';
+        header.appendChild(label);
+        header.appendChild(badge);
+        header.addEventListener('click', () => this._toggleGroup(group));
         this._toggleContainer.appendChild(header);
         continue;
       }
       const row = document.createElement('div');
-      row.className = 'data-toggle-row';
+      row.className = `data-toggle-row${layer.enabled ? ' is-on' : ''}`;
       row.dataset.layerId = layer.id;
+      row.dataset.group = currentGroup;
 
       const topRow = document.createElement('div');
       topRow.className = 'data-toggle-top';
@@ -2218,6 +2350,7 @@ export class DataLayerManager {
 
       this._toggleContainer.appendChild(row);
     }
+    this._applyPanelLayout();
   }
 
   /**
@@ -2311,6 +2444,7 @@ export class DataLayerManager {
     for (const layer of this.getAll()) {
       const row = this._toggleContainer.querySelector(`[data-layer-id="${layer.id}"]`);
       if (!row) continue;
+      row.classList?.toggle?.('is-on', Boolean(layer.enabled));
 
       const btn = row.querySelector('.data-toggle-btn');
       if (btn) {
@@ -2327,6 +2461,7 @@ export class DataLayerManager {
 
       this._syncRowControls(row.querySelector('.data-toggle-controls'), layer);
     }
+    this._applyPanelLayout();
   }
 
   /**

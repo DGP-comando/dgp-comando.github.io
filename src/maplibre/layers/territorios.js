@@ -69,7 +69,7 @@ function territorioLayer(spec, { onClick = null } = {}) {
   return defineLayer({
     id,
     name: spec.name,
-    category: spec.category ?? 'Limites',
+    category: spec.category ?? 'Territórios e povos',
     icon: spec.icon,
     source: spec.source,
     sources: {
@@ -333,7 +333,7 @@ carWidth.push(1);
 export const carLayer = defineLayer({
   id: 'datageo-car',
   name: 'CAR · imóveis ativos',
-  category: 'Território',
+  category: 'Agricultura familiar e CAR',
   icon: '🌱',
   source: 'SICAR/SFB',
   sources: { [CAR_SOURCE]: { type: 'geojson', data: EMPTY_FC, tolerance: 0.2 } },

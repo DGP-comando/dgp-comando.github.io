@@ -86,7 +86,7 @@ test('cellKey e nearestCells priorizam a célula do centro e respeitam o index',
 test('camada registrada na classe Infraestrutura e no share link', () => {
   const datageoDistribuicaoLayer = DATAGEO_ENERGIA_LAYERS.find((l) => l.id === 'datageo-distribuicao');
   assert.ok(datageoDistribuicaoLayer, 'camada ausente do módulo MapLibre de energia/logística');
-  assert.equal(datageoDistribuicaoLayer.category, 'Infraestrutura');
+  assert.equal(datageoDistribuicaoLayer.category, 'Energia e conectividade');
   assert.ok(DATAGEO_ENERGIA_LAYERS.includes(datageoDistribuicaoLayer));
   const entry = LAYER_STATE_REGISTRY.find((e) => e.id === 'datageo-distribuicao');
   assert.ok(entry);

@@ -378,7 +378,13 @@ const MILITARY_DETECTION_PRESET = Object.freeze({ mode: 'dense', densityPct: 75 
 /** Baseline post-processing settings applied on first load (before share-link restore). */
 const GLOBAL_POST_DEFAULTS = {
   bloom: { enabled: false, intensity: BLOOM_INTENSITY_DEFAULT },
-  sharpen: { enabled: true, intensity: 49 },
+  // Piso do produto (2026-10-02): TODO boot abre sem scope e com sharpen a
+  // 100%, venha o estado de onde vier. Diferente dos outros campos deste
+  // objeto, estes NAO sao sobrepostos pelo share link nem pelo hash anterior:
+  // a restauracao (onRestore) ignora `sharpen`, `sharpenIntensity` e
+  // `scopeEnabled`. O operador continua livre para mudar durante a sessao.
+  sharpen: { enabled: true, intensity: 100 },
+  scopeEnabled: false,
   hudVariant: 'tactical',
   // HUD OFF on a first run. The variant stays 'tactical' so turning it on with
   // H (or the TELA toggle) lands on the intended look — the default is about
@@ -2481,10 +2487,8 @@ export class StyleManager {
         const {
           style,
           bloom,
-          sharpen,
           bloomIntensity,
           bloomVersion,
-          sharpenIntensity,
           hudVariant,
           hudVisible,
           detectionMode,
@@ -2493,7 +2497,6 @@ export class StyleManager {
           detectionFadePct,
           detectionOutsideOpacityPct,
           celestialRing,
-          scopeEnabled,
           scopeFeatherPct,
           scopeTerminusPct,
           mapStack,
@@ -2518,14 +2521,10 @@ export class StyleManager {
           const intensity = decodeBloomIntensity(bloomIntensity, bloomVersion);
           this._setBloomIntensity(intensity, { syncShare: false });
         }
-        if (typeof sharpenIntensity === 'number' && this._sharpenSlider) {
-          const pct = Math.max(0, Math.min(100, Math.round(sharpenIntensity)));
-          this._sharpenSlider.value = String(pct);
-          this._sharpenSliderValue.textContent = `${pct}%`;
-          this._applySharpenIntensity(pct / 100);
-        }
+        // `sharpen`, `sharpenIntensity` e `scopeEnabled` sao deliberadamente
+        // ignorados: piso do produto em GLOBAL_POST_DEFAULTS (sempre sem scope,
+        // sharpen 100%), ja aplicado antes desta restauracao.
         if (typeof bloom === 'boolean') this._setBloomEnabled(bloom);
-        if (typeof sharpen === 'boolean') this._setSharpenEnabled(sharpen);
         if (hudVariant) this._setHudVariant(hudVariant);
         if (typeof hudVisible === 'boolean') {
           this.hud.setMode(hudVisible ? 'on' : 'off');
@@ -2550,11 +2549,6 @@ export class StyleManager {
         if (detectionMode) this._setDetectionMode(detectionMode);
         if (typeof celestialRing === 'boolean') {
           this.setCelestialRingEnabled(celestialRing, { syncShare: false, focus: false });
-        }
-        if (typeof scopeEnabled === 'boolean') {
-          setScopeMaskEnabled(scopeEnabled);
-          this._scopeBtn?.classList.toggle('active', scopeEnabled);
-          this._scopeBtn?.setAttribute('aria-pressed', String(scopeEnabled));
         }
         if (typeof scopeFeatherPct === 'number' && this._scopeFeatherSlider) {
           const pct = Math.max(0, Math.min(100, Math.round(scopeFeatherPct)));
@@ -3844,6 +3838,11 @@ export class StyleManager {
     }
     if (typeof defaults.sharpen?.enabled === 'boolean') {
       this._setSharpenEnabled(defaults.sharpen.enabled);
+    }
+    if (typeof defaults.scopeEnabled === 'boolean') {
+      setScopeMaskEnabled(defaults.scopeEnabled);
+      this._scopeBtn?.classList.toggle('active', defaults.scopeEnabled);
+      this._scopeBtn?.setAttribute('aria-pressed', String(defaults.scopeEnabled));
     }
 
     if (defaults.hudVariant) {

@@ -36,8 +36,8 @@ import { EMPTY_FC, TEXT_FONT, defineLayer, fc, fmtNum, tipCard, zoomForHeight } 
 import { createCursorMunicipio } from './territoriosFeatures.js';
 
 const LOGISTICA = 'Logística agro';
-const INFRA = 'Infraestrutura';
-const PROGRAMAS_IDR = 'Programas IDR';
+const INFRA = 'Energia e conectividade';
+const PROGRAMAS_IDR = 'IDR-Paraná';
 
 // ------------------------------------------------------------ utilitários
 

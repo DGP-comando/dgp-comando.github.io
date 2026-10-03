@@ -16,6 +16,8 @@ import { startPollLoop } from './data/pollPolicy.js';
 
 const POLL_MS = 5 * 60_000;
 
+const TICKER_PAUSED_KEY = 'datageo:ticker-paused';
+
 const URGENCY_COLORS = {
   urgent: '#ef4444',
   important: '#f59e0b',
@@ -46,13 +48,23 @@ function injectStyles() {
     }
     #datageo-ticker .ticker-tag {
       flex: 0 0 auto;
+      height: 100%;
       padding: 0 10px;
+      font: inherit;
       color: #22d3ee;
       letter-spacing: 0.12em;
+      border: 0;
       border-right: 1px solid rgba(34, 211, 238, 0.25);
       background: rgba(3, 10, 18, 0.95);
       z-index: 1;
+      cursor: pointer;
+      pointer-events: auto;
     }
+    #datageo-ticker .ticker-tag:hover { color: #f8fafc; }
+    #datageo-ticker .ticker-tag:focus-visible { outline: 1px solid #22d3ee; outline-offset: -2px; }
+    /* Clique em PR AO VIVO: para a passagem (a tag esmaece para avisar). */
+    #datageo-ticker.paused .ticker-tag { color: #64748b; }
+    #datageo-ticker.paused .ticker-scroll { animation-play-state: paused; }
     #datageo-ticker .ticker-track {
       flex: 1;
       overflow: hidden;
@@ -147,10 +159,22 @@ export function initDatageoTicker() {
   const container = document.createElement('div');
   container.id = 'datageo-ticker';
   container.innerHTML = `
-    <span class="ticker-tag">PR AO VIVO</span>
+    <button type="button" class="ticker-tag" aria-pressed="false" title="Parar ou retomar a passagem das notícias">PR AO VIVO</button>
     <div class="ticker-track"><div class="ticker-scroll"></div></div>
   `;
   document.body.appendChild(container);
+
+  // Clique em PR AO VIVO liga/desliga a passagem; a escolha fica no navegador.
+  const tag = container.querySelector('.ticker-tag');
+  const setPaused = (paused) => {
+    container.classList.toggle('paused', paused);
+    tag.setAttribute('aria-pressed', String(paused));
+    try { localStorage.setItem(TICKER_PAUSED_KEY, paused ? '1' : '0'); } catch { /* sem storage */ }
+  };
+  let pausedInicial = false;
+  try { pausedInicial = localStorage.getItem(TICKER_PAUSED_KEY) === '1'; } catch { /* sem storage */ }
+  setPaused(pausedInicial);
+  tag.addEventListener('click', () => setPaused(!container.classList.contains('paused')));
 
   // Loop com skip quando a aba esta oculta, backoff em erro e catch-up no
   // visibilitychange (pollPolicy). Erro lanca para o loop contar a falha.

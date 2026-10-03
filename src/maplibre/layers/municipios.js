@@ -51,7 +51,7 @@ const CYAN = '#22e6f0';
 export const municipiosLayer = defineLayer({
   id: 'datageo-municipios',
   name: 'Municípios do Paraná',
-  category: 'Limites',
+  category: 'Limites e regiões',
   icon: '🏛️',
   source: 'TSE · IBGE/PAM · DataGeo PR',
   defaultOn: true,

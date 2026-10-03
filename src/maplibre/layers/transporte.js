@@ -155,7 +155,7 @@ export const ferroviasLayer = (() => {
   return defineLayer({
   id: 'datageo-ferrovias',
   name: 'Ferrovias',
-  category: 'Infraestrutura',
+  category: 'Transporte',
   icon: '🚆',
   source: 'OpenStreetMap',
   sources: { 'dg-ferrovias': { type: 'geojson', data: EMPTY_FC } },
@@ -248,7 +248,7 @@ export const rodoviasLayer = (() => {
   return defineLayer({
   id: 'datageo-rodovias',
   name: 'Rodovias',
-  category: 'Infraestrutura',
+  category: 'Transporte',
   icon: '🛣️',
   source: 'OSM · DNIT/DER-PR',
   sources: {
@@ -325,7 +325,7 @@ export const estradasLayer = (() => {
   const base = createSlicedLinesLayer({
     id: 'datageo-estradas',
     name: 'Estradas municipais',
-    category: 'Infraestrutura',
+    category: 'Transporte',
     icon: '🛤️',
     source: 'OpenStreetMap',
     baseUrl: '/data/estradas',
@@ -472,7 +472,7 @@ export const estradasConveniadasLayer = (() => {
   return defineLayer({
     id: 'datageo-estradas-conveniadas',
     name: 'Estradas Rurais Conveniadas',
-    category: 'Infraestrutura',
+    category: 'Transporte',
     icon: '🚜',
     source: 'SEAB-PR',
     sources: { [CONV_SRC]: { type: 'geojson', data: EMPTY_FC } },

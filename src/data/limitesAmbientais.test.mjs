@@ -66,7 +66,7 @@ test('camadas nas categorias pedidas e registradas no share link', () => {
   const datageoAssentamentosLayer = byId('datageo-assentamentos');
   const datageoUcsFederaisLayer = byId('datageo-ucs-federais');
   const datageoUcsEstaduaisLayer = byId('datageo-ucs-estaduais');
-  assert.equal(datageoAssentamentosLayer.category, 'Limites');
+  assert.equal(datageoAssentamentosLayer.category, 'Territórios e povos');
   assert.equal(datageoUcsFederaisLayer.category, 'Ambiente');
   assert.equal(datageoUcsEstaduaisLayer.category, 'Ambiente');
   const ids = new Set(DATAGEO_TERRITORIOS_LAYERS.map((l) => l.id));

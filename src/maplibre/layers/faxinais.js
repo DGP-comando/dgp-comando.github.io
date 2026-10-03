@@ -64,7 +64,7 @@ export function faxinalPontoTooltip(p) {
 export const faxinaisLayer = makePointsLayer({
   id: 'datageo-faxinais',
   name: 'Faxinais · inventário 2010 (IAT)',
-  category: 'Limites',
+  category: 'Territórios e povos',
   icon: '🌳',
   source: 'IAT/GeoPR · ZEE-PR',
   url: '/data/faxinais-pr.geojson',
