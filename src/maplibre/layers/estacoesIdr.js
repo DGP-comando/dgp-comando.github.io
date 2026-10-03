@@ -9,7 +9,11 @@
 import { extensionistasDoMunicipio, loadServidoresIdr, servidoresDasUnidades } from '../../data/servidoresIdr.js';
 import { dgFetchData } from '../../data/datageoClient.js';
 import { gerenteDaRegional, loadGerentesIdr } from '../../data/gerentesIdr.js';
-import { EMPTY_FC, LABEL_PAINT, TEXT_FONT, defineLayer, tipCard, zoomForHeight } from '../kit.js';
+import { grupos, loadGetecGrupos, redeFeatures } from '../../data/getecGrupos.js';
+import { escritorioHtml, extensionistaHtml } from '../../datageoGetec.js';
+import { openPainel } from '../../datageoFicha.js';
+import { extensao } from './cafPj.js';
+import { EMPTY_FC, LABEL_PAINT, TEXT_FONT, defineLayer, fc, tipCard, zoomForHeight } from '../kit.js';
 import { makePointsLayer } from './energiaLogistica.js';
 
 const URL = '/privado/estacoes-idr-pr.geojson';
@@ -23,6 +27,10 @@ const TIPO = { estacao: 'Estação de pesquisa', polo: 'Polo de pesquisa', 'unid
 
 let servidores = null; // payload de servidores-idr.json; null = indisponível
 let gerentes = null; // payload de gerentes-idr.json; null = indisponível
+let getec = null; // payload de getec-grupos.json; null = indisponível
+let unidades = []; // features de unidades-idr-pr.geojson, na ordem (id = índice)
+const REDE = 'dg-getec-rede';
+const UNIDADES_URL = '/privado/unidades-idr-pr.geojson';
 
 /** HTML do tooltip de uma estação/polo/unidade (exportado para o teste). */
 export function estacaoTooltipHtml(p, dados) {
@@ -169,6 +177,7 @@ export function unidadeTooltipHtml(p, dados = null, ger = null) {
       todos.length > nomes.length ? `+ ${todos.length - nomes.length} extensionistas.` : '',
       p.aproximado ? 'Localização aproximada (sede do município): o ponto da base não fechava com o endereço.' : '',
       p.no_site === false ? 'Não consta em "Endereços e Contatos" do site do IDR.' : '',
+      ume ? 'Clique para ver os grupos de assistidos (GETEC) de cada extensionista.' : '',
     ].filter(Boolean).join(' '),
     source: `IDR-Paraná · Endereços e Contatos (28/09/2026) · SisPont${gerente ? ` · gerente: RH do IDR${gerente.referencia ? ` (${gerente.referencia})` : ''}` : ''}`,
     wide: nomes.length > 0,
@@ -181,7 +190,7 @@ const unidadesBase = makePointsLayer({
   category: 'IDR-Paraná',
   icon: '🏢',
   source: 'IDR-Paraná',
-  url: '/privado/unidades-idr-pr.geojson',
+  url: UNIDADES_URL,
   estilo: unidadeEstilo,
   tooltip: (p) => unidadeTooltipHtml(p, servidores, gerentes),
   legend: UNIDADE_LEGENDA,
@@ -193,8 +202,34 @@ const unidadesBase = makePointsLayer({
 // (falha da lista não derruba a camada: o tooltip avisa).
 export const unidadesIdrLayer = defineLayer({
   ...unidadesBase,
+  sources: { ...unidadesBase.sources, [REDE]: { type: 'geojson', data: EMPTY_FC } },
+  layers: [
+    // Rede do extensionista (escritório -> famílias dos grupos do GETEC), por baixo dos pontos.
+    {
+      id: 'dg-getec-rede-linha',
+      type: 'line',
+      source: REDE,
+      filter: ['==', ['geometry-type'], 'LineString'],
+      metadata: { 'dg:slot': 'point' },
+      paint: { 'line-color': '#ffffff', 'line-width': 1.2, 'line-opacity': 0.8 },
+    },
+    {
+      id: 'dg-getec-rede-pt',
+      type: 'circle',
+      source: REDE,
+      filter: ['==', ['geometry-type'], 'Point'],
+      metadata: { 'dg:slot': 'label' },
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 4, 12, 8],
+        'circle-color': 'rgba(0,0,0,0)',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+      },
+    },
+    ...unidadesBase.layers,
+  ],
   async load(ctx) {
-    const [n, dados, ger] = await Promise.all([
+    const [n, dados, ger, gg, gj] = await Promise.all([
       unidadesBase.load(ctx),
       loadServidoresIdr().catch((err) => {
         console.warn('[DataGeo] servidores IDR indisponíveis:', err?.message);
@@ -204,11 +239,56 @@ export const unidadesIdrLayer = defineLayer({
         console.warn('[DataGeo] gerentes IDR indisponíveis:', err?.message);
         return null;
       }),
+      loadGetecGrupos(),
+      dgFetchData(UNIDADES_URL).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     servidores = dados ?? servidores;
     gerentes = ger ?? gerentes;
+    getec = gg ?? getec;
+    // Mesmo filtro e ordem do pointFeatures: o id da feição é o índice aqui.
+    unidades = (gj?.features ?? []).filter((f) => {
+      const [lon, lat] = f?.geometry?.coordinates ?? [];
+      return Number.isFinite(lon) && Number.isFinite(lat) && unidadeEstilo(f.properties ?? {});
+    });
     return n;
   },
+  onDisable: (ctx) => {
+    ctx.setData(REDE, EMPTY_FC);
+  },
+  click: (_p, feature, ctx) => {
+    const f = unidades[feature?.id];
+    const p = f?.properties;
+    if (!p || p.tipo !== 'ume') return;
+    abrirEscritorio(p, f.geometry.coordinates, ctx);
+  },
 });
+
+/**
+ * Painel da UME: extensionistas do município com os grupos do GETEC; o clique
+ * num nome lista os produtores e liga o escritório às famílias no mapa.
+ */
+function abrirEscritorio(p, origem, ctx) {
+  const lista = (extensionistasDoMunicipio(servidores, p.municipio)?.grupos ?? []).flatMap((g) => g.servidores);
+  let ativo = null;
+  const html = () => escritorioHtml({ servidores: lista, getec, ativo }) + extensionistaHtml(grupos(getec, ativo));
+  ctx.setData(REDE, EMPTY_FC);
+  openPainel({
+    nome: p.nome,
+    meta: `IDR-Paraná · ${UNIDADE_ROTULO[p.tipo] ?? p.tipo}${p.regional ? ` · Regional ${p.regional}` : ''} · acesso restrito`,
+    carregar: async () => html(),
+    aoMontar: (body) => {
+      body.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('button[data-ext]');
+        if (!btn) return;
+        ativo = btn.dataset.ext;
+        const rede = redeFeatures(grupos(getec, ativo), origem);
+        ctx.setData(REDE, fc(rede));
+        const bb = extensao([{ geometry: { type: 'Point', coordinates: origem } }, ...rede]);
+        if (bb && rede.length) ctx.map.fitBounds(bb, { padding: 80, maxZoom: 12, duration: 800 });
+        body.innerHTML = html();
+      });
+    },
+  });
+}
 
 export default [estacoesIdrLayer, unidadesIdrLayer];

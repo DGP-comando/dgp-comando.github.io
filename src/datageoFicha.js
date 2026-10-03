@@ -971,7 +971,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
  * Painel da ficha com conteúdo próprio (cadastro de uma família do CAF):
  * `carregar()` devolve o HTML do corpo.
  */
-export async function openPainel({ nome, meta, carregar }) {
+export async function openPainel({ nome, meta, carregar, aoMontar = null }) {
   const panel = ensurePanel();
   const seq = ++_requestSeq;
   panel.classList.add('open');
@@ -986,7 +986,10 @@ export async function openPainel({ nome, meta, carregar }) {
   body.innerHTML = '<div class="fx-loading">Carregando o cadastro…</div>';
   try {
     const html = await carregar();
-    if (seq === _requestSeq) body.innerHTML = html || '<div class="fx-loading">Cadastro não encontrado.</div>';
+    if (seq === _requestSeq) {
+      body.innerHTML = html || '<div class="fx-loading">Cadastro não encontrado.</div>';
+      aoMontar?.(body); // listeners do conteúdo (ex.: nomes clicáveis)
+    }
   } catch (err) {
     if (seq === _requestSeq) body.innerHTML = `<div class="fx-loading">Falha ao carregar: ${esc(err?.message)}</div>`;
   }

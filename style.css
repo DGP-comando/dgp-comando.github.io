@@ -9710,3 +9710,15 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
 #dg-tooltip .tt-warn { color: #fbbf24; }
 #dg-tooltip .tt-alert { color: #f87171; }
 #dg-tooltip .tt-muted { color: #64748b; }
+
+/* Nome clicável no painel (extensionista -> grupos do GETEC) */
+.fx-link {
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  border-bottom: 1px dotted currentColor;
+  cursor: pointer;
+}
+.fx-link:hover, .fx-link.is-on { color: #fff; border-bottom-style: solid; }
