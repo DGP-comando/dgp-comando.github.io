@@ -19,6 +19,7 @@ import { getCarAgregado, getCarMunicipio } from './data/carMunicipios.js';
 import { getIndicadores } from './data/indicadoresMunicipais.js';
 import { getModulosFiscais } from './data/modulosFiscais.js';
 import { getProtecaoSocial } from './data/protecaoSocial.js';
+import { getGetec } from './data/getecAcomp.js';
 import { mesAno } from './data/cadunicoRural.js';
 import { getExtensionistas } from './data/servidoresIdr.js';
 import { getSusaf } from './data/susaf.js';
@@ -106,6 +107,36 @@ const SECTIONS = [
       `<div>Extensionistas no município: <b>${fmtN(ext.total)}</b></div>` +
       `<div class="fx-sub">${porFormacao}</div>` +
       `<div class="fx-dim">IDR-SisPont + Portal da Transparência PR${ext.rh ? ` + ${esc(ext.rh)}` : ''} · nomes no escritório (camada Unidades do IDR)${hora ? ` · ${esc(hora)}` : ''}</div>`);
+  },
+
+  /**
+   * Assistência técnica no GETEC (SISATER), painel público do sistema: público
+   * cadastrado, programado e atendido no ano corrente, extensionistas em
+   * equivalente de tempo integral e a razão público/equivalente, que é o que
+   * permite comparar municípios e regionais. Organizações por tipo.
+   */
+  function getec({ getec }) {
+    if (!getec) return null;
+    const rows = [];
+    rows.push(`<div>Público cadastrado: <b>${fmtN(getec.existente)}</b>` +
+      (getec.programado ? ` · programado <b>${fmtN(getec.programado)}</b> <span class="fx-dim">(${fmtN(getec.pctProgramado, 1)}%)</span>` : '') +
+      '</div>');
+    rows.push(`<div>Atendidos em ${esc(getec.ano)}: <b>${fmtN(getec.atendido)}</b>` +
+      (getec.pctExecutado != null ? ` <span class="fx-dim">(${fmtN(getec.pctExecutado, 1)}% do programado)</span>` : '') +
+      '</div>');
+    rows.push(`<div>Extensionistas: <b>${fmtN(getec.extensionistas)}</b>` +
+      ` <span class="fx-dim">· ${fmtN(getec.equivalente, 2)} em tempo integral</span>` +
+      (getec.publicoPorEquivalente != null ? ` · <b>${fmtN(getec.publicoPorEquivalente)}</b> produtores por técnico integral` : '') +
+      '</div>');
+    if (getec.entidadesAtendidas) rows.push(`<div class="fx-sub">Entidades atendidas: <b>${fmtN(getec.entidadesAtendidas)}</b></div>`);
+    if (getec.organizacoes.length) {
+      rows.push(`<div class="fx-sub">${getec.organizacoes
+        .map((o) => `${esc(o.tipo)} <b>${fmtN(o.existente)}</b>${o.atendido ? ` <span class="fx-dim">(${fmtN(o.atendido)} atendidas)</span>` : ''}`)
+        .join(' · ')}</div>`);
+    }
+    rows.push(`<div class="fx-dim">IDR GETEC, painel público (ano corrente)` +
+      (getec.n > 1 ? ` · soma de ${fmtN(getec.n)} municípios` : '') + '</div>');
+    return section('Assistência técnica · GETEC', rows.join(''));
   },
 
   /** Adesão ao SUSAF-PR (mapa ADAPAR + lista de SIMs da SEAB). */
@@ -853,7 +884,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes, getec] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -866,8 +897,9 @@ export async function openFicha({ ibge, nome, info }) {
       getOutorgasMunicipios([ibge]),
       getCaf([ibge]),
       getFontes([ibge]),
+      getGetec([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes, getec };
   });
 }
 
@@ -918,7 +950,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, caf, fontes] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, caf, fontes, getec] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -929,8 +961,9 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getOutorgasMunicipios(ibges),
       getCaf(ibges),
       getFontes(ibges),
+      getGetec(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, caf, fontes };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, caf, fontes, getec };
   });
 }
 
