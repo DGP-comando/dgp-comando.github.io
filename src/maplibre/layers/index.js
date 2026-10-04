@@ -25,7 +25,9 @@ export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-faxinais-territorios',
   'datageo-faxinais', 'datageo-ucs-federais',
-  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-fontes-protegidas', 'datageo-regionais-idr', 'datageo-estacoes-idr', 'datageo-unidades-idr',
+  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-regionais-idr',
+  // Grupo IDR-Paraná: unidades (escritórios) primeiro, estações de pesquisa em seguida.
+  'datageo-unidades-idr', 'datageo-estacoes-idr', 'datageo-fontes-protegidas',
   'datageo-associacoes', 'datageo-equipamentos-suas',
   'datageo-car', 'datageo-caf', 'datageo-caf-pj',
   'datageo-clima', 'datageo-rios', 'datageo-cemaden', 'datageo-irtc', 'datageo-dengue', 'datageo-ar',
@@ -34,9 +36,10 @@ export const LAYER_ORDER = [
   'datageo-transmissao', 'datageo-distribuicao', 'datageo-subestacoes', 'datageo-geracao',
   'datageo-agroindustrias-idr', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
   'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas',
-  'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
+  // Grupo Defesa Agropecuária: escritórios da ADAPAR primeiro, cadastros depois.
+  'datageo-adapar-unidades', 'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
   'datageo-adapar-agrotoxicos', 'datageo-adapar-fertilizantes', 'datageo-adapar-unidades-consolidacao',
-  'datageo-adapar-industrias-poa', 'datageo-adapar-unidades', // escritórios por cima dos cadastros
+  'datageo-adapar-industrias-poa',
   'datageo-armazens', 'datageo-agroindustrias', 'datageo-ceasas',
   'datageo-conectividade',
   'datageo-clima-historico', 'datageo-precipitacao', 'datageo-ventos',
