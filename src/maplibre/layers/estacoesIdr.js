@@ -291,4 +291,5 @@ function abrirEscritorio(p, origem, ctx) {
   });
 }
 
-export default [estacoesIdrLayer, unidadesIdrLayer];
+// Unidades (escritórios) primeiro no painel; estações e polos de pesquisa em seguida.
+export default [unidadesIdrLayer, estacoesIdrLayer];
