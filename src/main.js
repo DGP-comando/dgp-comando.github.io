@@ -221,6 +221,9 @@ async function init() {
 
     // Initialize deterministic scene playback for social clip capture
     const sceneDirector = new SceneDirector(engine, styleManager, dataManager);
+    // Painel CENAS é ferramenta de bancada; em produção fica fora da tela
+    // (o director continua vivo para voz/QA, só sem a UI).
+    if (!import.meta.env.DEV) document.getElementById('scene-panel')?.remove();
 
     // Initialize the voice "whiteboard" annotation engine (world-space renderer)
     const annotations = initAnnotations({ engine });
