@@ -22,3 +22,6 @@ data/unidades-idr/
 data/regionais-idr/
 # prints de QA com nome de produtor (scripts/qa-*.mjs --shot)
 /qa-*.png
+
+# HTML raspado do site da ADAPAR (regenera com scripts/build_adapar_unidades.py --refresh)
+data/cache/adapar-unidades/

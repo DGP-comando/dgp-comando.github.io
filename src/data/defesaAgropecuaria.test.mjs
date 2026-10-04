@@ -6,8 +6,9 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 
 import {
   ADAPAR_LABEL_DIST, AGROTOXICOS_LEGENDA, ANIMAIS_LEGENDA, CONSOLIDACAO_LEGENDA, EXPLORACOES_CORES, FERTILIZANTES_LEGENDA,
-  INDUSTRIAS_LEGENDA, VETERINARIOS_LEGENDA, agrotoxicoEstilo, agrotoxicoGrupo, animaisVivosEstilo, consolidacaoEstilo,
-  consolidacaoTooltip, exploracaoTooltip, fertilizanteEstilo, industriaEstilo, listaCurta, veterinarioEstilo, veterinarioTooltip,
+  INDUSTRIAS_LEGENDA, UNIDADES_LEGENDA, VETERINARIOS_LEGENDA, agrotoxicoEstilo, agrotoxicoGrupo, animaisVivosEstilo, consolidacaoEstilo,
+  consolidacaoTooltip, exploracaoTooltip, fertilizanteEstilo, industriaEstilo, listaCurta, unidadeAdaparEstilo, unidadeAdaparTooltip,
+  veterinarioEstilo, veterinarioTooltip,
 } from './defesaAgropecuariaEstilos.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
 import { LAYER_ORDER } from '../maplibre/layers/index.js';
@@ -28,7 +29,7 @@ const PONTOS = [
 
 test('camadas: categoria Defesa Agropecuária, bucket privado, token D* e ícone e contorno próprios', () => {
   assert.deepEqual(layers.map((l) => l.id), [
-    'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
+    'datageo-adapar-unidades', 'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
     'datageo-adapar-agrotoxicos', 'datageo-adapar-fertilizantes', 'datageo-adapar-unidades-consolidacao',
     'datageo-adapar-industrias-poa',
   ]);
@@ -39,11 +40,33 @@ test('camadas: categoria Defesa Agropecuária, bucket privado, token D* e ícone
     assert.ok(LAYER_ORDER.includes(l.id), `${l.id} fora de LAYER_ORDER`);
   }
   assert.equal(new Set(layers.map((l) => l.icon)).size, layers.length, 'um ícone por camada');
-  const contornos = layers.slice(1).flatMap((l) => l.layers.filter((s) => s.type === 'circle'))
+  const contornos = layers.filter((l) => l.id !== 'datageo-adapar-exploracoes').flatMap((l) => l.layers.filter((s) => s.type === 'circle'))
     .map((s) => `${s.paint['circle-stroke-color']}/${s.paint['circle-stroke-width']}`);
   assert.equal(new Set(contornos).size, layers.length - 1, contornos.join(' '));
   const cores = [...PONTOS.flatMap(([, , legenda]) => legenda.map((g) => g.color)).filter((c) => c !== '#94a3b8')];
   assert.equal(new Set(cores).size, cores.length, 'cor repetida entre cadastros');
+});
+
+test('unidades da ADAPAR: arquivo público, 22 regionais com rótulo estadual, tooltip com circunscrição (UTF-8)', () => {
+  const gj = JSON.parse(readFileSync(new URL('../../public/data/adapar-unidades-pr.geojson', import.meta.url), 'utf8'));
+  const regionais = gj.features.filter((f) => f.properties.Tipo === 'Regional');
+  assert.equal(regionais.length, 22);
+  assert.ok(gj.features.length >= 140, `${gj.features.length} unidades`);
+  for (const f of gj.features) {
+    const [lon, lat] = f.geometry.coordinates;
+    assert.ok(lon > -55 && lon < -48 && lat > -27 && lat < -22, `${f.properties.Nome} fora do PR`);
+    assert.ok(f.properties['Endereço'] && f.properties.ibge, `${f.properties.Nome} sem endereço/ibge`);
+  }
+  const reg = unidadeAdaparEstilo(regionais[0].properties);
+  assert.equal(reg.grupo, 'regional');
+  assert.ok(reg.labelMaxDist >= 1_000_000 && reg.size > unidadeAdaparEstilo({ Tipo: 'Local' }).size);
+  assert.deepEqual(UNIDADES_LEGENDA.map((g) => g.grupo), ['regional', 'local']);
+  const irati = gj.features.find((f) => f.properties.Tipo === 'Local' && f.properties.Nome === 'Imbituva');
+  const html = unidadeAdaparTooltip(irati.properties);
+  assert.match(html, /Escritório Local de Imbituva/);
+  assert.match(html, /Circunscrição/);
+  assert.match(html, /Guamiranga, Imbituva e Ivaí/);
+  assert.match(unidadeAdaparTooltip(regionais[0].properties), /Unidade Regional de Sanidade Agropecuária/);
 });
 
 test('agrotóxicos: o papel mais restrito do registro define o grupo', () => {

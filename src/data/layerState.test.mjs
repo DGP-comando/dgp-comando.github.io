@@ -161,9 +161,9 @@ test('production registry is exact, canonical, and rejects incomplete contracts'
   const gev = REGISTERED_LAYER_IDS.filter((id) => !id.startsWith('datageo-'));
   const datageo = REGISTERED_LAYER_IDS.filter((id) => id.startsWith('datageo-'));
   assert.equal(gev.length, 16);
-  assert.equal(datageo.length, 57);
-  assert.equal(REGISTERED_LAYER_IDS.length, 73);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 73);
+  assert.equal(datageo.length, 58);
+  assert.equal(REGISTERED_LAYER_IDS.length, 74);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 74);
   assert.deepEqual(gev, [...gev].sort());
   assert.deepEqual(REGISTERED_LAYER_IDS, [...gev, ...datageo]);
   assert.throws(

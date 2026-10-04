@@ -9,6 +9,8 @@
 //     agrotóxicos, fertilizantes, Unidades de Consolidação, indústrias de
 //     produtos de origem animal): pontos de
 //     makePointsLayer (energiaLogistica.js), uma camada por cadastro.
+//   - Unidades da ADAPAR (escritórios regionais e locais): público, do site
+//     oficial (scripts/build_adapar_unidades.py -> public/data).
 //
 // Bucket privado (produtor + coordenada da propriedade): sem usuário liberado
 // as camadas não carregam. Estilos e tooltips: src/data/defesaAgropecuariaEstilos.js.
@@ -17,9 +19,9 @@ import { periodo } from '../../data/cafFamilias.js';
 import { dgFetchData } from '../../data/datageoClient.js';
 import {
   ADAPAR_CONTORNO, ADAPAR_LABEL_DIST, AGROTOXICOS_LEGENDA, ANIMAIS_LEGENDA, CONSOLIDACAO_LEGENDA, EXPLORACOES_CORES,
-  FERTILIZANTES_LEGENDA, INDUSTRIAS_LEGENDA, VETERINARIOS_LEGENDA, agrotoxicoEstilo, agrotoxicoTooltip, animaisVivosEstilo, animaisVivosTooltip,
+  FERTILIZANTES_LEGENDA, INDUSTRIAS_LEGENDA, UNIDADES_LEGENDA, VETERINARIOS_LEGENDA, agrotoxicoEstilo, agrotoxicoTooltip, animaisVivosEstilo, animaisVivosTooltip,
   consolidacaoEstilo, consolidacaoTooltip, exploracaoTooltip, fertilizanteEstilo, fertilizanteTooltip, industriaEstilo,
-  industriaTooltip, veterinarioEstilo, veterinarioTooltip,
+  industriaTooltip, unidadeAdaparEstilo, unidadeAdaparTooltip, veterinarioEstilo, veterinarioTooltip,
 } from '../../data/defesaAgropecuariaEstilos.js';
 import { EMPTY_FC, defineLayer, fc, fmtInt } from '../kit.js';
 import { makePointsLayer } from './energiaLogistica.js';
@@ -160,7 +162,24 @@ export const industriasLayer = estabelecimentos({
   stroke: ADAPAR_CONTORNO.industrias,
 });
 
+// ---------------------------------------------------------------- unidades
+
+export const unidadesAdaparLayer = makePointsLayer({
+  id: 'datageo-adapar-unidades',
+  name: 'Unidades da ADAPAR (escritórios)',
+  category: DEFESA_AGROPECUARIA,
+  icon: '🏢',
+  source: 'ADAPAR',
+  url: '/data/adapar-unidades-pr.geojson',
+  estilo: unidadeAdaparEstilo,
+  tooltip: unidadeAdaparTooltip,
+  legend: UNIDADES_LEGENDA,
+  labelDists: [1_200_000, ADAPAR_LABEL_DIST * 4],
+  stroke: { color: '#7c2d12', width: 1.5 },
+});
+
+// Escritórios primeiro no painel: é a rede da ADAPAR; os cadastros vêm depois.
 export default [
-  exploracoesLayer, veterinariosLayer, animaisVivosLayer, agrotoxicosLayer, fertilizantesLayer, consolidacaoLayer,
-  industriasLayer,
+  unidadesAdaparLayer, exploracoesLayer, veterinariosLayer, animaisVivosLayer, agrotoxicosLayer, fertilizantesLayer,
+  consolidacaoLayer, industriasLayer,
 ];

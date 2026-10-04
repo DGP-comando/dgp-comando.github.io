@@ -94,6 +94,53 @@ export const INDUSTRIAS_LEGENDA = Object.freeze([
 ]);
 export const industriaEstilo = (p) => ponto(p, 'poa', INDUSTRIAS_LEGENDA);
 
+// ------------------------------------------------- unidades (escritórios)
+
+/**
+ * Escritórios regionais e locais da ADAPAR (público, do site oficial; dados em
+ * public/data/adapar-unidades-pr.geojson por scripts/build_adapar_unidades.py).
+ * Regional maior e com rótulo na visão estadual; local só de perto.
+ */
+export const UNIDADES_LEGENDA = Object.freeze([
+  { grupo: 'regional', label: 'Escritório regional', color: '#f97316' },
+  { grupo: 'local', label: 'Escritório local', color: '#fdba74' },
+]);
+
+/** Ponto do site ou endereço geocodificado valem; centro do município e vizinhança não. */
+const unidadeLocalizada = (p) => !/centro do município|vizinhança|sem o número/.test(p['Checagem da coordenada'] ?? '');
+
+export function unidadeAdaparEstilo(p) {
+  const regional = p.Tipo === 'Regional';
+  return {
+    grupo: regional ? 'regional' : 'local',
+    size: regional ? 11 : 7,
+    color: UNIDADES_LEGENDA[regional ? 0 : 1].color,
+    alpha: unidadeLocalizada(p) ? 0.95 : 0.6,
+    label: p.Nome ?? '',
+    labelMaxDist: regional ? 1_200_000 : ADAPAR_LABEL_DIST * 4,
+  };
+}
+
+export function unidadeAdaparTooltip(p) {
+  const regional = p.Tipo === 'Regional';
+  const ok = unidadeLocalizada(p);
+  return tipCard({
+    icon: '🏢',
+    title: `ADAPAR · Escritório ${regional ? 'Regional' : 'Local'} de ${p.Nome ?? ''}`,
+    subtitle: regional ? 'Unidade Regional de Sanidade Agropecuária' : `Regional ${p.Regional ?? ''}`,
+    badge: ok ? null : { text: 'Local aproximado', tone: 'warn' },
+    rows: [
+      ['Endereço', [p['Endereço'], p.CEP ? `CEP ${p.CEP}` : ''].filter(Boolean).join(' · ')],
+      ['Telefone', p.Telefone],
+      ['E-mail', p['E-mail']],
+      ['Circunscrição', p['Circunscrição']],
+      regional ? ['Chefe', p.Chefe] : null,
+      ok ? null : ['Coordenada', p['Checagem da coordenada'], 'warn'],
+    ],
+    source: 'ADAPAR · site oficial (Escritórios Regionais)',
+  });
+}
+
 // ---------------------------------------------------------------- tooltips
 
 /** 'a · b · c' com no máximo `max` itens; o resto vira "e mais N". */

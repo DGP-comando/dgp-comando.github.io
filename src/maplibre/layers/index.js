@@ -36,7 +36,7 @@ export const LAYER_ORDER = [
   'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas',
   'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
   'datageo-adapar-agrotoxicos', 'datageo-adapar-fertilizantes', 'datageo-adapar-unidades-consolidacao',
-  'datageo-adapar-industrias-poa',
+  'datageo-adapar-industrias-poa', 'datageo-adapar-unidades', // escritórios por cima dos cadastros
   'datageo-armazens', 'datageo-agroindustrias', 'datageo-ceasas',
   'datageo-conectividade',
   'datageo-clima-historico', 'datageo-precipitacao', 'datageo-ventos',
