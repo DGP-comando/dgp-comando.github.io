@@ -3,57 +3,72 @@
 // Outorgas de uso da água do IAT, ao vivo do ArcGIS Server do GeoPR (nada
 // armazenado aqui). O IAT emite pelo SIGARH desde 2023; o legado CRH ainda
 // tem captações, lançamentos de efluentes e aproveitamentos hidrelétricos
-// vigentes, então as quatro bases entram juntas (SISTEMAS).
-//   - longe: imagens do MapServer/export (fazem o papel do WMS), com símbolo
-//     por tipo via dynamicLayers para casar com a legenda;
-//   - perto (VEC_MINZOOM+): pontos da vista pelo FeatureServer (GeoJSON), para
-//     o tooltip.
+// vigentes, então as quatro bases entram juntas (SISTEMAS). Chave nos chips:
+// tipo de interferência ou atividade (finalidade) da outorga; mecânica das
+// imagens, pontos e contagens em ./iatPontos.js.
 // Nome do requerente/razão social fica de fora (pessoa física, LGPD).
 
-import { EMPTY_FC, defineLayer, fc, fmtDate, fmtInt, fmtNum, point, tipCard } from '../kit.js';
+import { fmtDate, fmtInt, fmtNum, tipCard } from '../kit.js';
+import { classifica, contagemSistema, iatPontosLayer, linhasDoModo, query } from './iatPontos.js';
 
-const BASE = 'https://geopr.iat.pr.gov.br/server/rest/services/00_PUBLICACOES';
-const VEC_MINZOOM = 12;
-const MAX_POR_VISTA = 2000; // maxRecordCount dos serviços
-const SRC_VEC = 'dg-outorgas';
-const PT = 'dg-outorgas-pt';
+export { consertaUtf8, exportTileUrl, filtroMunicipios } from './iatPontos.js';
 
 export const OUTORGA_LEGENDA = Object.freeze([
-  { grupo: 'sup', label: 'Captação superficial', curto: 'Capt. superficial', color: '#22d3ee' },
-  { grupo: 'sub', label: 'Captação subterrânea', curto: 'Capt. subterrânea', color: '#a78bfa' },
-  { grupo: 'efl', label: 'Lançamento de efluentes', curto: 'Efluentes', color: '#f97316' },
-  { grupo: 'hid', label: 'Aproveitamento hidrelétrico', curto: 'Hidrelétricas', color: '#facc15' },
-  { grupo: 'obr', label: 'Obras e intervenções', curto: 'Obras/interv.', color: '#94a3b8' },
+  { key: 'sup', label: 'Captação superficial', curto: 'Capt. superficial', color: '#22d3ee', like: ['Capta%o superficial'] },
+  { key: 'sub', label: 'Captação subterrânea', curto: 'Capt. subterrânea', color: '#a78bfa', like: ['Capta%o subterr%'] },
+  { key: 'efl', label: 'Lançamento de efluentes', curto: 'Efluentes', color: '#f97316', like: ['Lan%amento de efluentes'] },
+  { key: 'hid', label: 'Aproveitamento hidrelétrico', curto: 'Hidrelétricas', color: '#facc15', like: ['Aproveitamento hidrel%'] },
+  { key: 'obr', label: 'Obras e intervenções', curto: 'Obras/interv.', color: '#94a3b8' },
 ]);
-const COR = Object.fromEntries(OUTORGA_LEGENDA.map((g) => [g.grupo, g.color]));
+
+// Atividade pela finalidade declarada, em ordem de prioridade: uma outorga
+// "Criação animal, Sanitário" é de criação animal; "Processo fabril,
+// Sanitário", de indústria. O resto (vias, travessias, drenagem) é obra.
+export const ATIVIDADE_LEGENDA = Object.freeze([
+  { key: 'energia', label: 'Geração de energia', curto: 'Energia', color: '#facc15',
+    like: ['%potencial hidr%', '%termoel%'] },
+  { key: 'abast', label: 'Abastecimento público e saneamento', curto: 'Abast./saneam.', color: '#60a5fa',
+    like: ['%Abastecimento p%blico%', '%Abastecimento coletivo%', '%sgot%', '%efluente sanit%', '%carro pipa%',
+      '%tratamento e distribui%'] },
+  { key: 'indus', label: 'Indústria e mineração', curto: 'Indústria/miner.', color: '#e11d48',
+    like: ['%fabril%', '%ndustri%', '%Minera%', '%miner%', '%Resfriamento%', '%vapor%', '%Envase%', '%areia%',
+      '%xteis%', '%Controle de emiss%'] },
+  { key: 'aqui', label: 'Aquicultura', curto: 'Aquicultura', color: '#2dd4bf',
+    like: ['%Aq%icultura%', '%aquicultura%', '%Piscicultura%'] },
+  // "Irrigação de jardins" fica com consumo humano e lazer.
+  { key: 'irrig', label: 'Irrigação e lavoura', curto: 'Irrigação/lavoura', color: '#4ade80',
+    like: ['Irriga%o', 'Irriga%o,%', '%,Irriga%o', '%,Irriga%o,%', '%ulveriza%', '%vegeta%', '%agricultura%'] },
+  { key: 'criacao', label: 'Criação animal', curto: 'Criação animal', color: '#f97316',
+    like: ['%animal%', '%Dessedenta%', '%agropecu%', '%vicultura%'] },
+  { key: 'dom', label: 'Consumo humano, limpeza e lazer', curto: 'Consumo/lazer', color: '#c084fc',
+    like: ['%Sanit%', '%Limpeza%', '%Consumo humano%', '%Lavagem%', '%Lazer%', '%Paisagismo%', '%jardins%',
+      '%Combate a inc%', '%dom%stico%', '%Uso geral%'] },
+  { key: 'outro', label: 'Obras, intervenções e outros', curto: 'Obras/outros', color: '#94a3b8' },
+]);
+
+export const MODOS = Object.freeze([
+  { id: 'tipo', chip: 'Tipo', prop: 'grupo', legenda: OUTORGA_LEGENDA },
+  { id: 'atividade', chip: 'Atividade', prop: 'atividade', legenda: ATIVIDADE_LEGENDA },
+]);
+const [TIPO, ATIVIDADE] = MODOS;
 
 // Vigentes: deferidas (ou em renovação/regularização) e só documentos que
-// autorizam uso; ficam fora anuência de perfuração, cancelamentos, revogações.
-const SIGARH_WHERE = "st_portaria IN ('DEFERIDA','EM RENOVAÇÃO','EM REGULARIZAÇÃO') AND nm_tipo_documento IN "
-  + "('Portaria de outorga de direito','Portaria de outorga prévia','Declaração de uso independente de outorga',"
-  + "'Declaração de interferência independente de outorga','Portaria de revigoramento')";
-const CRH_WHERE = "condicao IN ('VIGENTE','EM RENOVAÇÃO')";
+// autorizam uso (portarias de outorga, declarações de uso/interferência
+// independente, revigoramento); ficam fora anuência de perfuração,
+// cancelamentos, revogações. Escrito curto: o where se repete em cada classe
+// da URL do tile, e o GeoPR devolve 414 acima de ~8 kB.
+const SIGARH_WHERE = "(st_portaria='DEFERIDA' OR st_portaria LIKE 'EM R%') AND (nm_tipo_documento LIKE 'Portaria de outorga%'"
+  + " OR nm_tipo_documento LIKE '%independente%' OR nm_tipo_documento LIKE '%revigoramento')";
+const CRH_WHERE = "(condicao='VIGENTE' OR condicao LIKE 'EM RENOVA%')";
 
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
-export function grupoSigarh(tipo) {
-  const t = String(tipo ?? '');
-  if (t.startsWith('Captação subterrânea')) return 'sub';
-  if (t === 'Captação superficial') return 'sup';
-  if (t === 'Lançamento de efluentes') return 'efl';
-  if (t.startsWith('Aproveitamento hidrelétrico')) return 'hid';
-  return 'obr';
-}
+// Classes de tipo pelos padrões da legenda (testes e ficha usam as mesmas).
+export const grupoSigarh = (tipo) => classifica(SISTEMAS[0], TIPO, { nm_tipo_interferencia: tipo });
 
 // CRH: só captação; poço é subterrânea, rio e mina (nascente) superficial.
-export const grupoCrh = (manancial) => (String(manancial ?? '').toUpperCase().startsWith('PO') ? 'sub' : 'sup');
+export const grupoCrh = (manancial) => classifica(SISTEMAS[1], TIPO, { tipo_manancial: manancial });
 
-/** O GeoPR devolve UTF-8 quebrado em alguns campos ("Aqu�­fero"): refaz o par C3 xx. */
-export const consertaUtf8 = (s) => (typeof s === 'string'
-  ? s.replace(/�([\u0080-¿])/g, (_, c) => String.fromCharCode(0xC0 + c.charCodeAt(0) - 0x80))
-  : s);
-
-const limpa = (attrs) => Object.fromEntries(Object.entries(attrs ?? {}).map(([k, v]) => [k, consertaUtf8(v)]));
 const positivo = (v) => (Number(v) > 0 ? Number(v) : null);
 
 export function sigarhProps(a) {
@@ -61,7 +76,6 @@ export function sigarhProps(a) {
   const corpo = [a.nm_tipo_corpo_hidrico, a.nm_corpo_hidrico_popular].filter(Boolean).join(' ');
   return {
     sistema: 'SIGARH',
-    grupo: grupoSigarh(a.nm_tipo_interferencia),
     tipo: a.nm_tipo_interferencia,
     finalidade: String(a.desc_finalidades ?? '').split(',').filter(Boolean).join(', '),
     usuario: a.nm_tipo_usuario,
@@ -92,7 +106,6 @@ export function crhProps(a) {
   const grupo = grupoCrh(a.tipo_manancial);
   return {
     ...crhBase(a),
-    grupo,
     tipo: `Captação ${grupo === 'sub' ? 'subterrânea' : 'superficial'} (${String(a.tipo_manancial ?? '').toLowerCase()})`,
     finalidade: a.finalidades || a.finalidade_principal,
     corpo: a.rio_nome || a.aqu_descricao,
@@ -103,7 +116,6 @@ export function crhProps(a) {
 export function crhEfluenteProps(a) {
   return {
     ...crhBase(a),
-    grupo: 'efl',
     tipo: 'Lançamento de efluentes',
     finalidade: [a.tpo_nome, a.atv_nome].filter(Boolean).join(' · '),
     corpo: a.rio_nome,
@@ -114,33 +126,12 @@ export function crhEfluenteProps(a) {
 export function crhHidreletricoProps(a) {
   return {
     ...crhBase(a),
-    grupo: 'hid',
     tipo: 'Aproveitamento hidrelétrico',
     empreendimento: a.localidade,
     corpo: a.rio_nome,
     potencia: positivo(a.potencial_instalado__mww_),
   };
 }
-
-const symbol = (cor) => {
-  const h = cor.slice(1);
-  const rgb = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
-  return { type: 'esriSMS', style: 'esriSMSCircle', color: [...rgb, 235], size: 4, outline: { color: [5, 8, 13, 200], width: 0.5 } };
-};
-const simples = (grupo) => ({ type: 'simple', symbol: symbol(COR[grupo]) });
-
-/** URL de tile do MapServer/export (MapLibre troca {bbox-epsg-3857}). */
-export function exportTileUrl(servico, where, renderer) {
-  const dynamicLayers = [{ id: 0, source: { type: 'mapLayer', mapLayerId: 0 }, definitionExpression: where, drawingInfo: { renderer } }];
-  const qs = new URLSearchParams({
-    bboxSR: '3857', imageSR: '3857', size: '512,512', format: 'png32', transparent: 'true', f: 'image',
-    dynamicLayers: JSON.stringify(dynamicLayers),
-  });
-  return `${BASE}/${servico}/MapServer/export?bbox={bbox-epsg-3857}&${qs}`;
-}
-
-const SIGARH_TIPOS = ['Captação superficial', 'Captação subterrânea (Poço tubular)', 'Captação subterrânea (Poço cacimba)',
-  'Lançamento de efluentes', 'Aproveitamento hidrelétrico com barragem/soleira', 'Aproveitamento hidrelétrico sem barragem/soleira'];
 
 export const SISTEMAS = Object.freeze([
   {
@@ -149,16 +140,13 @@ export const SISTEMAS = Object.freeze([
     where: SIGARH_WHERE,
     props: sigarhProps,
     mun: { campo: 'cod_municipio_emp', texto: true },
-    porTipo: { campo: 'nm_tipo_interferencia', grupo: grupoSigarh },
+    modos: {
+      tipo: { campo: 'nm_tipo_interferencia', padrao: 'obr' },
+      atividade: { campo: 'desc_finalidades', padrao: 'outro' },
+    },
     fields: ['nm_tipo_interferencia', 'desc_finalidades', 'nm_tipo_usuario', 'nm_corpo_hidrico_popular',
       'nm_tipo_corpo_hidrico', 'nm_aquifero', 'nm_tipo_documento', 'nr_portaria', 'st_portaria', 'dt_vencimento',
       'nm_municipio_emp', 'nm_bacia_hidrografica', ...MESES.map((m) => `vlr_vazao_capt_lanc_${m}`)],
-    renderer: {
-      type: 'uniqueValue',
-      field1: 'nm_tipo_interferencia',
-      defaultSymbol: symbol(COR.obr),
-      uniqueValueInfos: SIGARH_TIPOS.map((value) => ({ value, symbol: symbol(COR[grupoSigarh(value)]) })),
-    },
   },
   {
     key: 'crh-captacao',
@@ -166,15 +154,12 @@ export const SISTEMAS = Object.freeze([
     where: CRH_WHERE,
     props: crhProps,
     mun: { campo: 'mun_ibge' },
-    porTipo: { campo: 'tipo_manancial', grupo: grupoCrh },
+    modos: {
+      tipo: { campo: 'tipo_manancial', padrao: 'sup', like: { sub: ['PO%'] } },
+      atividade: { campo: 'finalidade_principal', padrao: 'outro' },
+    },
     fields: ['uso', 'finalidades', 'finalidade_principal', 'tipo_manancial', 'rio_nome', 'aqu_descricao',
       'vazao_outorgada__m3_h_', 'portaria', 'modalidade', 'condicao', 'vencimento', 'municipio', 'bac_nome'],
-    renderer: {
-      type: 'uniqueValue',
-      field1: 'tipo_manancial',
-      defaultSymbol: symbol(COR.sup),
-      uniqueValueInfos: [{ value: 'POÇO', symbol: symbol(COR.sub) }],
-    },
   },
   {
     key: 'crh-efluentes',
@@ -182,10 +167,14 @@ export const SISTEMAS = Object.freeze([
     where: CRH_WHERE,
     props: crhEfluenteProps,
     mun: { campo: 'mun_codigo' },
-    grupo: 'efl',
+    modos: {
+      tipo: { fixo: 'efl' },
+      // ponytail: atv_nome é o ramo do empreendimento (CNAE); o que não casa
+      // é quase todo fabricação/abate/laticínio, então o resto vira indústria.
+      atividade: { campo: 'atv_nome', padrao: 'indus' },
+    },
     fields: ['uso', 'tpo_nome', 'atv_nome', 'rio_nome', 'eflo_out_vazao__m3_h_', 'portaria', 'modalidade', 'condicao',
       'vencimento', 'municipio', 'bac_nome'],
-    renderer: simples('efl'),
   },
   {
     key: 'crh-hidreletrico',
@@ -193,10 +182,9 @@ export const SISTEMAS = Object.freeze([
     where: CRH_WHERE,
     props: crhHidreletricoProps,
     mun: { campo: 'mun_ibge' },
-    grupo: 'hid',
+    modos: { tipo: { fixo: 'hid' }, atividade: { fixo: 'energia' } },
     fields: ['uso', 'localidade', 'rio_nome', 'potencial_instalado__mww_', 'portaria', 'modalidade', 'condicao',
       'vencimento', 'municipio', 'bac_nome'],
-    renderer: simples('hid'),
   },
 ]);
 
@@ -210,6 +198,7 @@ export function outorgaTooltipHtml(p, now = Date.now()) {
     badge: vencida ? { text: 'VENCIDA', tone: 'warn' } : { text: String(p.situacao ?? ''), tone: 'ok' },
     rows: [
       ['Empreendimento', p.empreendimento],
+      ['Atividade', ATIVIDADE_LEGENDA.find((g) => g.key === p.atividade)?.label],
       ['Finalidade', p.finalidade],
       ['Usuário', p.usuario],
       ['Corpo hídrico', p.corpo],
@@ -224,160 +213,41 @@ export function outorgaTooltipHtml(p, now = Date.now()) {
   });
 }
 
-async function query(servico, where, outFields, extra = {}, signal) {
-  const qs = new URLSearchParams({ where, outFields: outFields.join(','), f: 'json', ...extra });
-  const r = await fetch(`${BASE}/${servico}/FeatureServer/0/query`, {
-    method: 'POST', body: qs, signal, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  });
-  if (!r.ok) throw new Error(`${servico} HTTP ${r.status}`);
-  const j = await r.json();
-  if (j.error) throw new Error(`${servico}: ${j.error.message}`);
-  return j;
-}
-
-async function pontosDaVista(bounds, signal) {
-  const geo = {
-    geometry: [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].join(','),
-    geometryType: 'esriGeometryEnvelope', inSR: '4326', outSR: '4326', spatialRel: 'esriSpatialRelIntersects',
-    returnGeometry: 'true', resultRecordCount: String(MAX_POR_VISTA),
-  };
-  const respostas = await Promise.all(SISTEMAS.map((s) => query(s.servico, s.where, s.fields, geo, signal)));
-  const features = respostas.flatMap((j, k) => j.features.map((f, i) => point(
-    f.geometry?.x, f.geometry?.y, SISTEMAS[k].props(limpa(f.attributes)), `${SISTEMAS[k].key}-${i}`,
-  ))).filter(Boolean);
-  return { features, truncado: respostas.some((j) => j.exceededTransferLimit) };
-}
-
-const COUNT_STAT = JSON.stringify([{ statisticType: 'count', onStatisticField: 'objectid', outStatisticFieldName: 'n' }]);
-
-/** Cláusula `campo IN (...)` com os códigos IBGE (só dígitos: nada de texto livre na consulta). */
-export function filtroMunicipios({ campo, texto }, ibges) {
-  const cods = [...new Set(ibges.map(String).filter((c) => /^\d{7}$/.test(c)))];
-  if (!cods.length) return null;
-  return `${campo} IN (${cods.map((c) => (texto ? `'${c}'` : c)).join(',')})`;
-}
-
-/** Contagens de um sistema por grupo da legenda: {sup: n, sub: n, ...}. */
-async function contagemSistema(s, filtroMun) {
-  const where = `(${s.where}) AND ${filtroMun}`;
-  if (!s.porTipo) {
-    const j = await query(s.servico, where, [], { returnCountOnly: 'true' });
-    return { [s.grupo]: j.count ?? 0 };
-  }
-  const j = await query(s.servico, where, [], { groupByFieldsForStatistics: s.porTipo.campo, outStatistics: COUNT_STAT });
-  const out = {};
-  for (const { attributes: a } of j.features ?? []) {
-    const g = s.porTipo.grupo(consertaUtf8(a[s.porTipo.campo]));
-    out[g] = (out[g] ?? 0) + Number(a.n ?? 0);
-  }
-  return out;
-}
-
 /**
- * Outorgas vigentes por tipo nos municípios (ficha municipal e regional), ao
- * vivo. Devolve {total, linhas: [{grupo, label, color, n}], sigarh, crh} ou
- * null se o GeoPR não responder (a ficha só omite a seção).
+ * Outorgas vigentes nos municípios (ficha municipal e regional), ao vivo, por
+ * tipo e por atividade. Devolve {total, linhas, atividades, sigarh, crh}
+ * (linhas: [{grupo, label, curto, color, n}]) ou null se o GeoPR não responder
+ * (a ficha só omite a seção).
  */
 export async function getOutorgasMunicipios(ibges) {
   try {
-    const partes = await Promise.all(SISTEMAS.map((s) => {
-      const f = filtroMunicipios(s.mun, ibges);
-      return f ? contagemSistema(s, f) : {};
-    }));
-    const soma = (p) => Object.values(p).reduce((a, b) => a + b, 0);
-    const linhas = OUTORGA_LEGENDA
-      .map(({ grupo, label, curto, color }) => ({ grupo, label, curto, color, n: partes.reduce((a, p) => a + (p[grupo] ?? 0), 0) }))
-      .filter((l) => l.n > 0);
-    const sigarh = soma(partes[0]);
-    const crh = partes.slice(1).reduce((a, p) => a + soma(p), 0);
-    return { total: sigarh + crh, linhas, sigarh, crh };
+    const partes = await Promise.all(SISTEMAS.map((s) => contagemSistema(s, MODOS, ibges)));
+    const sigarh = partes[0].total;
+    const crh = partes.slice(1).reduce((a, p) => a + p.total, 0);
+    return { total: sigarh + crh, linhas: linhasDoModo(TIPO, partes), atividades: linhasDoModo(ATIVIDADE, partes), sigarh, crh };
   } catch (err) {
     console.warn('[DataGeo:ficha] outorgas IAT indisponíveis:', err?.message);
     return null;
   }
 }
 
-let ctxRef = null;
-let aborter = null;
-let truncado = false;
-
-const onMove = () => {
-  const map = ctxRef?.map;
-  if (!map || map.getZoom() < VEC_MINZOOM) return;
-  aborter?.abort();
-  aborter = new AbortController();
-  pontosDaVista(map.getBounds(), aborter.signal)
-    .then((r) => {
-      if (!ctxRef) return;
-      ctxRef.setData(SRC_VEC, fc(r.features));
-      if (r.truncado !== truncado) {
-        truncado = r.truncado;
-        ctxRef.refreshPanel();
-      }
-    })
-    .catch((err) => {
-      if (err?.name !== 'AbortError') console.warn('[maplibre:datageo-outorgas]', err);
-    });
-};
-
-const imgSource = (s) => `dg-outorgas-${s.key}`;
-
-export const outorgasLayer = defineLayer({
+export const outorgasLayer = iatPontosLayer({
   id: 'datageo-outorgas',
+  sigla: 'outorgas',
   name: 'Outorgas de uso da água (IAT)',
   category: 'Recursos hídricos',
   icon: '💧',
   source: 'IAT · SIGARH + CRH',
-  sources: {
-    ...Object.fromEntries(SISTEMAS.map((s, i) => [imgSource(s), {
-      type: 'raster', tiles: [exportTileUrl(s.servico, s.where, s.renderer)], tileSize: 512,
-      ...(i === 0 ? { attribution: 'IAT/GeoPR' } : {}),
-    }])),
-    [SRC_VEC]: { type: 'geojson', data: EMPTY_FC },
-  },
-  layers: [
-    ...SISTEMAS.map((s) => ({
-      id: `${imgSource(s)}-img`, type: 'raster', source: imgSource(s), maxzoom: VEC_MINZOOM,
-      paint: { 'raster-fade-duration': 0 },
-    })),
-    {
-      id: PT,
-      type: 'circle',
-      source: SRC_VEC,
-      minzoom: VEC_MINZOOM,
-      paint: {
-        'circle-color': ['match', ['get', 'grupo'], ...OUTORGA_LEGENDA.flatMap((g) => [g.grupo, g.color]), COR.obr],
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], VEC_MINZOOM, 3.5, 16, 6],
-        'circle-stroke-color': 'rgba(5,8,13,0.8)',
-        'circle-stroke-width': 0.8,
-      },
-    },
-  ],
-  interactive: [PT],
+  attribution: 'IAT/GeoPR',
+  sistemas: SISTEMAS,
+  modos: MODOS,
   async load() {
     const n = await Promise.all(SISTEMAS.map((s) => query(s.servico, s.where, [], { returnCountOnly: 'true' })
       .then((j) => j.count ?? 0)));
     const crh = n.slice(1).reduce((a, b) => a + b, 0);
     return { count: n[0] + crh, info: `SIGARH ${fmtInt(n[0])} · CRH ${fmtInt(crh)}` };
   },
-  onEnable(ctx) {
-    ctxRef = ctx;
-    ctx.map.off('moveend', onMove);
-    ctx.map.on('moveend', onMove);
-    onMove();
-  },
-  onDisable(ctx) {
-    ctx.map.off('moveend', onMove);
-    aborter?.abort();
-    ctxRef = null;
-  },
   tooltip: (p) => outorgaTooltipHtml(p),
-  rowControls: () => ({
-    legend: [
-      ...OUTORGA_LEGENDA.map(({ label, color }) => ({ label, color })),
-      ...(truncado ? [{ label: `Vista com mais de ${fmtInt(MAX_POR_VISTA)} pontos: aproxime`, color: '#64748b' }] : []),
-    ],
-  }),
 });
 
 export default [outorgasLayer];

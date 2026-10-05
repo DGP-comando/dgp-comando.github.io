@@ -3,6 +3,19 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-10-05 — outorgas por atividade, licenciamento do IAT
+
+### Added
+
+- **Outorgas de uso da água (IAT)**: chips **Tipo / Atividade** na linha da
+  camada, como os do clima histórico. Atividade = finalidade da outorga
+  (criação animal, irrigação, aquicultura, indústria, abastecimento...). A
+  ficha municipal e a regional mostram as barras por tipo e por atividade.
+- **Licenciamento ambiental (IAT)**, em Ambiente: licenças com validade em
+  dia, ao vivo do GeoPR, com chips **Modalidade / Atividade**. A ficha
+  municipal e a regional ganham a seção de licenciamento, com barras por
+  modalidade e por atividade. Token de link compartilhado `Ia`.
+
 ## [Unreleased] — 2026-09-26 — troca de motor: CesiumJS → MapLibre GL JS
 
 ### Changed

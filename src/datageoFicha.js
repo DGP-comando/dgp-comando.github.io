@@ -25,6 +25,7 @@ import { getExtensionistas } from './data/servidoresIdr.js';
 import { getSusaf } from './data/susaf.js';
 import { gerenteDaRegional, getGerentes } from './data/gerentesIdr.js';
 import { getOutorgasMunicipios } from './maplibre/layers/outorgas.js';
+import { getLicencasMunicipios } from './maplibre/layers/licenciamento.js';
 import { getCaf } from './data/cafFamilias.js';
 import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
@@ -62,6 +63,16 @@ const fmtN = (v, casas = 0) => Number(v).toLocaleString('pt-BR', {
   minimumFractionDigits: casas, maximumFractionDigits: casas,
 });
 const fmtPct = (parte, total) => (total > 0 ? `${fmtN((parte / total) * 100, 1)}%` : '—');
+
+/** Barras por classe ([{label, curto, color, n}]) das seções do IAT. */
+function barrasClasse(linhas) {
+  const maior = Math.max(...linhas.map((l) => l.n));
+  return linhas.map((l) => (
+    `<div class="fx-bar-row"><span class="fx-bar-label fx-bar-label-wide" title="${esc(l.label)}">${esc(l.curto)}</span>` +
+      `<span class="fx-bar-track"><span class="fx-bar-fill" style="width:${Math.round((l.n / maior) * 100)}%;background:${l.color}"></span></span>` +
+      `<span class="fx-bar-val fx-bar-val-wide">${fmtN(l.n)}</span></div>`
+  )).join('');
+}
 
 const SECTIONS = [
   /**
@@ -546,21 +557,28 @@ const SECTIONS = [
   },
 
   /**
-   * Outorgas de uso da água vigentes do IAT (SIGARH + CRH), por tipo, ao vivo
+   * Outorgas de uso da água vigentes do IAT (SIGARH + CRH), por tipo e atividade, ao vivo
    * do GeoPR. Município e regional (a consulta soma a lista de IBGEs).
    */
   function outorgas({ out }) {
     if (!out) return null;
     if (!out.total) return section('Outorgas de água · IAT', '<div>Nenhuma outorga vigente no IAT</div>');
-    const maior = Math.max(...out.linhas.map((l) => l.n));
-    const barras = out.linhas.map((l) => (
-      `<div class="fx-bar-row"><span class="fx-bar-label fx-bar-label-wide" title="${esc(l.label)}">${esc(l.curto)}</span>` +
-        `<span class="fx-bar-track"><span class="fx-bar-fill" style="width:${Math.round((l.n / maior) * 100)}%;background:${l.color}"></span></span>` +
-        `<span class="fx-bar-val fx-bar-val-wide">${fmtN(l.n)}</span></div>`
-    ));
     return section('Outorgas de água · IAT',
-      `<div>Outorgas vigentes: <b>${fmtN(out.total)}</b></div>${barras.join('')}` +
+      `<div>Outorgas vigentes: <b>${fmtN(out.total)}</b></div>` +
+      `<div class="fx-sub">Por tipo</div>${barrasClasse(out.linhas)}` +
+      `<div class="fx-sub">Por atividade</div>${barrasClasse(out.atividades)}` +
       `<div class="fx-dim">IAT/GeoPR · SIGARH ${fmtN(out.sigarh)} + CRH ${fmtN(out.crh)} · inclui usos independentes de outorga · consulta ao vivo · pontos na camada Outorgas de uso da água</div>`);
+  },
+
+  /** Licenciamento ambiental do IAT com validade em dia, por modalidade e atividade. */
+  function licenciamento({ lic }) {
+    if (!lic) return null;
+    if (!lic.total) return section('Licenciamento ambiental · IAT', '<div>Nenhuma licença com validade em dia no IAT</div>');
+    return section('Licenciamento ambiental · IAT',
+      `<div>Licenças com validade em dia: <b>${fmtN(lic.total)}</b></div>` +
+      `<div class="fx-sub">Por modalidade</div>${barrasClasse(lic.linhas)}` +
+      `<div class="fx-sub">Por atividade</div>${barrasClasse(lic.atividades)}` +
+      '<div class="fx-dim">IAT/GeoPR · SIA + SGA · inclui dispensas e declarações de inexigibilidade · consulta ao vivo · pontos na camada Licenciamento ambiental</div>');
   },
 
   /** Fontes protegidas pelo IDR (solo-cimento para captação), por tipo e ano. */
@@ -884,7 +902,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes, getec] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -895,11 +913,12 @@ export async function openFicha({ ibge, nome, info }) {
       getProtecaoSocial([ibge]),
       getGerentes(),
       getOutorgasMunicipios([ibge]),
+      getLicencasMunicipios([ibge]),
       getCaf([ibge]),
       getFontes([ibge]),
       getGetec([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, caf, fontes, getec };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec };
   });
 }
 
@@ -950,7 +969,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, caf, fontes, getec] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -959,11 +978,12 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getProtecaoSocial(ibges),
       getGerentes(),
       getOutorgasMunicipios(ibges),
+      getLicencasMunicipios(ibges),
       getCaf(ibges),
       getFontes(ibges),
       getGetec(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, caf, fontes, getec };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec };
   });
 }
 

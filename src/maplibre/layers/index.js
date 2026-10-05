@@ -14,6 +14,7 @@ import conectividadeRadios from './conectividadeRadios.js';
 import gradesClima from './gradesClima.js';
 import contextoGev from './contextoGev.js';
 import outorgas from './outorgas.js';
+import licenciamento from './licenciamento.js';
 import caf from './caf.js';
 import cafPj from './cafPj.js';
 import fontesProtegidas from './fontesProtegidas.js';
@@ -25,7 +26,7 @@ export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-faxinais-territorios',
   'datageo-faxinais', 'datageo-ucs-federais',
-  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-regionais-idr',
+  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-licenciamento', 'datageo-regionais-idr',
   // Grupo IDR-Paraná: unidades (escritórios) primeiro, estações de pesquisa em seguida.
   'datageo-unidades-idr', 'datageo-estacoes-idr', 'datageo-fontes-protegidas',
   'datageo-associacoes', 'datageo-equipamentos-suas',
@@ -59,6 +60,7 @@ const all = [
   ...gradesClima,
   ...contextoGev,
   ...outorgas,
+  ...licenciamento,
   ...caf,
   ...cafPj,
   ...fontesProtegidas,
