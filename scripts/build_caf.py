@@ -26,7 +26,7 @@ Comparações temporais:
     pelo IPCA (variação real), no recorte inteiro e nas mesmas famílias.
 
 Coordenadas: ~18% dos imóveis vêm fora do PR (ponto decimal perdido, sinal
-trocado, lat/lon invertidas, UTM). `candidatos` tenta os consertos e fica com
+trocado, lat/lon invertidas, UTM, grau-minuto-segundo colado). `candidatos` tenta os consertos e fica com
 o primeiro que cai no município declarado da área; sem conserto, a família
 fica fora do mapa mas entra nas contagens.
 
@@ -113,12 +113,27 @@ def _escala(v, faixa):
     return -a if faixa[0] <= a <= faixa[1] else None
 
 
+def _dms(v, faixa):
+    """GGMMSS[.ss] colado (252850 = 25°28'50") em grau decimal sul/oeste, ou None."""
+    a = abs(v)
+    if not 1e5 <= a < 1e6:
+        return None
+    g, m, seg = a // 10000, a // 100 % 100, a % 100
+    d = g + m / 60 + seg / 3600
+    return -d if m < 60 and seg < 60 and faixa[0] <= d <= faixa[1] else None
+
+
 _UTM = {z: Transformer.from_crs(f'EPSG:{z}', 'EPSG:4674', always_xy=True) for z in (31982, 31981)}
 
 
 def candidatos(lat, lon):
     """(lon, lat, conserto) em ordem de preferência; o 1o é o dado como veio."""
     out = [(lon, lat, None)]
+    # GMS antes da escala: 252850 virava 25.285 pela escala, a 20 km do lugar.
+    for a, b, nome in ((lat, lon, 'grau-minuto-segundo'), (lon, lat, 'grau-minuto-segundo invertido')):
+        y, x = _dms(a, LAT), _dms(b, LON)
+        if y is not None and x is not None:
+            out.append((x, y, nome))
     for a, b, nome in ((lat, lon, 'escala/sinal'), (lon, lat, 'lat/lon invertidas')):
         y, x = _escala(a, LAT), _escala(b, LON)
         if y is not None and x is not None:
@@ -160,6 +175,9 @@ def _demo():
     assert _escala(25.24, LAT) == -25.24 and _escala(-15.79, LAT) is None
     c = candidatos(-53.4, -25.1)  # invertidas
     assert any(abs(x + 53.4) < 1e-9 and abs(y + 25.1) < 1e-9 for x, y, _ in c)
+    x, y, c = candidatos(252850, 511459.8)[1]
+    assert c == 'grau-minuto-segundo' and abs(y + 25.48056) < 1e-4 and abs(x + 51.24994) < 1e-4
+    assert _dms(-251126.18, LAT) is not None and _dms(256190, LAT) is None  # 61 min
     x, y, _ = [k for k in candidatos(7329213.12, 270769.05) if k[2] == 'UTM 31982'][0]
     assert -54 < x < -48 and -27 < y < -22
     assert produto('Soja em Grão - Kg') == produto('Soja') == 'Soja'
