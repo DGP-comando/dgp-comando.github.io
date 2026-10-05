@@ -9214,6 +9214,21 @@ body.scene-playback-mode #first-run-launcher {
   display: none;
 }
 
+/* Apresentação guiada (src/apresentacao.js): só a abertura fica no centro; do
+   2º passo em diante o card desce ao rodapé, entre o painel de camadas e a
+   ficha, para o mapa ser o protagonista. */
+body.apresentacao-mode .first-run-suppress { display: none; }
+body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]) {
+  top: auto;
+  bottom: 7.5rem;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: min(40vh, 22rem);
+  transform: translate(-50%, 0.8rem) scale(0.985);
+}
+body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
+  transform: translate(-50%, 0) scale(1);
+}
+
 @media (max-width: 620px) {
   #first-run-launcher {
     top: auto;
@@ -9710,6 +9725,65 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
 #dg-tooltip .tt-warn { color: #fbbf24; }
 #dg-tooltip .tt-alert { color: #f87171; }
 #dg-tooltip .tt-muted { color: #64748b; }
+
+/* Spike GeoLibre WASM: processamento no rodapé do painel de camadas */
+.proc-panel {
+  flex: none;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+.proc-panel summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  list-style: none;
+}
+.proc-panel summary::-webkit-details-marker { display: none; }
+.proc-panel summary::before { content: '▸ '; color: var(--accent); }
+.proc-panel[open] summary::before { content: '▾ '; }
+.proc-badge {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 9px;
+}
+.proc-panel label {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.proc-panel input, .proc-panel select {
+  min-width: 0;
+  padding: 4px 7px;
+  font: inherit;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  outline: none;
+}
+.proc-panel input:focus, .proc-panel select:focus { border-color: var(--accent); }
+.proc-panel select option { background: #0a0a0f; }
+.proc-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.proc-row button {
+  padding: 4px 10px;
+  font: inherit;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.proc-row button:disabled { opacity: 0.5; cursor: wait; }
+.proc-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Nome clicável no painel (extensionista -> grupos do GETEC) */
 .fx-link {

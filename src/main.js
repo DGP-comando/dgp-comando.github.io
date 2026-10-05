@@ -34,7 +34,9 @@ import { initCockpitCloudEffects } from './cockpitCloudEffects.js';
 import { installRenderGovernor } from './renderGovernor.js';
 import { installScopeMask } from './scopeMask.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
+import { apresentacaoPedida, initApresentacao } from './apresentacao.js';
 import { requireLogin } from './datageoLogin.js';
+import { initGeolibrePanel } from './processing/geolibrePanel.js';
 
 initLogoGaze();
 
@@ -217,6 +219,7 @@ async function init() {
       };
     }
     dataManager.buildTogglePanel(document.getElementById('data-toggles'), document.getElementById('data-panel-tools'));
+    initGeolibrePanel(document.getElementById('proc-panel'), engine.map);
     styleManager.attachDataManager(dataManager);
 
     // Initialize deterministic scene playback for social clip capture
@@ -241,6 +244,20 @@ async function init() {
       const revealFirstRun = () => {
         if (firstRunRevealed) return;
         firstRunRevealed = true;
+        // `?apresentacao` troca o tutorial pelo roteiro de demonstração
+        // (src/apresentacao.js), que liga camadas e abre a ficha a cada passo.
+        const ibgeApresentacao = apresentacaoPedida();
+        if (ibgeApresentacao) {
+          initApresentacao({
+            ibge: ibgeApresentacao,
+            styleManager,
+            dataManager,
+            areaWatch,
+            openLayersPanel,
+            openLocationSearch,
+          });
+          return;
+        }
         // O tutorial não liga camadas: seus dois botões de ação apenas abrem o
         // painel de camadas e a busca, pelos mesmos caminhos dos atalhos L e B.
         initFirstRunExperience({

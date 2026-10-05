@@ -17,6 +17,7 @@ import { PARANA_OVERVIEW, flyToParanaOverview } from './camera.js';
 import { locationMiniStatus } from './locationStatus.js';
 import {
   exactMunicipioMatch,
+  municipioByIbge,
   municipioMatchRange,
   searchMunicipios,
 } from './municipioSearch.js';
@@ -9788,6 +9789,19 @@ export class StyleManager {
    * @param {{code: string, name: string, lat: number, lon: number}} match
    * @returns {void}
    */
+  /**
+   * O mesmo caminho da busca por nome, a partir do código IBGE: enquadra o
+   * município e abre a ficha. Usado pela apresentação guiada.
+   * @param {string|number} ibge
+   * @returns {boolean} false quando o código não é de um município do Paraná
+   */
+  flyToMunicipioIbge(ibge) {
+    const match = municipioByIbge(ibge);
+    if (!match) return false;
+    this._flyToMunicipioResult(match);
+    return true;
+  }
+
   _flyToMunicipioResult(match) {
     if (!match) return;
     this._closeMunicipioSuggestions();

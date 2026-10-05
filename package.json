@@ -47,6 +47,7 @@
     "@mapbox/vector-tile": "^3.0.0",
     "@supabase/auth-js": "^2.117.1",
     "egm96-universal": "^1.1.1",
+    "geolibre-wasm": "^1.5.4",
     "maplibre-gl": "6.7.0",
     "mgrs": "^2.1.0",
     "pbf": "^5.1.2",
