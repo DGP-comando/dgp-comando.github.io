@@ -49,11 +49,15 @@ notes were last reviewed August 24, 2026.
 > **2026-09-14 — tutorial de entrada substitui o card de missões**
 > (`src/firstRunExperience.js`, `#first-run-launcher`, estilos no fim de
 > `style.css`). O card "Escolha a sua missão" (Defesa Civil / Epidemiológico /
-> Agroambiental / Explorar) saiu. No lugar, um tutorial não modal em 4 passos:
-> **Início → Camadas de dados → Pesquisa de localização → Ajustes da tela**
-> (este último com menor ênfase). Cada passo realça o painel real
-> (`.tour-highlight` em `#data-panel`, `#location-bar`, `#control-panel` e
-> `#pp-toggles`); os botões "Abrir o painel de camadas" e "Experimentar a
+> Agroambiental / Explorar) saiu. No lugar, um tutorial não modal, desde
+> 2026-10-04 em 7 passos que só DESCREVEM as funcionalidades (sem caso de uso;
+> o roteiro com caso de uso é `src/apresentacao.js`, `?apresentacao=1`):
+> **Início → Camadas de dados → Pesquisa de localização → Ficha municipal →
+> Vigilância → Câmera e compartilhamento → Ajustes da tela**
+> (este último com menor ênfase). Os passos com painel na página o realçam
+> (`.tour-highlight` em `#data-panel`, `#location-bar`, `#top-center-actions`,
+> `#control-panel` e `#pp-toggles`; ficha e vigilância não têm alvo porque só
+> existem depois de um clique); os botões "Abrir o painel de camadas" e "Experimentar a
 > busca" chamam `openLayersPanel`/`openLocationSearch` de
 > `src/datageoShortcuts.js`, os mesmos caminhos das teclas L e B. O tutorial
 > **não liga camada nem grava preferência**; os atalhos continuam valendo com
@@ -82,7 +86,8 @@ notes were last reviewed August 24, 2026.
 > (valia também para a tecla B).
 >
 > Gates: `src/firstRunExperience.test.mjs` e `node scripts/qa-firstrun.mjs
-> --url <app>` (percorre os 4 passos, ações, ESC na busca, sessão, celular).
+> --url <app>` (percorre os 7 passos, ações, ESC na busca, sessão, celular;
+> usa `?semlogin`, só vale no dev).
 
 > **2026-08-08 — performance waves 1+2:** the app idles via an explicit render
 > governor (`src/renderGovernor.js` — hold/release from every per-frame

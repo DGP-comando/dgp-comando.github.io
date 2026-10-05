@@ -1,8 +1,9 @@
 // Tutorial de entrada (substitui o antigo launcher "Escolha a sua missão").
 //
-// Um card não modal, em passos, que explica a sala antes de o operador sair
-// clicando: CAMADAS DE DADOS e PESQUISA DE LOCALIZAÇÃO têm o destaque, os
-// ajustes da tela (estilos, HUD, atalhos) vêm por último e mais discretos.
+// Um card não modal, em passos, que apresenta TODAS as funcionalidades da sala
+// (camadas, busca, ficha municipal, vigilância, botões do topo) sem roteiro de
+// uso; os ajustes da tela (estilos, HUD, atalhos) vêm por último e mais
+// discretos. O roteiro de demonstração com caso de uso é src/apresentacao.js.
 // Ele NÃO liga camada nenhuma nem grava preferência: os dois botões de ação
 // ("Abrir o painel de camadas", "Experimentar a busca") fazem exatamente o que
 // o clique do operador faria no próprio painel.
@@ -35,6 +36,10 @@ export const FIRST_RUN_TOUR_STEPS = Object.freeze([
   Object.freeze({ id: 'inicio', targets: Object.freeze([]) }),
   Object.freeze({ id: 'camadas', targets: Object.freeze(['#data-panel']) }),
   Object.freeze({ id: 'localizacao', targets: Object.freeze(['#location-bar']) }),
+  // A ficha e o painel de vigilância só existem depois de um clique: sem alvo.
+  Object.freeze({ id: 'ficha', targets: Object.freeze([]) }),
+  Object.freeze({ id: 'vigilancia', targets: Object.freeze([]) }),
+  Object.freeze({ id: 'topo', targets: Object.freeze(['#top-center-actions']) }),
   Object.freeze({ id: 'preferencias', targets: Object.freeze(['#control-panel', '#pp-toggles']), minor: true }),
 ]);
 

@@ -130,10 +130,11 @@ test('getter de storage que LANÇA ainda falha aberto (Safari privado)', () => {
 
 // ── Passos e navegação ───────────────────────────────────────────────────────
 
-test('ordem dos passos: início, camadas, localização e, por último e discreto, preferências', () => {
-  assert.deepEqual(FIRST_RUN_TOUR_STEPS.map((s) => s.id), ['inicio', 'camadas', 'localizacao', 'preferencias']);
+test('ordem dos passos: início, camadas, localização, ficha, vigilância, topo e, por último e discreto, preferências', () => {
+  assert.deepEqual(FIRST_RUN_TOUR_STEPS.map((s) => s.id), ['inicio', 'camadas', 'localizacao', 'ficha', 'vigilancia', 'topo', 'preferencias']);
   assert.deepEqual(FIRST_RUN_TOUR_STEPS[1].targets, ['#data-panel']);
   assert.deepEqual(FIRST_RUN_TOUR_STEPS[2].targets, ['#location-bar']);
+  assert.deepEqual(FIRST_RUN_TOUR_STEPS[5].targets, ['#top-center-actions']);
   assert.equal(FIRST_RUN_TOUR_STEPS.at(-1).minor, true);
   assert.equal(FIRST_RUN_TOUR_STEPS.filter((s) => s.minor).length, 1, 'só o último passo tem menor ênfase');
 });
@@ -173,7 +174,7 @@ test('markup: um section por passo, na mesma ordem, com alvos que existem na pá
   }
   // Só o primeiro passo nasce visível.
   assert.doesNotMatch(html.slice(html.indexOf('data-tour-step="inicio"'), html.indexOf('>', html.indexOf('data-tour-step="inicio"'))), /hidden/);
-  for (const id of ['camadas', 'localizacao', 'preferencias']) {
+  for (const { id } of FIRST_RUN_TOUR_STEPS.slice(1)) {
     const tag = html.slice(html.indexOf(`data-tour-step="${id}"`), html.indexOf('>', html.indexOf(`data-tour-step="${id}"`)));
     assert.match(tag, /hidden/, `${id} deve nascer oculto`);
   }
@@ -182,7 +183,9 @@ test('markup: um section por passo, na mesma ordem, com alvos que existem na pá
   assert.match(html, /data-tour-action="search"/);
   assert.match(html, /<input type="checkbox" data-first-run-suppress \/>/);
   assert.match(html, /data-first-run-status[^>]*role="status"[^>]*aria-live="polite"/);
-  assert.equal((html.match(/class="tour-dots"[^>]*>(<span><\/span>){4}</g) || []).length, 1, 'um ponto por passo');
+  const n = FIRST_RUN_TOUR_STEPS.length;
+  assert.equal((html.match(new RegExp(`class="tour-dots"[^>]*>(<span><\\/span>){${n}}<`, 'g')) || []).length, 1, 'um ponto por passo');
+  assert.match(html, new RegExp(`data-tour-counter aria-hidden="true">1 / ${n}<`), 'contador inicial com o total certo');
 });
 
 test('texto dos passos de destaque cita os atalhos e rótulos reais da interface', () => {
@@ -196,13 +199,33 @@ test('texto dos passos de destaque cita os atalhos e rótulos reais da interface
     if (nome === 'Contexto global') continue;
     assert.ok(camadas.includes(nome), `categoria ${nome} ausente do passo de camadas`);
   }
-  const loc = html.slice(html.indexOf('data-tour-step="localizacao"'), html.indexOf('data-tour-step="preferencias"'));
+  const loc = html.slice(html.indexOf('data-tour-step="localizacao"'), html.indexOf('data-tour-step="ficha"'));
   assert.match(loc, /LOCALIZAÇÃO/);
   assert.match(loc, /<kbd>B<\/kbd>/);
   assert.match(loc, /<kbd>P<\/kbd>/);
+  const ficha = html.slice(html.indexOf('data-tour-step="ficha"'), html.indexOf('data-tour-step="vigilancia"'));
+  const fichaJs = fs.readFileSync(new URL('./datageoFicha.js', import.meta.url), 'utf8');
+  assert.match(fichaJs, /'Assistência técnica · GETEC'/);
+  assert.match(ficha, /GETEC/);
+  const vig = html.slice(html.indexOf('data-tour-step="vigilancia"'), html.indexOf('data-tour-step="topo"'));
+  assert.match(vig, /VIGIAR/);
+  assert.match(vig, /<kbd>A<\/kbd>/);
+  const watchJs = fs.readFileSync(new URL('./data/areaWatch.js', import.meta.url), 'utf8');
+  const max = watchJs.match(/MAX_WATCHES\s*=\s*(\d+)/)?.[1];
+  assert.ok(vig.includes(`Até ${max} municípios`), `limite de vigiados (${max}) citado no passo`);
+  const topo = html.slice(html.indexOf('data-tour-step="topo"'), html.indexOf('data-tour-step="preferencias"'));
+  for (const id of ['clear-selected-layers', 'share-btn', 'focus-municipio', 'reset-parana-view', 'reset-globe-view', 'logout-btn']) {
+    assert.match(html, new RegExp(`id="${id}"`), `${id} sumiu do topo`);
+  }
+  assert.match(topo, /<kbd>P<\/kbd>/);
   const keymap = fs.readFileSync(new URL('./data/shortcutsKeymap.js', import.meta.url), 'utf8');
   for (const [key, action] of [['L', 'toggleLayers'], ['B', 'openSearch'], ['P', 'resetCamera'], ['A', 'toggleWatch'], ['M', 'toggleFullscreen']]) {
     assert.match(keymap, new RegExp(`key: '${key}', action: '${action}'`));
+  }
+  const prefs = html.slice(html.indexOf('data-tour-step="preferencias"'), html.indexOf('</section>', html.indexOf('data-tour-step="preferencias"')));
+  for (const key of ['H', 'D', 'V', 'M', 'F', 'O', 'C']) {
+    assert.match(keymap, new RegExp(`key: '${key}'`), `${key} saiu do mapa de atalhos`);
+    assert.match(prefs, new RegExp(`<kbd>${key}</kbd>`), `${key} ausente do passo de ajustes`);
   }
 });
 

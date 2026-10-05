@@ -2,7 +2,7 @@
 /**
  * qa-firstrun — o tutorial de entrada no app real.
  *
- * Percorre os quatro passos, confere o realce dos painéis, os botões de ação
+ * Percorre os sete passos, confere o realce dos painéis, os botões de ação
  * (abrir camadas, abrir busca), que ESC na busca não fecha o tutorial, que
  * Concluir grava só a flag de sessão e que um reload na mesma sessão não o
  * mostra de novo. Salva screenshots de cada passo (desktop e celular).
@@ -63,12 +63,12 @@ try {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.setViewport({ width: 1440, height: 860 });
-  await page.goto(`${url}/?welcome=1`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${url}/?semlogin&welcome=1`, { waitUntil: 'domcontentloaded' });
   await waitCard(page);
 
   let s = await state(page);
   check('passo 1 visível com contador e botão Começar',
-    s.step === 'inicio' && s.counter === '1 / 4' && s.next === 'Começar' && s.backHidden === true, s);
+    s.step === 'inicio' && s.counter === '1 / 7' && s.next === 'Começar' && s.backHidden === true, s);
   check('card de missões não existe mais',
     await page.evaluate(() => !document.querySelector('[data-first-run-choice]')));
   await page.screenshot({ path: path.join(outDir, '1-inicio.png') });
@@ -109,16 +109,25 @@ try {
   s = await state(page);
   check('ESC dentro da busca não fecha o tutorial', s.present && s.visible, s);
 
+  for (const [n, id] of [[4, 'ficha'], [5, 'vigilancia'], [6, 'topo']]) {
+    await page.click('[data-tour-next]');
+    await sleep(400);
+    s = await state(page);
+    check(`passo ${n} ${id}`, s.step === id && s.next === 'Próximo' && s.labelledBy === `tour-title-${id}`, s);
+    await page.screenshot({ path: path.join(outDir, `${n}-${id}.png`) });
+  }
+  check('passo 6 topo realça #top-center-actions', s.highlighted.includes('top-center-actions'), s);
+
   await page.click('[data-tour-next]');
   await sleep(400);
   s = await state(page);
-  check('passo 4 preferências com Concluir', s.step === 'preferencias' && s.next === 'Concluir' && s.counter === '4 / 4', s);
-  await page.screenshot({ path: path.join(outDir, '4-preferencias.png') });
+  check('passo 7 preferências com Concluir', s.step === 'preferencias' && s.next === 'Concluir' && s.counter === '7 / 7', s);
+  await page.screenshot({ path: path.join(outDir, '7-preferencias.png') });
 
   await page.keyboard.press('ArrowLeft');
   await sleep(300);
   s = await state(page);
-  check('seta ← volta um passo com o foco no card', s.step === 'localizacao', s);
+  check('seta ← volta um passo com o foco no card', s.step === 'topo', s);
   await page.click('[data-tour-next]');
   await sleep(300);
 
@@ -133,7 +142,7 @@ try {
   check('Concluir fecha, limpa o realce e grava só a sessão',
     !closed.present && closed.highlights === 0 && closed.session === 'dismissed' && closed.durable === null, closed);
 
-  await page.goto(url, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${url}/?semlogin`, { waitUntil: 'domcontentloaded' });
   await sleep(14_000);
   check('reload na mesma sessão não mostra o tutorial',
     await page.evaluate(() => !document.getElementById('first-run-launcher')?.classList.contains('visible')));
@@ -142,7 +151,7 @@ try {
   const mobile = await browser.newPage();
   mobile.on('pageerror', (e) => errors.push(e.message));
   await mobile.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
-  await mobile.goto(`${url}/?welcome=1`, { waitUntil: 'domcontentloaded' });
+  await mobile.goto(`${url}/?semlogin&welcome=1`, { waitUntil: 'domcontentloaded' });
   await waitCard(mobile);
   await mobile.click('[data-tour-next]');
   await sleep(400);

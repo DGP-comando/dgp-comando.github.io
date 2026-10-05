@@ -872,7 +872,7 @@
     <div class="first-run-scanline" aria-hidden="true"></div>
     <header class="first-run-header">
       <span class="first-run-kicker">TUTORIAL · DATAGEO PR</span>
-      <span class="tour-counter" data-tour-counter aria-hidden="true">1 / 4</span>
+      <span class="tour-counter" data-tour-counter aria-hidden="true">1 / 7</span>
     </header>
 
     <div class="tour-steps">
@@ -882,7 +882,10 @@
         <ol class="tour-agenda">
           <li><strong>Camadas de dados</strong><small>o que ligar no mapa</small></li>
           <li><strong>Pesquisa de localização</strong><small>como chegar a um município ou local</small></li>
-          <li><strong>Ajustes da tela</strong><small>estilos, HUD e atalhos</small></li>
+          <li><strong>Ficha municipal</strong><small>as bases cruzadas por município</small></li>
+          <li><strong>Vigilância</strong><small>acompanhar municípios em segundo plano</small></li>
+          <li><strong>Câmera e compartilhamento</strong><small>os botões do topo</small></li>
+          <li><strong>Ajustes da tela</strong><small>estilos, mapa base, HUD e atalhos</small></li>
         </ol>
       </section>
 
@@ -894,8 +897,9 @@
           <li>As camadas estão agrupadas por tema: Limites e regiões, Territórios e povos, Agricultura familiar e CAR, IDR-Paraná, Defesa Agropecuária, Logística agro, Transporte, Energia e conectividade, Saúde e proteção social, Clima, Recursos hídricos, Ambiente, Riscos e alertas. Clique no nome do grupo para abrir ou recolher.</li>
           <li>A caixa de busca filtra pelo nome; os três botões ao lado mudam a exibição: grupos, lista compacta ou grade de ícones.</li>
           <li>Clique numa camada para ligar ou desligar. A linha mostra a fonte, a contagem e a última atualização.</li>
-          <li>Algumas só aparecem de perto, como as rodovias municipais e as linhas de distribuição: aproxime o zoom.</li>
-          <li>Passe o mouse sobre um município para ver o resumo e clique para abrir a ficha completa.</li>
+          <li>Camadas ao vivo (estações INMET, nível dos rios, alertas CEMADEN, focos de calor, incidentes, navios no porto) recarregam sozinhas.</li>
+          <li>Algumas só aparecem de perto, como as estradas municipais, os imóveis do CAR e as linhas de distribuição: aproxime o zoom.</li>
+          <li>Clique num ponto (escritório do IDR, família do CAF, cooperativa, propriedade) para abrir o cadastro e a rede ligada a ele.</li>
           <li>As camadas ligadas ficam salvas e seguem junto no link compartilhado.</li>
         </ul>
         <button type="button" class="tour-action" data-tour-action="layers">
@@ -908,7 +912,7 @@
         <p>O botão <b>LOCALIZAÇÃO</b>, na barra inferior, leva a câmera a qualquer lugar.</p>
         <ul class="tour-points">
           <li>Abra LOCALIZAÇÃO e clique na lupa, ou tecle <kbd>B</kbd>, e digite o nome de um município.</li>
-          <li>A lista sugere os municípios do Paraná enquanto você digita: use <kbd>↑</kbd> <kbd>↓</kbd> e <kbd>Enter</kbd> para enquadrar o escolhido.</li>
+          <li>A lista sugere os municípios do Paraná enquanto você digita: use <kbd>↑</kbd> <kbd>↓</kbd> e <kbd>Enter</kbd> para enquadrar o escolhido e abrir a ficha.</li>
           <li>Um endereço ou lugar fora da lista também funciona: digite e tecle <kbd>Enter</kbd>.</li>
           <li>A barra informa o local e a referência mais próxima do centro da tela.</li>
           <li>Tecle <kbd>P</kbd> para voltar a câmera ao Paraná inteiro.</li>
@@ -918,14 +922,48 @@
         </button>
       </section>
 
+      <section class="tour-step" data-tour-step="ficha" hidden>
+        <h2 id="tour-title-ficha"><span class="material-symbols-outlined" aria-hidden="true">description</span>Ficha municipal</h2>
+        <p>Passe o mouse sobre um município para ver o resumo; clique para abrir a <b>ficha</b>, à direita.</p>
+        <ul class="tour-points">
+          <li>Território e rede do IDR: agroindústrias, estradas e convênios SEAB, extensionistas, grupos de assistência técnica (GETEC), SUSAF, módulo fiscal.</li>
+          <li>Economia agropecuária, população, proteção social e segurança pública.</li>
+          <li>Ambiente e clima: focos de calor, clima histórico, outorgas de água, fontes protegidas, hidrologia e alertas.</li>
+          <li>O botão <b>aproximar</b>, no topo, desce ao município e libera as camadas que só aparecem de perto.</li>
+          <li><kbd>Esc</kbd> fecha a ficha.</li>
+        </ul>
+      </section>
+
+      <section class="tour-step" data-tour-step="vigilancia" hidden>
+        <h2 id="tour-title-vigilancia"><span class="material-symbols-outlined" aria-hidden="true">visibility</span>Vigilância</h2>
+        <p>O botão <b>VIGIAR</b>, na ficha, põe o município numa lista acompanhada em segundo plano.</p>
+        <ul class="tour-points">
+          <li>A cada 5 minutos o sistema procura focos de calor, alertas CEMADEN e incidentes novos em cada município vigiado.</li>
+          <li>O painel <b>VIGILÂNCIA</b>, no canto inferior direito (tecla <kbd>A</kbd>), mostra a lista e o histórico de eventos.</li>
+          <li>Até 10 municípios; o histórico exporta em CSV e GeoJSON.</li>
+          <li>A lista fica salva neste navegador e continua na próxima sessão.</li>
+        </ul>
+      </section>
+
+      <section class="tour-step" data-tour-step="topo" hidden>
+        <h2 id="tour-title-topo"><span class="material-symbols-outlined" aria-hidden="true">share</span>Câmera e compartilhamento</h2>
+        <p>Os botões no <b>topo da tela</b>, da esquerda para a direita:</p>
+        <ul class="tour-points">
+          <li><b>Desligar camadas</b>: limpa tudo o que está ligado no mapa.</li>
+          <li><b>Link</b>: copia um endereço com câmera, camadas e estilo; quem abre vê exatamente esta tela.</li>
+          <li><b>Aproximar</b> ao município selecionado, <b>Paraná</b> inteiro (<kbd>P</kbd>) e <b>globo</b>.</li>
+          <li><b>Sair</b> encerra a sessão.</li>
+        </ul>
+      </section>
+
       <section class="tour-step tour-step-minor" data-tour-step="preferencias" hidden>
         <h2 id="tour-title-preferencias">Ajustes da tela <small>opcional</small></h2>
         <p>Quando quiser personalizar a sala:</p>
         <dl class="tour-prefs">
-          <dt>ESTILOS VISUAIS</dt><dd>visual do mapa e fonte da imagem de fundo (teclas <kbd>1</kbd>–<kbd>7</kbd>)</dd>
-          <dt>TELA</dt><dd>HUD (<kbd>H</kbd>), detecção e efeitos</dd>
-          <dt>Visão limpa</dt><dd>esconde os painéis (<kbd>V</kbd>); tela cheia em <kbd>M</kbd></dd>
-          <dt>Cantos</dt><dd>VIGILÂNCIA (<kbd>A</kbd>)</dd>
+          <dt>ESTILOS VISUAIS</dt><dd>visual do mapa (teclas <kbd>1</kbd>–<kbd>7</kbd>) e MAPA BASE: satélite, OSM ou vetorial, globo ou 2D, relevo</dd>
+          <dt>TELA</dt><dd>HUD (<kbd>H</kbd>), detecção (<kbd>D</kbd>), aeronaves 3D, escopo circular, anel celeste, efeitos de imagem</dd>
+          <dt>Visão limpa</dt><dd>esconde os painéis (<kbd>V</kbd>); tela cheia em <kbd>M</kbd>; painel de dados em <kbd>F</kbd></dd>
+          <dt>Câmera</dt><dd>órbita (<kbd>O</kbd>) e cockpit de perseguição (<kbd>C</kbd>)</dd>
         </dl>
         <p class="tour-hint">Tecle <kbd>?</kbd> a qualquer momento para ver todos os atalhos.</p>
       </section>
@@ -933,7 +971,7 @@
 
     <nav class="tour-nav" aria-label="Navegação do tutorial">
       <button type="button" class="tour-skip" data-tour-skip>Pular tutorial</button>
-      <div class="tour-dots" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="tour-dots" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
       <div class="tour-nav-buttons">
         <button type="button" class="tour-back" data-tour-back>Voltar</button>
         <button type="button" class="tour-next" data-tour-next>Próximo</button>
