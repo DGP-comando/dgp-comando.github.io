@@ -6,6 +6,42 @@
 
 ---
 
+## Sessão 2026-10-06 (tarde): aba Aspectos físicos
+
+### Feito
+- Categoria nova **Aspectos físicos** no painel (manager.js, tour do index.html),
+  seis camadas em `src/maplibre/layers/aspectosFisicos.js`, tokens de link `Fa`..`Ff`:
+  - Altimetria: `color-relief` + hillshade sobre os tiles Terrarium (não há MDE
+    estadual no GeoPR), em faixas de 200 m iguais às da ficha.
+  - Declividade (`zee_declividade`, export), Hidrografia (rede otto 2020; a
+    generalizada antes do zoom 9, cache de tiles), Nascentes FBDS (export, zoom 10+),
+    Curvas de nível 10/20 m (cache de tiles, zoom 11+). Todas ao vivo do GeoPR.
+  - Uso do solo IAT 2012-2016: só o município selecionado (evento
+    `datageo:municipio-selecionado`), lendo `public/data/uso-solo/{ibge}.json`.
+- Ficha municipal e regional: seções Relevo, Hidrografia e Uso do solo
+  (`src/data/aspectosFisicos.js`, teste em `aspectosFisicos.test.mjs`).
+- `scripts/build_aspectos_fisicos.py`: recorta pela malha do app MDE ALOS 12,5 m
+  (lido a 25 m), declividade baixada do GeoPR (cache em data/cache), drenagem
+  (PRHidro2.gpkg), nascentes e uso do solo (cópias locais em H:/IDR-PARANA/GEOPROCESSAMENTO).
+- QA de navegador `scripts/qa-aspectos-fisicos.mjs`: partes do GeoPR e altimetria
+  10/10; suíte unitária 2866/2866.
+
+### Pendente (próxima sessão)
+- **Rodar o build completo** (`py -3 scripts/build_aspectos_fisicos.py`, ~30 min)
+  e commitar `public/data/aspectos-fisicos-pr.json` + `public/data/uso-solo/`.
+  Sem esses arquivos a ficha omite as seções e a camada de uso do solo avisa que
+  não há dado.
+- **Tamanho do uso do solo**: a amostra deu 6,4 MB para 3 municípios (~2 MB cada);
+  os 399 dariam centenas de MB. Antes de commitar: subir `USO_TOL_M`, cortar
+  polígonos minúsculos ou passar para PMTiles/vector tiles.
+- Rodar `node scripts/qa-aspectos-fisicos.mjs` depois do build (as 7 checagens de
+  uso do solo e ficha dependem dos dados).
+- Pegadinhas: o recorte na divisa gera GeometryCollection (o script explode e
+  fica só com polígonos); `zee_declividade` tem classes extras (RIOS, Urbana)
+  que ficam fora da legenda; o export do GeoPR para uso do solo leva ~20 s por tile.
+
+---
+
 ## Sessão 2026-09-14 (madrugada): navios com ícone e tooltip; assentamentos e UCs
 
 ### Navios

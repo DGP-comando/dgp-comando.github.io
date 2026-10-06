@@ -40,6 +40,7 @@ const LAYER_CATEGORY_ORDER = Object.freeze([
   'Transporte',
   'Energia e conectividade',
   'Saúde e proteção social',
+  'Aspectos físicos',
   'Clima',
   'Recursos hídricos',
   'Ambiente',

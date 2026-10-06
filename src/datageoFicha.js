@@ -29,6 +29,7 @@ import { getLicencasMunicipios } from './maplibre/layers/licenciamento.js';
 import { getCaf } from './data/cafFamilias.js';
 import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
+import { getAspectosFisicos } from './data/aspectosFisicos.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -556,6 +557,48 @@ const SECTIONS = [
     return section('Clima histórico · BR-DWGD', rows.join(''));
   },
 
+  /** Relevo: altitude do MDE do IDR e declividade da ZEE-PR, área por classe. */
+  function relevo({ fis }) {
+    if (!fis?.alt && !fis?.decl.length) return null;
+    const ha = (l) => ({ ...l, n: Math.round(l.n) });
+    const rows = [];
+    if (fis.alt) {
+      rows.push(`<div>Altitude: <b>${fmtN(fis.alt.min)}</b> a <b>${fmtN(fis.alt.max)} m</b> · média <b>${fmtN(fis.alt.med)} m</b> ` +
+        `<span class="fx-dim">(amplitude ${fmtN(fis.alt.max - fis.alt.min)} m)</span></div>`);
+      rows.push(`<div class="fx-sub">Área por faixa de altitude (ha)</div>${barrasClasse(fis.alt.faixas.map(ha))}`);
+    }
+    if (fis.decl.length) {
+      const total = fis.decl.reduce((a, l) => a + l.n, 0);
+      const forte = fis.decl.filter((l) => l.key === '20 a 45' || l.key === '>45').reduce((a, l) => a + l.n, 0);
+      rows.push(`<div class="fx-sub">Declividade (ha) · acima de 20 %: <b>${fmtPct(forte, total)}</b> da área</div>` +
+        barrasClasse(fis.decl.map(ha)));
+    }
+    rows.push(`<div class="fx-dim">Altitude: ${esc(fis.fonte.altitude)} · declividade: ${esc(fis.fonte.declividade)} · ` +
+      'curvas de nível de 10/20 m e hipsometria nas camadas da aba Aspectos físicos</div>');
+    return section('Relevo · MDE IDR + ZEE-PR', rows.join(''));
+  },
+
+  /** Drenagem (km e densidade) e nascentes (contagem e densidade). */
+  function hidrografia({ fis }) {
+    if (!fis) return null;
+    const km2 = fis.areaHa / 100;
+    return section('Hidrografia · IAT + FBDS',
+      `<div>Drenagem: <b>${fmtN(fis.drenKm)} km</b> <span class="fx-dim">(${fmtN(fis.drenKm / km2, 2)} km/km²)</span></div>` +
+      `<div>Nascentes: <b>${fmtN(fis.nascentes)}</b> <span class="fx-dim">(${fmtN(fis.nascentes / km2, 2)} por km²)</span></div>` +
+      `<div class="fx-dim">${esc(fis.fonte.drenagem)} · ${esc(fis.fonte.nascentes)} · recortadas pela divisa municipal</div>`);
+  },
+
+  /** Uso e cobertura da terra (IAT 2012-2016), área por classe. */
+  function usoSolo({ fis }) {
+    if (!fis?.uso.length) return null;
+    const total = fis.uso.reduce((a, l) => a + l.n, 0);
+    const linhas = fis.uso.map((l) => ({ ...l, n: Math.round(l.n), curto: `${l.curto} · ${fmtPct(l.n, total)}` }));
+    return section('Uso do solo · IAT 2012-2016',
+      `<div>${fmtN(total)} ha mapeados</div>` +
+      `<div class="fx-sub">Área por classe (ha)</div>${barrasClasse(linhas)}` +
+      `<div class="fx-dim">${esc(fis.fonte.uso)} · nível II · desenho na camada Uso do solo (município selecionado)</div>`);
+  },
+
   /**
    * Outorgas de uso da água vigentes do IAT (SIGARH + CRH), por tipo e atividade, ao vivo
    * do GeoPR. Município e regional (a consulta soma a lista de IBGEs).
@@ -902,7 +945,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -917,8 +960,9 @@ export async function openFicha({ ibge, nome, info }) {
       getCaf([ibge]),
       getFontes([ibge]),
       getGetec([ibge]),
+      getAspectosFisicos([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis };
   });
 }
 
@@ -969,7 +1013,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -982,8 +1026,9 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getCaf(ibges),
       getFontes(ibges),
       getGetec(ibges),
+      getAspectosFisicos(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis };
   });
 }
 

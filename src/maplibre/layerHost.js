@@ -12,7 +12,7 @@
 // que seja a ordem em que as camadas são ligadas.
 const SLOTS = ['fill', 'line', 'point', 'label'];
 const SLOT_OF_TYPE = {
-  fill: 'fill', 'fill-extrusion': 'fill', raster: 'fill', heatmap: 'fill', hillshade: 'fill',
+  fill: 'fill', 'fill-extrusion': 'fill', raster: 'fill', heatmap: 'fill', hillshade: 'fill', 'color-relief': 'fill',
   line: 'line', circle: 'point', symbol: 'label',
 };
 const anchorId = (slot) => `dg-slot-${slot}`;
