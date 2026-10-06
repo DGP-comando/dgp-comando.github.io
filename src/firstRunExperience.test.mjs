@@ -200,7 +200,7 @@ test('texto dos passos de destaque cita os atalhos e rótulos reais da interface
     assert.ok(camadas.includes(nome), `categoria ${nome} ausente do passo de camadas`);
   }
   const loc = html.slice(html.indexOf('data-tour-step="localizacao"'), html.indexOf('data-tour-step="ficha"'));
-  assert.match(loc, /LOCALIZAÇÃO/);
+  assert.match(loc, /BUSCAR/);
   assert.match(loc, /<kbd>B<\/kbd>/);
   assert.match(loc, /<kbd>P<\/kbd>/);
   const ficha = html.slice(html.indexOf('data-tour-step="ficha"'), html.indexOf('data-tour-step="vigilancia"'));

@@ -106,7 +106,7 @@ export function roteiro(municipio) {
       titulo: 'Pesquisa de localização',
       alvos: ['#location-bar'],
       html: `
-        <p>O botão <b>LOCALIZAÇÃO</b>, na barra inferior, leva a câmera a qualquer lugar.</p>
+        <p>O botão <b>BUSCAR</b>, na barra inferior, leva a câmera a qualquer lugar e encontra produtores (CAF) e extensionistas.</p>
         <ul class="tour-points">
           <li>Digitando "${prefixo}" a lista já sugere os municípios do Paraná; <kbd>Enter</kbd> enquadra o escolhido e abre a ficha.</li>
           <li>Um endereço ou lugar fora da lista também funciona.</li>

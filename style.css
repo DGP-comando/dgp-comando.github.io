@@ -9844,3 +9844,10 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
 #pessoa-search-results {
   width: max(320px, 100%);
 }
+
+/* Pílulas de cidade (Curitiba, Londrina...) fora do dock: a busca cobre o destino. */
+#location-pills,
+#poi-row,
+#location-bar-divider {
+  display: none !important;
+}
