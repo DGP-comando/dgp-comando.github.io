@@ -568,9 +568,10 @@ const SECTIONS = [
       rows.push(`<div class="fx-sub">Área por faixa de altitude (ha)</div>${barrasClasse(fis.alt.faixas.map(ha))}`);
     }
     if (fis.decl.length) {
-      const total = fis.decl.reduce((a, l) => a + l.n, 0);
+      // % sobre a área com classe de relevo: mancha urbana e rio não são terreno plano.
+      const total = fis.decl.filter((l) => !l.semRelevo).reduce((a, l) => a + l.n, 0);
       const forte = fis.decl.filter((l) => l.key === '20 a 45' || l.key === '>45').reduce((a, l) => a + l.n, 0);
-      rows.push(`<div class="fx-sub">Declividade (ha) · acima de 20 %: <b>${fmtPct(forte, total)}</b> da área</div>` +
+      rows.push(`<div class="fx-sub">Declividade (ha) · acima de 20 %: <b>${fmtPct(forte, total)}</b> da área com relevo classificado</div>` +
         barrasClasse(fis.decl.map(ha)));
     }
     rows.push(`<div class="fx-dim">Altitude: ${esc(fis.fonte.altitude)} · declividade: ${esc(fis.fonte.declividade)} · ` +

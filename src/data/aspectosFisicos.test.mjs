@@ -45,3 +45,8 @@ test('sem município conhecido devolve null', () => {
   assert.equal(resumirAspectos(dados, ['999']), null);
   assert.equal(resumirAspectos(null, ['1']), null);
 });
+
+test('mancha urbana da ZEE entra na declividade marcada como sem relevo', () => {
+  const r = resumirAspectos({ municipios: { 9: { areaHa: 10, decl: { '0 a 10': 6, Urbana: 4 } } } }, ['9']);
+  assert.deepEqual(r.decl.map((l) => [l.key, l.n, l.semRelevo]), [['0 a 10', 6, false], ['Urbana', 4, true]]);
+});

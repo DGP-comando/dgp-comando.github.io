@@ -29,6 +29,16 @@ export const DECLIVIDADE = Object.freeze([
   { key: '>45', label: 'acima de 45 % (montanhoso)', curto: '> 45 %', color: '#ff2200' },
 ]);
 
+/**
+ * A ZEE também recorta manchas urbanas e leitos de rio, sem classe de relevo.
+ * Só entram na ficha (a soma das barras fecha com a área do município); o
+ * mapa do GeoPR não as pinta, então ficam fora da legenda da camada.
+ */
+export const DECLIVIDADE_SEM_RELEVO = Object.freeze([
+  { key: 'Urbana', label: 'área urbana (sem classe)', curto: 'urbana', color: '#94a3b8', semRelevo: true },
+  { key: 'RIOS', label: 'leito de rio (sem classe)', curto: 'rios', color: '#64748b', semRelevo: true },
+]);
+
 /** Uso e cobertura da terra IAT 2012-2016 (NIVEL_II), cores do serviço do IAT. */
 export const USO_SOLO = Object.freeze({
   'Agricultura Anual': '#89cd66',
@@ -82,8 +92,8 @@ export function resumirAspectos(dados, ibges) {
       label: rotuloFaixa(i), curto: rotuloFaixa(i), color, n: soma(comAlt, (it) => it.alt.faixas[i]),
     })).filter((l) => l.n > 0),
   } : null;
-  const decl = DECLIVIDADE
-    .map(({ key, label, curto, color }) => ({ key, label, curto, color, n: soma(itens, (it) => it.decl?.[key]) }))
+  const decl = [...DECLIVIDADE, ...DECLIVIDADE_SEM_RELEVO]
+    .map(({ key, label, curto, color, semRelevo = false }) => ({ key, label, curto, color, semRelevo, n: soma(itens, (it) => it.decl?.[key]) }))
     .filter((l) => l.n > 0);
   const uso = Object.entries(USO_SOLO)
     .map(([classe, color]) => ({ label: classe, curto: classe, color, n: soma(itens, (it) => it.uso?.[classe]) }))

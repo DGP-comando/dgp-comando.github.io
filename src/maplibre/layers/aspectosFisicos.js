@@ -6,16 +6,17 @@
 // GeoPR: a altimetria pinta o relevo dos tiles de elevação já usados pelo
 // mapa, nas mesmas faixas do resumo da ficha (que sai do MDE 12,5 m do IDR).
 // Uso do solo: o mapeamento do IAT 2012-2016 recortado pela malha do
-// município selecionado (public/data/uso-solo/{ibge}.json); sem município
-// selecionado, a camada fica vazia. O export do GeoPR para ele leva 20 s por
-// tile, e o recorte pela máscara só existe no arquivo pré-processado.
+// município selecionado (public/data/uso-solo/{ibge}.png, PNG paleta de 30 m
+// em mercator); sem município selecionado, a camada fica vazia. Imagem e não
+// vetor: o mapeamento é muito fragmentado (1,5 MB por município mesmo
+// simplificado). O export do GeoPR leva 20 s por tile e não recorta pela divisa.
 // Resumos por município: datageoFicha.js (src/data/aspectosFisicos.js).
 
 import {
-  CORES_ALTITUDE, DECLIVIDADE, FAIXAS_ALTITUDE, USO_SOLO, rotuloFaixa,
+  CORES_ALTITUDE, DECLIVIDADE, FAIXAS_ALTITUDE, USO_SOLO, loadAspectosFisicos, rotuloFaixa,
 } from '../../data/aspectosFisicos.js';
 import { getMunicipioSelecionado, MUNICIPIO_SELECIONADO_EVENT } from '../../datageoFicha.js';
-import { EMPTY_FC, defineLayer, fmtInt, matchColor, tipCard } from '../kit.js';
+import { defineLayer, fmtInt } from '../kit.js';
 import { BASE } from './iatPontos.js';
 
 const CATEGORY = 'Aspectos físicos';
@@ -25,7 +26,12 @@ const tileCache = (servico) => `${BASE}/${servico}/MapServer/tile/{z}/{y}/{x}`;
 const tileExport = (servico) => `${BASE}/${servico}/MapServer/export?bbox={bbox-epsg-3857}` +
   '&bboxSR=3857&imageSR=3857&size=512,512&format=png32&transparent=true&f=image&layers=show:0';
 
-/** Camada só de imagem do GeoPR: [{servico, cache, minzoom, maxzoom}] empilhadas. */
+/**
+ * Camada só de imagem do GeoPR: fontes [{servico, cache, minzoom, maxzoom}]
+ * empilhadas. `cache` é o último nível do cache de tiles do serviço (o maxScale
+ * dele): acima disso o GeoPR devolve 404, então a fonte para ali e o MapLibre
+ * amplia o último tile. Sem `cache`, MapServer/export (sem teto, mais lento).
+ */
 function geoprRaster({ id, sufixo, fontes, opacity = 1, legend = null, ...rest }) {
   const src = (i) => `dg-${sufixo}${i ? `-${i}` : ''}`;
   return defineLayer({
@@ -36,7 +42,7 @@ function geoprRaster({ id, sufixo, fontes, opacity = 1, legend = null, ...rest }
       type: 'raster',
       tiles: [f.cache ? tileCache(f.servico) : tileExport(f.servico)],
       tileSize: f.cache ? 256 : 512,
-      maxzoom: f.cache ? 16 : 22,
+      maxzoom: f.cache ?? 22,
       ...(i === 0 ? { attribution: FONTE_IAT } : {}),
     }])),
     layers: fontes.map((f, i) => ({
@@ -101,7 +107,8 @@ export const declividadeLayer = geoprRaster({
 });
 
 // A rede completa (1 milhão de trechos) só a partir do zoom 9; antes, a
-// generalizada do mesmo serviço.
+// generalizada do mesmo serviço. O cache da generalizada começa no zoom 8
+// (minScale); na vista do estado ela vem do export.
 export const hidrografiaLayer = geoprRaster({
   id: 'datageo-hidrografia',
   sufixo: 'hidrografia',
@@ -109,8 +116,9 @@ export const hidrografiaLayer = geoprRaster({
   icon: '🏞️',
   source: 'IAT/GeoPR · rede_otto_trech_drena_2020_iat, ao vivo',
   fontes: [
-    { servico: 'rede_otto_trech_drena_2020_iat_generalizada', cache: true, maxzoom: 9 },
-    { servico: 'rede_otto_trech_drena_2020_iat', cache: true, minzoom: 9 },
+    { servico: 'rede_otto_trech_drena_2020_iat_generalizada', maxzoom: 8 },
+    { servico: 'rede_otto_trech_drena_2020_iat_generalizada', cache: 15, minzoom: 8, maxzoom: 9 },
+    { servico: 'rede_otto_trech_drena_2020_iat', cache: 14, minzoom: 9 },
   ],
 });
 
@@ -130,39 +138,37 @@ export const curvasLayer = geoprRaster({
   name: 'Curvas de nível · 10/20 m',
   icon: '〰️',
   source: 'IAT/GeoPR · curvas 1:25.000 e 1:50.000, ao vivo · a partir do zoom 11',
-  fontes: [{ servico: 'curvas_de_nivel_1_50000_20m', cache: true, minzoom: 11 }],
+  fontes: [{ servico: 'curvas_de_nivel_1_50000_20m', cache: 14, minzoom: 11 }],
 });
 
 // --- uso do solo (município selecionado) ------------------------------------
 
 const USO_SRC = 'dg-uso-solo';
-const uso = { ctx: null, ibge: null, nome: null, classes: [], seq: 0, erro: null };
+// PNG transparente 1×1: o image source exige url e cantos já na criação.
+const VAZIO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==';
+const cantos = ([w, s, e, n]) => [[w, n], [e, n], [e, s], [w, s]];
+const PR = [-54.62, -26.72, -48.02, -22.52];
+const uso = { ctx: null, ibge: null, nome: null, classes: [], seq: 0, semDado: false };
 
-async function carregaUso(sel) {
+/** Mostra o PNG do município (ou nada) e a legenda com os hectares da ficha. */
+export async function carregaUso(sel) {
   const seq = ++uso.seq;
-  uso.ibge = sel?.ibge ?? null;
+  uso.ibge = sel?.ibge && /^\d{7}$/.test(sel.ibge) ? sel.ibge : null;
   uso.nome = sel?.nome ?? null;
-  uso.erro = null;
-  let fc = EMPTY_FC;
-  if (uso.ibge && /^\d{7}$/.test(uso.ibge)) {
+  let m = null;
+  if (uso.ibge) {
     try {
-      const r = await fetch(`/data/uso-solo/${uso.ibge}.json`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      fc = await r.json();
+      m = (await loadAspectosFisicos()).municipios?.[uso.ibge] ?? null;
     } catch (err) {
-      uso.erro = err?.message;
       console.warn('[maplibre:datageo-uso-solo]', err);
     }
   }
   if (seq !== uso.seq || !uso.ctx) return;
-  const total = fc.features.reduce((a, f) => a + (f.properties.ha || 0), 0);
-  uso.classes = fc.features
-    .map((f) => ({ classe: f.properties.classe, ha: f.properties.ha }))
-    .sort((a, b) => b.ha - a.ha);
-  uso.ctx.setData(USO_SRC, {
-    ...fc,
-    features: fc.features.map((f) => ({ ...f, properties: { ...f.properties, pct: total ? f.properties.ha / total : 0, municipio: uso.nome } })),
-  });
+  uso.semDado = Boolean(uso.ibge) && !m?.usoBbox;
+  uso.classes = Object.entries(m?.uso ?? {}).map(([classe, ha]) => ({ classe, ha })).sort((a, b) => b.ha - a.ha);
+  uso.ctx.map.getSource(USO_SRC)?.updateImage(m?.usoBbox
+    ? { url: `/data/uso-solo/${uso.ibge}.png`, coordinates: cantos(m.usoBbox) }
+    : { url: VAZIO, coordinates: cantos(PR) });
   uso.ctx.refreshPanel();
 }
 
@@ -173,13 +179,12 @@ export const usoSoloLayer = defineLayer({
   name: 'Uso do solo · IAT 2012-2016 (município selecionado)',
   category: CATEGORY,
   icon: '🌾',
-  source: 'IAT/GeoPR · Mapeamento de Uso e Cobertura da Terra 2012-2016',
-  sources: { [USO_SRC]: { type: 'geojson', data: EMPTY_FC } },
+  source: 'IAT/GeoPR · Mapeamento de Uso e Cobertura da Terra 2012-2016 (nível II, 30 m)',
+  sources: { [USO_SRC]: { type: 'image', url: VAZIO, coordinates: cantos(PR) } },
   layers: [
-    { id: 'dg-uso-solo-fill', type: 'fill', source: USO_SRC,
-      paint: { 'fill-color': matchColor('classe', USO_SOLO), 'fill-opacity': 0.72 } },
+    { id: 'dg-uso-solo-img', type: 'raster', source: USO_SRC,
+      paint: { 'raster-opacity': 0.78, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } },
   ],
-  interactive: ['dg-uso-solo-fill'],
   onEnable(ctx) {
     uso.ctx = ctx;
     document.removeEventListener(MUNICIPIO_SELECIONADO_EVENT, onSelecao);
@@ -191,19 +196,9 @@ export const usoSoloLayer = defineLayer({
     uso.ctx = null;
     uso.seq++;
   },
-  tooltip: (p) => tipCard({
-    icon: '🌾',
-    title: p.classe,
-    subtitle: `Uso do solo · ${p.municipio ?? ''}`,
-    rows: [
-      ['Área no município', `${fmtInt(p.ha)} ha`],
-      ['Parcela do município', `${(Number(p.pct) * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`],
-    ],
-    source: 'IAT/GeoPR · Uso e Cobertura da Terra 2012-2016 (nível II)',
-  }),
   rowControls: () => {
     if (!uso.ibge) return { legend: [{ label: 'Clique num município para ver o uso do solo', color: '#64748b' }] };
-    if (uso.erro) return { legend: [{ label: `Sem uso do solo para ${uso.nome}`, color: '#64748b' }] };
+    if (uso.semDado) return { legend: [{ label: `Sem uso do solo para ${uso.nome}`, color: '#64748b' }] };
     return { legend: uso.classes.map(({ classe, ha }) => ({ label: classe, color: USO_SOLO[classe] ?? '#94a3b8', count: `${fmtInt(ha)} ha` })) };
   },
 });

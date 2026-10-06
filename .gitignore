@@ -25,3 +25,6 @@ data/regionais-idr/
 
 # HTML raspado do site da ADAPAR (regenera com scripts/build_adapar_unidades.py --refresh)
 data/cache/adapar-unidades/
+
+# Caches de builds (zee_declividade baixada do GeoPR tem 168 MB)
+data/cache/

@@ -9,8 +9,7 @@
  * Requer dev server rodando e acesso a geopr.iat.pr.gov.br.
  */
 import {
-  argValue, createReport, hoverTooltip, interactiveFeature, launchQaBrowser, openApp, setCamera, setLayer, sleep,
-  waitMapIdle,
+  argValue, createReport, launchQaBrowser, openApp, setCamera, setLayer, waitMapIdle,
 } from './lib/qaBrowser.mjs';
 
 const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
@@ -68,18 +67,17 @@ try {
   await page.waitForFunction(() => /ha/.test(document.querySelector('[data-layer-id="datageo-uso-solo"]')?.textContent ?? ''),
     { timeout: 30_000 }).catch(() => {});
   check('uso do solo: legenda com classes e hectares', /Agricultura Anual/.test(await rowText('datageo-uso-solo')));
-  await setCamera(page, { lon: -50.16, lat: -25.09, alt: 30_000 });
+  const usoSrc = () => page.evaluate(() => {
+    const src = window.__gevEngine.map.getSource('dg-uso-solo');
+    return src ? { url: src.url, coords: src.coordinates } : null;
+  });
+  await setCamera(page, { lon: -50.16, lat: -25.09, alt: 60_000 });
   await waitMapIdle(page, 60_000);
-  let f = null;
-  for (let i = 0; i < 20 && !f; i++) {
-    f = await interactiveFeature(page, 'datageo-uso-solo');
-    if (!f) await sleep(500);
-  }
-  check('uso do solo: polígonos na tela', Boolean(f), f);
-  if (f) {
-    const txt = await hoverTooltip(page, f.lon, f.lat, /Uso do solo/);
-    check('uso do solo: tooltip com área e parcela', /Área no município/.test(txt) && /Ponta Grossa/.test(txt), txt.slice(0, 300));
-  }
+  const pg = await usoSrc();
+  check('uso do solo: imagem de Ponta Grossa no image source', /\/uso-solo\/4119905\.png$/.test(pg?.url ?? ''), pg);
+  check('uso do solo: cantos em volta de Ponta Grossa', pg?.coords?.[0]?.[0] < -50.1 && pg?.coords?.[1]?.[0] > -50.0, pg?.coords);
+  const png = await page.evaluate(async () => (await fetch('/data/uso-solo/4119905.png')).headers.get('content-type'));
+  check('uso do solo: PNG servido', /image\/png/.test(png ?? ''), png);
   if (shot) await page.screenshot({ path: shot });
 
   // Ficha municipal.
@@ -95,6 +93,13 @@ try {
   await page.waitForFunction(() => /Área Urbanizada/.test(document.querySelector('[data-layer-id="datageo-uso-solo"]')?.textContent ?? ''),
     { timeout: 30_000 }).catch(() => {});
   check('uso do solo segue a seleção (Curitiba urbanizada)', /Área Urbanizada/.test(await rowText('datageo-uso-solo')));
+  check('uso do solo: imagem trocou para Curitiba', /4106902\.png$/.test((await usoSrc())?.url ?? ''));
+
+  // Troca de mapa base com a camada ligada: o image source vai junto.
+  await page.evaluate(() => window.__gevEngine.setBasemap('osm'));
+  await waitMapIdle(page, 60_000);
+  check('troca de mapa base mantém a imagem do uso do solo', /4106902\.png$/.test((await usoSrc())?.url ?? ''), await usoSrc());
+  await page.evaluate(() => window.__gevEngine.setBasemap('esri'));
 
   // Regional.
   await page.evaluate(async () => {
