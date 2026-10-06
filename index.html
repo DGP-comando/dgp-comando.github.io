@@ -594,6 +594,14 @@
             <input type="text" id="location-search" placeholder="Buscar município ou local..." autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="location-search-results" />
             <ul id="location-search-results" class="location-search-results" role="listbox" aria-label="Municípios do Paraná" hidden></ul>
           </div>
+          <div class="location-search-wrap pessoa-search-wrap">
+            <select id="pessoa-search-modo" class="pessoa-search-modo" aria-label="Buscar por">
+              <option value="produtor">Produtor</option>
+              <option value="extensionista">Extensionista</option>
+            </select>
+            <input type="search" id="pessoa-search" placeholder="Buscar produtor (CAF)..." autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="pessoa-search-results" />
+            <ul id="pessoa-search-results" class="location-search-results" role="listbox" aria-label="Produtores e extensionistas" hidden></ul>
+          </div>
         </div>
       </div>
     </div>

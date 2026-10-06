@@ -9796,3 +9796,51 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
   cursor: pointer;
 }
 .fx-link:hover, .fx-link.is-on { color: #fff; border-bottom-style: solid; }
+
+/* ── Busca por produtor / extensionista (pessoaSearch.js) ── */
+.pessoa-search-wrap {
+  gap: 4px;
+}
+
+.pessoa-search-modo {
+  flex-shrink: 0;
+  max-width: 6.5rem;
+  padding: 4px 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.pessoa-search-modo option {
+  background: #0b1620;
+}
+
+#pessoa-search {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  caret-color: var(--accent);
+}
+
+#pessoa-search::placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+#command-dock .pessoa-search-wrap {
+  order: -1;
+  flex: 0 0 15rem;
+}
+
+#pessoa-search-results {
+  width: max(320px, 100%);
+}

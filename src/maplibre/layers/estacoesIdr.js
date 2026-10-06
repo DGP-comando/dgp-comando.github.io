@@ -6,7 +6,7 @@
 // Os dois arquivos saem do bucket privado (scripts/build_estacoes_idr.py e a
 // Edge Function datageo-servidores do c2).
 
-import { extensionistasDoMunicipio, loadServidoresIdr, servidoresDasUnidades } from '../../data/servidoresIdr.js';
+import { extensionistasDoMunicipio, loadServidoresIdr, normNome, servidoresDasUnidades } from '../../data/servidoresIdr.js';
 import { dgFetchData } from '../../data/datageoClient.js';
 import { gerenteDaRegional, loadGerentesIdr } from '../../data/gerentesIdr.js';
 import { grupos, loadGetecGrupos, redeFeatures } from '../../data/getecGrupos.js';
@@ -267,11 +267,20 @@ export const unidadesIdrLayer = defineLayer({
  * Painel da UME: extensionistas do município com os grupos do GETEC; o clique
  * num nome lista os produtores e liga o escritório às famílias no mapa.
  */
-function abrirEscritorio(p, origem, ctx) {
+function abrirEscritorio(p, origem, ctx, inicial = null) {
   const lista = (extensionistasDoMunicipio(servidores, p.municipio)?.grupos ?? []).flatMap((g) => g.servidores);
   let ativo = null;
   const html = () => escritorioHtml({ servidores: lista, getec, ativo }) + extensionistaHtml(grupos(getec, ativo));
+  const selecionar = (id) => {
+    ativo = id;
+    const rede = redeFeatures(grupos(getec, ativo), origem);
+    ctx.setData(REDE, fc(rede));
+    const bb = extensao([{ geometry: { type: 'Point', coordinates: origem } }, ...rede]);
+    if (bb && rede.length) ctx.map.fitBounds(bb, { padding: 80, maxZoom: 12, duration: 800 });
+    else ctx.map.flyTo({ center: origem, zoom: 12, duration: 800 });
+  };
   ctx.setData(REDE, EMPTY_FC);
+  if (inicial != null) selecionar(String(inicial));
   openPainel({
     nome: p.nome,
     meta: `IDR-Paraná · ${UNIDADE_ROTULO[p.tipo] ?? p.tipo}${p.regional ? ` · Regional ${p.regional}` : ''} · acesso restrito`,
@@ -280,14 +289,28 @@ function abrirEscritorio(p, origem, ctx) {
       body.addEventListener('click', (ev) => {
         const btn = ev.target.closest('button[data-ext]');
         if (!btn) return;
-        ativo = btn.dataset.ext;
-        const rede = redeFeatures(grupos(getec, ativo), origem);
-        ctx.setData(REDE, fc(rede));
-        const bb = extensao([{ geometry: { type: 'Point', coordinates: origem } }, ...rede]);
-        if (bb && rede.length) ctx.map.fitBounds(bb, { padding: 80, maxZoom: 12, duration: 800 });
+        selecionar(btn.dataset.ext);
         body.innerHTML = html();
       });
     },
+  });
+}
+
+/**
+ * Abre o escritório municipal (UME) do extensionista já com a rede dele, para a
+ * busca por pessoa. A camada de unidades precisa estar ligada (fonte REDE);
+ * sem UME no município, abre só os grupos do GETEC.
+ * @param {{id: string, nome: string, municipio: string}} s - servidor de servidores-idr.json
+ */
+export async function abrirExtensionista(s, ctx) {
+  if (!unidades.length || !getec) await unidadesIdrLayer.load(ctx);
+  const alvo = normNome(s.municipio);
+  const ume = unidades.find((f) => f.properties?.tipo === 'ume' && normNome(f.properties.municipio) === alvo);
+  if (ume) return abrirEscritorio(ume.properties, ume.geometry.coordinates, ctx, s.id);
+  openPainel({
+    nome: s.nome,
+    meta: `IDR-Paraná · ${s.municipio ?? ''} · acesso restrito`,
+    carregar: async () => extensionistaHtml(grupos(getec, s.id)) || '<div class="fx-dim">Sem grupos no GETEC.</div>',
   });
 }
 

@@ -19,6 +19,7 @@ import { LAYERS as MAPLIBRE_LAYERS } from './maplibre/layers/index.js';
 import { initDatageoTicker } from './datageoTicker.js';
 import { initDatageoAreaWatch } from './datageoAreaWatch.js';
 import { initDatageoShortcuts, openLayersPanel, openLocationSearch } from './datageoShortcuts.js';
+import { initPessoaSearch } from './pessoaSearch.js';
 import {
   fetchActiveIncidents,
   fetchCemadenAlerts,
@@ -190,6 +191,7 @@ async function init() {
       },
     });
     window.__dgpAreaWatch = areaWatch;
+    initPessoaSearch({ dataManager, layerHost });
     initDatageoShortcuts({
       actions: {
         resetCamera: () => flyToParana(engine),
