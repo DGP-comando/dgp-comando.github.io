@@ -2337,6 +2337,16 @@ export class DataLayerManager {
         const controls = document.createElement('div');
         controls.className = 'data-toggle-controls';
         controls.addEventListener('click', (event) => {
+          // Item filtrável da legenda: esconde/mostra a classe; Shift (ou Alt)
+          // mostra só ela, e de novo volta a mostrar todas.
+          const item = event.target?.closest?.('.data-toggle-legend-item[data-key]');
+          if (item) {
+            this.setLayerParams(layer.id, {
+              legenda: item.dataset.key,
+              so: Boolean(event.shiftKey || event.altKey),
+            }, { origin: 'user' });
+            return;
+          }
           const button = event.target?.closest?.('.data-toggle-chip');
           if (!button || button.disabled) return;
           // Re-read the live descriptor rather than trusting the rendered
@@ -2421,9 +2431,18 @@ export class DataLayerManager {
     for (const node of stale.values()) node.remove();
 
     for (const item of legend) {
-      const entry = document.createElement('span');
+      const entry = document.createElement(item.filtravel ? 'button' : 'span');
       entry.className = 'data-toggle-legend-item';
       if (item.blurb) entry.title = item.blurb;
+      if (item.filtravel) {
+        entry.type = 'button';
+        entry.dataset.key = String(item.key);
+        entry.classList.add('is-filtravel');
+        entry.classList.toggle('is-oculto', Boolean(item.oculto));
+        entry.setAttribute('aria-pressed', item.oculto ? 'false' : 'true');
+        entry.title = `${item.blurb ? `${item.blurb}
+` : ''}${item.oculto ? 'Mostrar' : 'Esconder'} ${item.label} · Shift+clique: só esta classe`;
+      }
       const swatch = document.createElement('span');
       swatch.className = 'data-toggle-legend-swatch';
       swatch.style.background = item.color;

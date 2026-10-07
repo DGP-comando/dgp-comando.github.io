@@ -30,6 +30,16 @@ function ensureTooltip() {
   return tooltipEl;
 }
 
+/**
+ * Filtro de um layer com classes escondidas pela legenda: o `filter` original
+ * E "classe fora da lista". Sem nada escondido, o original.
+ */
+export function filtroComLegenda(original, expr, escondidas) {
+  if (!escondidas.length) return original ?? null;
+  const fora = ['!', ['in', expr, ['literal', escondidas]]];
+  return original ? ['all', original, fora] : fora;
+}
+
 let activeHost = null;
 /** Anfitrião criado no boot (main.js); módulos importados antes dele o pedem aqui. */
 export function getActiveLayerHost() {
@@ -52,6 +62,10 @@ export function createLayerHost(engine) {
     refreshPanel: () => host.onPanelRefresh?.(),
     getLayer: (id) => defs.get(id),
     isOn: (id) => on.has(id),
+    // Filtro pela legenda: camadas com onLegend leem o estado ao redesenhar e
+    // podem zerá-lo quando a legenda muda de chaves (troca de modo/indicador).
+    legendHidden: (id) => new Set(ocultos.get(id) ?? []),
+    setLegendHidden: (id, keys) => setLegendHidden(id, keys),
     get focus() {
       return focus;
     },
@@ -69,16 +83,48 @@ export function createLayerHost(engine) {
     for (const lid of def.interactive ?? []) byInteractiveLayer.set(lid, def);
   }
 
+  // ---------------------------------------------------- filtro pela legenda
+  // Classes escondidas por camada (valores de `key` dos itens da legenda).
+  const ocultos = new Map();
+  const FILTRAVEIS = new Set(['circle', 'symbol', 'line', 'fill', 'fill-extrusion', 'heatmap']);
+
+  function aplicaLegenda(def) {
+    const escondidas = [...(ocultos.get(def.id) ?? [])];
+    if (def.onLegend) {
+      def.onLegend(new Set(escondidas), ctx);
+      return;
+    }
+    if (!def.legendFilter) return;
+    // Sempre como texto: as chaves da legenda chegam como string (g = 0 vira '0').
+    const lf = def.legendFilter;
+    const expr = ['to-string', typeof lf === 'string' ? ['get', lf] : lf];
+    for (const layer of def.layers ?? []) {
+      if (!FILTRAVEIS.has(layer.type) || layer.metadata?.['dg:legenda'] === false || !map.getLayer(layer.id)) continue;
+      map.setFilter(layer.id, filtroComLegenda(layer.filter, expr, escondidas));
+    }
+  }
+
+  function setLegendHidden(id, keys) {
+    const def = defs.get(id);
+    if (!def) return;
+    ocultos.set(id, new Set([...keys].map(String)));
+    aplicaLegenda(def);
+    hideTooltip();
+  }
+
   function ensureAdded(def) {
     ensureAnchors();
     for (const [id, spec] of Object.entries(def.sources ?? {})) {
       if (!map.getSource(id)) map.addSource(id, spec);
     }
+    let novo = false;
     for (const layer of def.layers ?? []) {
       if (map.getLayer(layer.id)) continue;
       const slot = layer.metadata?.['dg:slot'] ?? SLOT_OF_TYPE[layer.type] ?? 'point';
       map.addLayer({ ...layer, layout: { ...layer.layout, visibility: on.has(def.id) ? 'visible' : 'none' } }, anchorId(slot));
+      novo = true;
     }
+    if (novo && ocultos.get(def.id)?.size) aplicaLegenda(def);
   }
 
   function setVisible(id, visible) {
@@ -244,6 +290,8 @@ export function createLayerHost(engine) {
     setVisible,
     isVisible: (id) => on.has(id),
     setFocus,
+    setLegendHidden,
+    legendHidden: (id) => new Set(ocultos.get(id) ?? []),
     get focus() {
       return focus;
     },

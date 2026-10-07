@@ -24,6 +24,21 @@ function waitIdle(map) {
 }
 
 /**
+ * Classes escondidas depois de um clique na legenda: alterna `key`; com `so`,
+ * mostra só ela (e, se ela já era a única visível, volta a mostrar todas).
+ */
+export function alternaLegenda(ocultos, key, todas, so = false) {
+  if (so) {
+    const soEla = todas.every((k) => (k === key) !== ocultos.has(k));
+    return soEla ? new Set() : new Set(todas.filter((k) => k !== key));
+  }
+  const novo = new Set(ocultos);
+  if (novo.has(key)) novo.delete(key);
+  else novo.add(key);
+  return novo;
+}
+
+/**
  * @param {object} def definição validada por defineLayer (kit.js)
  * @param {ReturnType<import('./layerHost.js').createLayerHost>} host
  */
@@ -132,9 +147,18 @@ export function toManagerModule(def, host) {
     getRowControls() {
       if (!def.rowControls) return null;
       const controls = def.rowControls(ctx) ?? {};
+      // Legenda de uma classe só não filtra: esconder a única deixaria a camada
+      // em branco com o botão ATIVA aceso.
+      const comChave = (controls.legend ?? []).filter((l) => l.key != null).length;
+      const filtra = Boolean(def.legendFilter || def.onLegend) && comChave >= 2;
+      const ocultos = host.legendHidden(def.id);
       return {
         chips: (controls.chips ?? []).map((c) => ({ ...c, params: { chip: c.id } })),
-        legend: (controls.legend ?? []).map((l) => ({ ...l, count: l.count ?? '' })),
+        legend: (controls.legend ?? []).map((l) => ({
+          ...l,
+          count: l.count ?? '',
+          ...(filtra && l.key != null ? { filtravel: true, oculto: ocultos.has(String(l.key)) } : {}),
+        })),
       };
     },
 
@@ -144,6 +168,10 @@ export function toManagerModule(def, host) {
 
     setParams(params = {}) {
       if (params.chip != null) def.onChip?.(params.chip, ctx);
+      if (params.legenda != null) {
+        const todas = (def.rowControls?.(ctx)?.legend ?? []).filter((l) => l.key != null).map((l) => String(l.key));
+        host.setLegendHidden(def.id, alternaLegenda(host.legendHidden(def.id), String(params.legenda), todas, params.so));
+      }
       return true;
     },
 

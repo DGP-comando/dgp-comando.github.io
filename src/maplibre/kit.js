@@ -48,7 +48,17 @@
 //     clickWithUnderlay: true  // opcional: o clique desta camada abre por cima
 //                       // do clique da camada-base (card regional sobre a ficha)
 //
-//     rowControls: (ctx) => ({ chips: [{id, label, active}], legend: [{label, color, count?}] })
+//     rowControls: (ctx) => ({ chips: [{id, label, active}], legend: [{label, color, count?, key?}] })
+//     legendFilter: 'grupo'   // opcional: clicar no item da legenda esconde/mostra
+//                             // a classe `key` filtrando os layers vetoriais da
+//                             // camada por essa propriedade (comparada como
+//                             // texto: g = 0 casa com a key '0'; ou expressão
+//                             // que dê o valor da classe); o anfitrião combina com o
+//                             // filter de cada layer. Layer com metadata
+//                             // {'dg:legenda': false} fica de fora (clusters).
+//     onLegend:  (ocultos: Set<string>, ctx) => void   // opcional, no lugar do
+//                             // legendFilter, para desenho que não é vetor
+//                             // (imagem do GeoPR, PNG): a camada aplica sozinha
 //     onChip:      (chipId, ctx) => void        // o registro redesenha a linha depois
 //     analystRecords: (maxCount, ctx) => [...]  // registros para o analista da voz
 //         (mesmo formato que a camada Cesium tinha em getAnalystRecords)
@@ -127,7 +137,7 @@ export function zoomForHeight(heightM) {
 const LAYER_KEYS = new Set([
   'id', 'name', 'category', 'icon', 'source', 'detail', 'defaultOn', 'sources', 'layers', 'load', 'count',
   'refreshMs', 'onEnable', 'onDisable', 'interactive', 'hoverState', 'tooltip', 'click', 'rowControls', 'onChip',
-  'focusOn', 'analystRecords', 'underlay', 'clickWithUnderlay', 'hoverYield',
+  'focusOn', 'analystRecords', 'underlay', 'clickWithUnderlay', 'hoverYield', 'legendFilter', 'onLegend',
 ]);
 
 /**
