@@ -6,6 +6,32 @@
 
 ---
 
+## Sessão 2026-10-07 (tarde): termo de responsabilidade LGPD
+
+- No login, depois da senha e antes do boot/tutorial, o usuário assina o termo
+  (src/data/termoLgpd.js): texto versionado (TERMO_VERSAO), CPF validado (mod
+  11), e-mail (pré-preenchido quando o login não é o sintético do SISATER) e
+  aceite. Sessão salva também passa pelo termo; versão nova do texto pede nova
+  assinatura. Recusar sai da conta.
+- Registro JSON (texto completo + SHA-256, CPF, e-mail, matrícula, hora local
+  e UTC, user agent) em `datageo-termos/<uid>/<versao>_<instante>.json`. Prova
+  de hora: storage.objects.created_at (servidor). Flag `user_metadata.lgpd_termo`
+  é só o gate da tela.
+- Migration 047 do c2-parana (aplicada com db push em 2026-10-07): bucket
+  privado `datageo-termos` (só JSON, 64 KB), política só de INSERT na pasta do
+  próprio usuário com acesso DataGeo. Ninguém lê, lista ou sobrescreve; a
+  consulta é pela service key. Não usar o `datageo-privado`: todo usuário
+  DataGeo lê aquele bucket.
+- Verificado com usuários temporários (apagados): própria pasta 200; pasta de
+  outro, sem flag, anon, upsert, leitura, listagem e mime errado bloqueados.
+  E2E com login real: termo antes do tutorial, validações, registro gravado,
+  termo não volta ao recarregar.
+- Pegadinha: Path.write_text do Python no Windows grava CRLF; o teste de CSS
+  do cockpit usa regex com 
+. Arquivos editados assim voltaram para LF.
+
+---
+
 ## Sessão 2026-10-07: aspectos físicos, uso do solo em PNG e revisão
 
 - Uso do solo vira PNG paleta de 30 m por município (Web Mercator, image

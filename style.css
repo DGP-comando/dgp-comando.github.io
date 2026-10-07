@@ -9573,6 +9573,49 @@ body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
   opacity: 0.5;
   cursor: wait;
 }
+/* Termo de responsabilidade LGPD (src/datageoLogin.js pedirTermo) */
+.login-form.login-form-termo {
+  width: min(560px, calc(100vw - 32px));
+}
+.login-termo {
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--btn-radius);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font: 13px/1.5 var(--font-sans);
+}
+.login-termo:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.login-termo ol {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.login-aceite {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font: 13px var(--font-sans);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.login-aceite input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.login-form button.login-secundario {
+  border-color: var(--glass-border);
+  background: transparent;
+  color: var(--text-secondary);
+}
 #usuarios-dialog {
   margin: auto;
   padding: 24px;

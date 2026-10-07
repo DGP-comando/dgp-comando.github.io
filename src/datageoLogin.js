@@ -1,7 +1,9 @@
 // src/datageoLogin.js
 //
 // Gate de login antes do boot (main.js). Resolve so quando ha sessao de um
-// usuario liberado (app_metadata.datageo) que ja trocou a senha inicial.
+// usuario liberado (app_metadata.datageo) que ja trocou a senha inicial e
+// assinou o termo de responsabilidade LGPD (src/data/termoLgpd.js); o tutorial
+// de entrada so vem depois do boot.
 // A protecao de verdade e a RLS do Supabase; isto e a porta de entrada.
 
 import {
@@ -14,6 +16,10 @@ import {
   senhaGravada,
   temAcesso,
 } from './data/datageoAuth.js';
+import {
+  TERMO_BUCKET, TERMO_TEXTO, TERMO_TITULO, TERMO_VERSAO, caminhoRegistro, cpfValido, emailReal, emailValido,
+  mascaraCpf, montaRegistro, termoAssinado,
+} from './data/termoLgpd.js';
 
 const MSG_SEM_ACESSO = 'Seu usuário não tem acesso ao DataGeo. Procure o administrador.';
 
@@ -120,6 +126,88 @@ async function pedirNovaSenha(form, user) {
   });
 }
 
+/** Grava o registro da assinatura no bucket (só INSERT na própria pasta, migration 047 do c2). */
+async function gravaRegistro(user, registro, agora) {
+  const caminho = caminhoRegistro(user, agora).split('/').map(encodeURIComponent).join('/');
+  const resp = await fetch(`${SUPABASE_URL}/storage/v1/object/${TERMO_BUCKET}/${caminho}`, {
+    method: 'POST',
+    headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(registro),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${await resp.text().catch(() => '')}`);
+}
+
+/**
+ * Termo de responsabilidade LGPD: texto, CPF, e-mail e aceite. Assinar grava o
+ * registro no bucket e marca a versão no user_metadata; recusar sai da conta.
+ */
+async function pedirTermo(form, user) {
+  form.replaceChildren();
+  form.classList.add('login-form-termo');
+  const h = Object.assign(document.createElement('p'), { className: 'login-title', textContent: TERMO_TITULO });
+  const texto = document.createElement('div');
+  texto.className = 'login-termo';
+  texto.tabIndex = 0;
+  texto.setAttribute('aria-label', TERMO_TITULO);
+  const lista = document.createElement('ol');
+  for (const par of TERMO_TEXTO) lista.append(Object.assign(document.createElement('li'), { textContent: par }));
+  texto.append(lista);
+  const cpf = campo('CPF', { name: 'cpf', inputMode: 'numeric', autocomplete: 'off', maxLength: 14, placeholder: '000.000.000-00' });
+  cpf.input.addEventListener('input', () => { cpf.input.value = mascaraCpf(cpf.input.value); });
+  const email = campo('E-mail', { type: 'email', name: 'email', autocomplete: 'email', value: emailReal(user) });
+  const aceite = document.createElement('label');
+  aceite.className = 'login-aceite';
+  const check = Object.assign(document.createElement('input'), { type: 'checkbox', required: true });
+  aceite.append(check, document.createTextNode(' Li o termo e me comprometo a cumpri-lo.'));
+  const nota = Object.assign(document.createElement('p'), {
+    className: 'login-hint',
+    textContent: `Versão ${TERMO_VERSAO}. A data e a hora da assinatura ficam registradas com o seu CPF e e-mail.`,
+  });
+  const erro = Object.assign(document.createElement('p'), { className: 'login-error' });
+  erro.setAttribute('role', 'alert');
+  const assinar = Object.assign(document.createElement('button'), { type: 'submit', textContent: 'Assinar e entrar' });
+  const recusar = Object.assign(document.createElement('button'), { type: 'button', textContent: 'Recusar e sair' });
+  recusar.className = 'login-secundario';
+  const acoes = Object.assign(document.createElement('div'), { className: 'login-actions' });
+  acoes.append(assinar, recusar);
+  form.append(h, texto, cpf.wrap, email.wrap, aceite, nota, erro, acoes);
+  texto.focus();
+
+  recusar.addEventListener('click', async () => {
+    await getAuth().signOut({ scope: 'local' });
+    location.reload();
+  });
+
+  return new Promise((resolve) => {
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      if (!cpfValido(cpf.input.value)) { erro.textContent = 'CPF inválido.'; return; }
+      if (!emailValido(email.input.value)) { erro.textContent = 'E-mail inválido.'; return; }
+      if (!check.checked) { erro.textContent = 'Marque a declaração de que leu e aceita o termo.'; return; }
+      assinar.disabled = true;
+      recusar.disabled = true;
+      erro.textContent = '';
+      try {
+        const agora = new Date();
+        const registro = await montaRegistro(user, { cpf: cpf.input.value, email: email.input.value }, agora, navigator.userAgent);
+        await gravaRegistro(user, registro, agora);
+        const { data, error } = await getAuth().updateUser({
+          data: { lgpd_termo: { versao: TERMO_VERSAO, em: agora.toISOString() } },
+        });
+        if (error) throw error;
+        form.classList.remove('login-form-termo');
+        resolve(data.user);
+      } catch (e) {
+        console.error('[termo LGPD]', e);
+        erro.textContent = 'Não foi possível registrar a assinatura. Tente de novo.';
+      } finally {
+        assinar.disabled = false;
+        recusar.disabled = false;
+      }
+    };
+  });
+}
+
 export async function requireLogin() {
   const screen = document.getElementById('loading-screen');
   const content = screen.querySelector('.loader-content');
@@ -128,6 +216,14 @@ export async function requireLogin() {
   const { data } = await getAuth().getSession();
   let user = data.session?.user ?? null;
   if (user && temAcesso(user) && !precisaTrocarSenha(user)) {
+    // Sessão salva também passa pelo termo (versão nova do texto = assinar de novo).
+    if (!termoAssinado(user)) {
+      status.hidden = true;
+      const form = montarForm(content);
+      user = await pedirTermo(form, user);
+      form.remove();
+      status.hidden = false;
+    }
     initConta(user);
     return;
   }
@@ -142,7 +238,8 @@ export async function requireLogin() {
     user = null;
     aviso = MSG_SEM_ACESSO;
   }
-  if (precisaTrocarSenha(user)) await pedirNovaSenha(form, user);
+  if (precisaTrocarSenha(user)) user = await pedirNovaSenha(form, user);
+  if (!termoAssinado(user)) user = await pedirTermo(form, user);
   form.remove();
   status.hidden = false;
   initConta(user);
