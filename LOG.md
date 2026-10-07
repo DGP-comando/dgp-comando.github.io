@@ -21,6 +21,17 @@
   (~15 GB lendo os 650 mil polígonos de uma vez). Reescrita para um município
   por vez com bbox no gpkg; testada em Ponta Grossa e Paranaguá.
 
+### Tooltip do uso do solo
+- Classe exata sob o cursor: um polígono invisível da divisa recebe o hover e a
+  cor do pixel do PNG (paleta = USO_SOLO) diz a classe; o cartão traz a área da
+  classe no município e a parcela.
+- layerHost: tooltip vazio passa a vez ao próximo candidato, e a chave nova
+  `hoverYield` faz uma camada ceder a qualquer camada normal sob o cursor
+  (vence só as bases). Achado da revisão adversarial: sem isso, o alvo do uso
+  do solo escondia UCs, TIs, CAR e grades de clima dentro do município.
+- QA: qa-aspectos-fisicos 24/24 (inclui UC por cima mantendo o tooltip);
+  qa-tooltips-todas sem falhas (28 PASS, privadas em SKIP sem login).
+
 ### Concluído (build completo)
 - 399 municípios em `aspectos-fisicos-pr.json` (195 KB) e 399 PNGs de uso do
   solo (23 MB). Cobertura sobre a malha: uso e altitude 96-100%; declividade

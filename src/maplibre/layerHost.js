@@ -133,13 +133,23 @@ export function createLayerHost(engine) {
   }
 
   /**
-   * Quem responde ao hover: a camada mais alta que não é base e tem tooltip;
-   * senão uma base com tooltip (grades de clima); senão a mais alta.
+   * Candidatos ao tooltip, em ordem: camadas normais (de cima para baixo), as
+   * que cedem (`hoverYield`: só respondem sem camada normal sob o cursor) e as
+   * bases (`underlay`: municípios, grades de clima).
    */
+  function hoverOrder(hits) {
+    const comTip = hits.filter((h) => h.def.tooltip);
+    return [
+      ...comTip.filter((h) => !h.def.underlay && !h.def.hoverYield),
+      ...comTip.filter((h) => h.def.hoverYield && !h.def.underlay),
+      ...comTip.filter((h) => h.def.underlay),
+    ];
+  }
+
+  /** Quem responde ao hover: o primeiro candidato; senão a mais alta que não é base; senão a mais alta. */
   function hoverHit(hits) {
-    return hits.find((h) => !h.def.underlay && h.def.tooltip)
+    return hoverOrder(hits)[0]
       ?? hits.find((h) => !h.def.underlay)
-      ?? hits.find((h) => h.def.tooltip)
       ?? hits[0]
       ?? null;
   }
@@ -162,10 +172,21 @@ export function createLayerHost(engine) {
   function updateHover() {
     pending = null;
     if (!lastPoint) return;
-    const hit = pickDef(lastPoint);
+    const hits = hitsAt(lastPoint);
+    // Tooltip vazio (ex.: pixel transparente do uso do solo) passa a vez ao
+    // próximo candidato em vez de apagar o tooltip de quem está embaixo.
+    let hit = null;
+    let html = '';
+    for (const h of hoverOrder(hits)) {
+      html = h.def.tooltip(h.feature.properties ?? {}, h.feature, ctx);
+      if (html) {
+        hit = h;
+        break;
+      }
+    }
+    hit ??= hoverHit(hits);
     if (hit?.def.hoverState && hit.feature.id != null) setHover({ source: hit.def.hoverState, id: hit.feature.id });
     else setHover(null);
-    const html = hit?.def.tooltip?.(hit.feature.properties ?? {}, hit.feature, ctx);
     map.getCanvas().style.cursor = hit ? 'pointer' : '';
     const tip = ensureTooltip();
     if (!html) {

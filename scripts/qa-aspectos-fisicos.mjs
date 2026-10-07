@@ -9,7 +9,7 @@
  * Requer dev server rodando e acesso a geopr.iat.pr.gov.br.
  */
 import {
-  argValue, createReport, launchQaBrowser, openApp, setCamera, setLayer, waitMapIdle,
+  argValue, createReport, hoverTooltip, launchQaBrowser, openApp, setCamera, setLayer, waitMapIdle,
 } from './lib/qaBrowser.mjs';
 
 const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
@@ -78,6 +78,24 @@ try {
   check('uso do solo: cantos em volta de Ponta Grossa', pg?.coords?.[0]?.[0] < -50.1 && pg?.coords?.[1]?.[0] > -50.0, pg?.coords);
   const png = await page.evaluate(async () => (await fetch('/data/uso-solo/4119905.png')).headers.get('content-type'));
   check('uso do solo: PNG servido', /image\/png/.test(png ?? ''), png);
+  // Tooltip pelo pixel do PNG: o centro de Ponta Grossa é área urbanizada.
+  await page.waitForFunction(() => (window.__gevEngine.map.getSource('dg-uso-solo-area')?.serialize().data?.features?.length ?? 0) > 0,
+    { timeout: 30_000 }).catch(() => {});
+  const tipCentro = await hoverTooltip(page, -50.16, -25.095, /Uso do solo/);
+  check('uso do solo: tooltip com a classe do pixel', /Área Urbanizada/.test(tipCentro) && /Área da classe no município/.test(tipCentro)
+    && /Ponta Grossa/.test(tipCentro), tipCentro.slice(0, 300));
+  const tipRural = await hoverTooltip(page, -50.33, -25.0, /Uso do solo/);
+  check('uso do solo: tooltip rural com outra classe', /Uso do solo/.test(tipRural) && !/Área Urbanizada/.test(tipRural), tipRural.slice(0, 200));
+  // Camada normal por cima (UC estadual: APA da Escarpa Devoniana em Ponta Grossa)
+  // mantém o tooltip dela; o uso do solo só vence as bases.
+  await setLayer(page, 'datageo-ucs-estaduais', true);
+  await setCamera(page, { lon: -49.9616, lat: -25.1545, alt: 30_000 });
+  await waitMapIdle(page, 60_000);
+  const tipUc = await hoverTooltip(page, -49.9616, -25.1545, /ESCARPA|Escarpa/);
+  check('UC por cima do uso do solo mantém o tooltip da UC', /Escarpa/i.test(tipUc) && !/Uso do solo ·/.test(tipUc), tipUc.slice(0, 200));
+  await setLayer(page, 'datageo-ucs-estaduais', false);
+  await setCamera(page, { lon: -50.16, lat: -25.09, alt: 60_000 });
+  await waitMapIdle(page, 60_000);
   if (shot) await page.screenshot({ path: shot });
 
   // Ficha municipal.

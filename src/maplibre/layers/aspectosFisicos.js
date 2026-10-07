@@ -10,13 +10,16 @@
 // em mercator); sem município selecionado, a camada fica vazia. Imagem e não
 // vetor: o mapeamento é muito fragmentado (1,5 MB por município mesmo
 // simplificado). O export do GeoPR leva 20 s por tile e não recorta pela divisa.
+// Tooltip: um polígono invisível da divisa recebe o hover e a classe sai da cor
+// do pixel do PNG sob o cursor (paleta = cores de USO_SOLO).
 // Resumos por município: datageoFicha.js (src/data/aspectosFisicos.js).
 
 import {
   CORES_ALTITUDE, DECLIVIDADE, FAIXAS_ALTITUDE, USO_SOLO, loadAspectosFisicos, rotuloFaixa,
 } from '../../data/aspectosFisicos.js';
 import { getMunicipioSelecionado, MUNICIPIO_SELECIONADO_EVENT } from '../../datageoFicha.js';
-import { defineLayer, fmtInt } from '../kit.js';
+import { EMPTY_FC, defineLayer, fmtInt, tipCard } from '../kit.js';
+import { MUNICIPIOS_URL } from './municipios.js';
 import { BASE } from './iatPontos.js';
 
 const CATEGORY = 'Aspectos físicos';
@@ -148,7 +151,65 @@ const USO_SRC = 'dg-uso-solo';
 const VAZIO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==';
 const cantos = ([w, s, e, n]) => [[w, n], [e, n], [e, s], [w, s]];
 const PR = [-54.62, -26.72, -48.02, -22.52];
-const uso = { ctx: null, ibge: null, nome: null, classes: [], seq: 0, semDado: false };
+const USO_AREA = 'dg-uso-solo-area';
+const uso = {
+  ctx: null, ibge: null, nome: null, classes: [], seq: 0, semDado: false,
+  bbox: null, pixels: null, lngLat: null,
+};
+
+const mercY = (lat) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+
+/**
+ * Pixel [x, y] do PNG (Web Mercator, cantos [w, s, e, n]) sob [lon, lat],
+ * ou null fora da imagem. Mesma conta do image source do MapLibre.
+ */
+export function pixelDe([lon, lat], [w, s, e, n], [largura, altura]) {
+  const x = Math.floor(((lon - w) / (e - w)) * largura);
+  const y = Math.floor(((mercY(n) - mercY(lat)) / (mercY(n) - mercY(s))) * altura);
+  return x >= 0 && y >= 0 && x < largura && y < altura ? [x, y] : null;
+}
+
+// A paleta do PNG usa exatamente as cores de USO_SOLO: cor do pixel -> classe.
+const CLASSE_DA_COR = new Map(Object.entries(USO_SOLO).map(([classe, cor]) => [cor.toLowerCase(), classe]));
+const hex = (r, g, b) => `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+
+/** Classe do uso do solo sob [lon, lat] no PNG carregado, ou null (fora, transparente). */
+function classeEm(lngLat) {
+  const { pixels, bbox } = uso;
+  if (!pixels || !bbox || !lngLat) return null;
+  const p = pixelDe(lngLat, bbox, [pixels.canvas.width, pixels.canvas.height]);
+  if (!p) return null;
+  const [r, g, b, a] = pixels.getImageData(p[0], p[1], 1, 1).data;
+  return a ? CLASSE_DA_COR.get(hex(r, g, b)) ?? null : null;
+}
+
+/** Pixels do PNG num canvas, para o tooltip ler a classe sob o cursor. */
+function lePixels(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const c2d = canvas.getContext('2d', { willReadFrequently: true });
+      c2d.drawImage(img, 0, 0);
+      resolve(c2d);
+    };
+    img.onerror = () => reject(new Error(`${url}: imagem não carregou`));
+    img.src = url;
+  });
+}
+
+let _malha = null;
+/** Divisa do município (a mesma malha da camada Municípios; o navegador já tem em cache). */
+async function divisa(ibge) {
+  _malha ??= fetch(MUNICIPIOS_URL).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    .catch((err) => {
+      _malha = null;
+      throw err;
+    });
+  return (await _malha).features.find((f) => String(f.properties.CD_MUN) === ibge) ?? null;
+}
 
 /** Mostra o PNG do município (ou nada) e a legenda com os hectares da ficha. */
 export async function carregaUso(sel) {
@@ -165,11 +226,47 @@ export async function carregaUso(sel) {
   }
   if (seq !== uso.seq || !uso.ctx) return;
   uso.semDado = Boolean(uso.ibge) && !m?.usoBbox;
+  uso.bbox = m?.usoBbox ?? null;
+  uso.pixels = null;
   uso.classes = Object.entries(m?.uso ?? {}).map(([classe, ha]) => ({ classe, ha })).sort((a, b) => b.ha - a.ha);
   uso.ctx.map.getSource(USO_SRC)?.updateImage(m?.usoBbox
     ? { url: `/data/uso-solo/${uso.ibge}.png`, coordinates: cantos(m.usoBbox) }
     : { url: VAZIO, coordinates: cantos(PR) });
+  uso.ctx.setData(USO_AREA, EMPTY_FC);
   uso.ctx.refreshPanel();
+  if (!uso.bbox) return;
+  // Tooltip: a área do município responde ao hover e o pixel do PNG diz a classe.
+  // Falha aqui só tira o tooltip; o desenho já está no mapa.
+  try {
+    const url = `/data/uso-solo/${uso.ibge}.png`;
+    const [area, pixels] = await Promise.all([divisa(uso.ibge), lePixels(url)]);
+    if (seq !== uso.seq || !uso.ctx) return;
+    uso.pixels = pixels;
+    if (area) uso.ctx.setData(USO_AREA, { type: 'FeatureCollection', features: [area] });
+  } catch (err) {
+    console.warn('[maplibre:datageo-uso-solo] tooltip indisponível', err);
+  }
+}
+
+const onMouse = (e) => {
+  uso.lngLat = [e.lngLat.lng, e.lngLat.lat];
+};
+
+function usoTooltip() {
+  const classe = classeEm(uso.lngLat);
+  if (!classe) return '';
+  const total = uso.classes.reduce((a, c) => a + c.ha, 0);
+  const ha = uso.classes.find((c) => c.classe === classe)?.ha ?? 0;
+  return tipCard({
+    icon: '🌾',
+    title: classe,
+    subtitle: `Uso do solo · ${uso.nome ?? ''}`,
+    rows: [
+      ['Área da classe no município', `${fmtInt(ha)} ha`],
+      ['Parcela do município', total ? `${((ha / total) * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%` : ''],
+    ],
+    source: 'IAT/GeoPR · Uso e Cobertura da Terra 2012-2016 (nível II, pixel de 30 m)',
+  });
 }
 
 const onSelecao = (e) => carregaUso(e.detail);
@@ -180,20 +277,34 @@ export const usoSoloLayer = defineLayer({
   category: CATEGORY,
   icon: '🌾',
   source: 'IAT/GeoPR · Mapeamento de Uso e Cobertura da Terra 2012-2016 (nível II, 30 m)',
-  sources: { [USO_SRC]: { type: 'image', url: VAZIO, coordinates: cantos(PR) } },
+  sources: {
+    [USO_SRC]: { type: 'image', url: VAZIO, coordinates: cantos(PR) },
+    [USO_AREA]: { type: 'geojson', data: EMPTY_FC },
+  },
   layers: [
     { id: 'dg-uso-solo-img', type: 'raster', source: USO_SRC,
       paint: { 'raster-opacity': 0.78, 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } },
+    // Invisível: só dá ao hover um alvo dentro da divisa (raster não é consultável).
+    { id: 'dg-uso-solo-area', type: 'fill', source: USO_AREA, paint: { 'fill-color': '#000000', 'fill-opacity': 0 } },
   ],
+  interactive: ['dg-uso-solo-area'],
+  // A área cobre o município inteiro: terras indígenas, CAR etc. ligados por
+  // cima ou por baixo mantêm o tooltip; o uso do solo vence só as bases.
+  hoverYield: true,
+  tooltip: usoTooltip,
   onEnable(ctx) {
     uso.ctx = ctx;
+    ctx.map.off('mousemove', onMouse);
+    ctx.map.on('mousemove', onMouse);
     document.removeEventListener(MUNICIPIO_SELECIONADO_EVENT, onSelecao);
     document.addEventListener(MUNICIPIO_SELECIONADO_EVENT, onSelecao);
     carregaUso(getMunicipioSelecionado());
   },
-  onDisable() {
+  onDisable(ctx) {
+    ctx.map.off('mousemove', onMouse);
     document.removeEventListener(MUNICIPIO_SELECIONADO_EVENT, onSelecao);
     uso.ctx = null;
+    uso.pixels = null;
     uso.seq++;
   },
   rowControls: () => {

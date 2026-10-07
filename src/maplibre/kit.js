@@ -42,6 +42,9 @@
 //     click:   (props, feature, ctx) => void   // opcional
 //     underlay: true    // opcional: camada-base (municípios, grades) que cede hover,
 //                       // tooltip e clique às camadas ligadas sob o cursor
+//     hoverYield: true  // opcional: o tooltip só responde quando nenhuma camada
+//                       // normal está sob o cursor (vence só as bases); para
+//                       // alvos de hover que cobrem um município inteiro
 //     clickWithUnderlay: true  // opcional: o clique desta camada abre por cima
 //                       // do clique da camada-base (card regional sobre a ficha)
 //
@@ -124,7 +127,7 @@ export function zoomForHeight(heightM) {
 const LAYER_KEYS = new Set([
   'id', 'name', 'category', 'icon', 'source', 'detail', 'defaultOn', 'sources', 'layers', 'load', 'count',
   'refreshMs', 'onEnable', 'onDisable', 'interactive', 'hoverState', 'tooltip', 'click', 'rowControls', 'onChip',
-  'focusOn', 'analystRecords', 'underlay', 'clickWithUnderlay',
+  'focusOn', 'analystRecords', 'underlay', 'clickWithUnderlay', 'hoverYield',
 ]);
 
 /**
