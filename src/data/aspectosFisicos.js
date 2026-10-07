@@ -87,7 +87,9 @@ export function resumirAspectos(dados, ibges) {
   const alt = comAlt.length ? {
     min: Math.min(...comAlt.map((it) => it.alt.min)),
     max: Math.max(...comAlt.map((it) => it.alt.max)),
-    med: Math.round(soma(comAlt, (it) => it.alt.med * it.areaHa) / pesoAlt),
+    med: pesoAlt > 0
+      ? Math.round(soma(comAlt, (it) => it.alt.med * it.areaHa) / pesoAlt)
+      : Math.round(soma(comAlt, (it) => it.alt.med) / comAlt.length),
     faixas: CORES_ALTITUDE.map((color, i) => ({
       label: rotuloFaixa(i), curto: rotuloFaixa(i), color, n: soma(comAlt, (it) => it.alt.faixas[i]),
     })).filter((l) => l.n > 0),

@@ -583,9 +583,10 @@ const SECTIONS = [
   function hidrografia({ fis }) {
     if (!fis) return null;
     const km2 = fis.areaHa / 100;
+    const dens = (v, un) => (km2 > 0 ? ` <span class="fx-dim">(${fmtN(v / km2, 2)} ${un})</span>` : '');
     return section('Hidrografia · IAT + FBDS',
-      `<div>Drenagem: <b>${fmtN(fis.drenKm)} km</b> <span class="fx-dim">(${fmtN(fis.drenKm / km2, 2)} km/km²)</span></div>` +
-      `<div>Nascentes: <b>${fmtN(fis.nascentes)}</b> <span class="fx-dim">(${fmtN(fis.nascentes / km2, 2)} por km²)</span></div>` +
+      `<div>Drenagem: <b>${fmtN(fis.drenKm)} km</b>${dens(fis.drenKm, 'km/km²')}</div>` +
+      `<div>Nascentes: <b>${fmtN(fis.nascentes)}</b>${dens(fis.nascentes, 'por km²')}</div>` +
       `<div class="fx-dim">${esc(fis.fonte.drenagem)} · ${esc(fis.fonte.nascentes)} · recortadas pela divisa municipal</div>`);
   },
 
@@ -597,7 +598,8 @@ const SECTIONS = [
     return section('Uso do solo · IAT 2012-2016',
       `<div>${fmtN(total)} ha mapeados</div>` +
       `<div class="fx-sub">Área por classe (ha)</div>${barrasClasse(linhas)}` +
-      `<div class="fx-dim">${esc(fis.fonte.uso)} · nível II · desenho na camada Uso do solo (município selecionado)</div>`);
+      `<div class="fx-dim">${esc(fis.fonte.uso)} · nível II · desenho na camada Uso do solo, ` +
+        `${fis.n > 1 ? 'um município por vez (clique num deles)' : 'com o município selecionado'}</div>`);
   },
 
   /**

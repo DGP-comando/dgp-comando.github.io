@@ -200,26 +200,31 @@ def uso_solo(munis):
     imagem e e muito fragmentado (4,3 milhoes de vertices so em Ponta Grossa,
     1,5 MB por municipio mesmo simplificado a 60 m). Em raster de 30 m o
     estado inteiro fica em ~20 MB.
+
+    Um municipio por vez, lendo do gpkg so o retangulo dele: carregar os
+    650 mil poligonos do estado de uma vez passava de 15 GB de RAM.
     """
-    uso = gpd.read_file(USO, columns=['NIVEL_II']).to_crs(UTM)
-    uso['classe'] = uso['NIVEL_II'].fillna('Sem classificação')
-    uso['geometry'] = poligonal(uso.geometry.values)
-    r = recorta(uso[['classe', 'geometry']], munis)
-    # O recorte na divisa devolve GeometryCollection (polígono + linha): só as partes de área.
-    r = so_areas(r)
-    ha = (r.geometry.area / 1e4).groupby([r['CD_MUN'], r['classe']]).sum()
-    print(f'uso do solo: {len(uso)} poligonos, {ha.sum():,.0f} ha na malha')
     OUT_USO.mkdir(parents=True, exist_ok=True)
-    r = r.to_crs(3857)
-    bboxes, total = {}, 0
-    for cod, grupo in r.groupby('CD_MUN'):
-        bboxes[cod] = _png_uso(cod, grupo)
-        total += (OUT_USO / f'{cod}.png').stat().st_size
-    print(f'uso do solo: {len(bboxes)} imagens, {total / 1e6:.1f} MB')
-    out = {}
-    for (cod, classe), v in ha.items():
-        if v >= 0.5:
-            out.setdefault(cod, {})[classe] = round(v)
+    caixas = munis.to_crs(4674).geometry.bounds.values
+    out, bboxes, total = {}, {}, 0
+    for i, (mun, caixa) in enumerate(zip(munis.itertuples(), caixas)):
+        uso = gpd.read_file(USO, bbox=tuple(caixa), columns=['NIVEL_II']).to_crs(UTM)
+        if uso.empty:
+            continue
+        uso['classe'] = uso['NIVEL_II'].fillna('Sem classificação')
+        uso['geometry'] = poligonal(uso.geometry.values)
+        # O recorte na divisa devolve GeometryCollection (polígono + linha): só as partes de área.
+        r = so_areas(recorta(uso[['classe', 'geometry']], munis.iloc[[i]].reset_index(drop=True)))
+        if r.empty:
+            continue
+        ha = (r.geometry.area / 1e4).groupby(r['classe']).sum()
+        out[mun.CD_MUN] = {c: round(v) for c, v in ha.items() if v >= 0.5}
+        bboxes[mun.CD_MUN] = _png_uso(mun.CD_MUN, r.to_crs(3857))
+        total += (OUT_USO / f'{mun.CD_MUN}.png').stat().st_size
+        print(f'  uso do solo: {i + 1}/{len(munis)}', end=chr(13))
+    print()
+    soma = sum(v for m in out.values() for v in m.values())
+    print(f'uso do solo: {len(bboxes)} imagens, {total / 1e6:.1f} MB, {soma:,.0f} ha na malha')
     return out, bboxes
 
 

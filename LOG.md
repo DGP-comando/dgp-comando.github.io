@@ -6,6 +6,28 @@
 
 ---
 
+## Sessão 2026-10-07: aspectos físicos, uso do solo em PNG e revisão
+
+- Uso do solo vira PNG paleta de 30 m por município (Web Mercator, image
+  source). O vetor recortado passava de 1,5 MB por município mesmo a 60 m
+  (4,3 milhões de vértices em Ponta Grossa); em PNG o estado fica em ~20 MB.
+  Legenda da camada lê os hectares do `aspectos-fisicos-pr.json` (fonte única
+  com a ficha). Sem tooltip: raster não responde a queryRenderedFeatures.
+- Revisão adversarial (workflow): hidrografia generalizada sem cache abaixo do
+  z8 (agora export), caches de drenagem/curvas param no z14 (fonte com teto),
+  make_valid em modo structure, explode duplo, altitude com máscara de nodata,
+  Urbana/RIOS da ZEE na ficha, guardas de divisão por zero.
+- O build completo foi morto por falta de memória na etapa do uso do solo
+  (~15 GB lendo os 650 mil polígonos de uma vez). Reescrita para um município
+  por vez com bbox no gpkg; testada em Ponta Grossa e Paranaguá.
+
+### Pendente
+- Rodar `py -3 scripts/build_aspectos_fisicos.py` (~30-40 min), conferir
+  tamanho de `public/data/uso-solo/` (~20 MB esperado), rodar
+  `node scripts/qa-aspectos-fisicos.mjs` com o dev server e commitar os dados.
+
+---
+
 ## Sessão 2026-10-06 (tarde): aba Aspectos físicos
 
 ### Feito
