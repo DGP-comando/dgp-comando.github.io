@@ -20,6 +20,9 @@
   zoom 9 a 11, translúcido; depois, contorno pelo export); `zoom` dentro de
   `case` é inválido no MapLibre, o interpolate tem que estar no topo.
 - QA: qa-ottobacias 12/12; unitários 2920/2920.
+- Deploy Pages do b7a7adf ok; arquivos das ottobacias servidos (200).
+  Pendente: rerodar qa-aspectos-fisicos quando o GeoPR estabilizar
+  (curvas de nível sem resposta no fim da sessão).
 
 ---
 
