@@ -18,13 +18,12 @@ import {
   CORES_ALTITUDE, DECLIVIDADE, DECLIVIDADE_SEM_RELEVO, FAIXAS_ALTITUDE, USO_SOLO, loadAspectosFisicos, rotuloFaixa,
 } from '../../data/aspectosFisicos.js';
 import { defineLayer, fmtInt, tipCard } from '../kit.js';
-import { BASE } from './iatPontos.js';
+import { geoprSpec, tileExport } from './geoprRaster.js';
 import { manchasDoMunicipio, pngSemCores } from './manchasRaster.js';
 import { trechosDaHidrografia } from './hidrografiaTrechos.js';
 
 
 const CATEGORY = 'Aspectos físicos';
-const FONTE_IAT = 'IAT/GeoPR';
 
 // Texto dos tooltips com área por polígono (declividade e uso do solo).
 const haTxt = (v) => `${v.toLocaleString('pt-BR', { maximumFractionDigits: v < 10 ? 1 : 0 })} ha`;
@@ -33,45 +32,7 @@ const pctTxt = (parte, total) => (total
 const somaHa = (classes) => Object.values(classes ?? {}).reduce((a, v) => a + v, 0);
 const FONTE_MANCHA = 'polígono = mancha contínua da classe em pixels de 30 m, recortada na divisa';
 
-const tileCache = (servico) => `${BASE}/${servico}/MapServer/tile/{z}/{y}/{x}`;
-// `where` (SQL do ArcGIS) filtra a camada 0 no servidor (layerDefs). O JSON vai
-// codificado: as chaves dele não se confundem com o {bbox-epsg-3857} do MapLibre.
-const tileExport = (servico, where = null) => `${BASE}/${servico}/MapServer/export?bbox={bbox-epsg-3857}` +
-  '&bboxSR=3857&imageSR=3857&size=512,512&format=png32&transparent=true&f=image&layers=show:0' +
-  (where ? `&layerDefs=${encodeURIComponent(JSON.stringify({ 0: where }))}` : '');
-
-/**
- * Camada só de imagem do GeoPR: fontes [{servico, cache, minzoom, maxzoom}]
- * empilhadas. `cache` é o último nível do cache de tiles do serviço (o maxScale
- * dele): acima disso o GeoPR devolve 404, então a fonte para ali e o MapLibre
- * amplia o último tile. Sem `cache`, MapServer/export (sem teto, mais lento).
- */
-function geoprSpec({ id, sufixo, fontes, opacity = 1, legend = null, ...rest }) {
-  const src = (i) => `dg-${sufixo}${i ? `-${i}` : ''}`;
-  return {
-    id,
-    category: CATEGORY,
-    ...rest,
-    sources: Object.fromEntries(fontes.map((f, i) => [src(i), {
-      type: 'raster',
-      tiles: [f.cache ? tileCache(f.servico) : tileExport(f.servico)],
-      tileSize: f.cache ? 256 : 512,
-      maxzoom: f.cache ?? 22,
-      ...(i === 0 ? { attribution: FONTE_IAT } : {}),
-    }])),
-    layers: fontes.map((f, i) => ({
-      id: `${src(i)}-img`,
-      type: 'raster',
-      source: src(i),
-      ...(f.minzoom ? { minzoom: f.minzoom } : {}),
-      ...(f.maxzoom ? { maxzoom: f.maxzoom } : {}),
-      paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0 },
-    })),
-    ...(legend ? { rowControls: () => ({ legend }) } : {}),
-  };
-}
-
-const geoprRaster = (opts) => defineLayer(geoprSpec(opts));
+const geoprRaster = (opts) => defineLayer(geoprSpec({ category: CATEGORY, ...opts }));
 
 // --- altimetria ------------------------------------------------------------
 
@@ -164,6 +125,7 @@ const decl = manchasDoMunicipio({
 });
 
 const declSpec = geoprSpec({
+  category: CATEGORY,
   id: 'datageo-declividade',
   sufixo: 'declividade',
   name: 'Declividade · ZEE-PR',
@@ -203,6 +165,7 @@ export const declividadeLayer = defineLayer({
 // (hidrografiaTrechos.js) para uma linha invisível de hover com realce.
 const trechos = trechosDaHidrografia();
 const hidroSpec = geoprSpec({
+  category: CATEGORY,
   id: 'datageo-hidrografia',
   sufixo: 'hidrografia',
   name: 'Hidrografia · rede ottocodificada 2020',

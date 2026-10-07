@@ -6,6 +6,23 @@
 
 ---
 
+## Sessão 2026-10-07 (noite, 2): ottobacias
+
+- Duas leituras, duas camadas: microbacias do IDR (PROtto, 6.210 ottobacias,
+  cor e filtro na legenda pelo manancial Sanepar/IDR, linha na ficha com a
+  contagem e os mananciais) e ottobacias por trecho do GeoPR (área de
+  contribuição de cada trecho da Hidrografia, mesmo `cobacia`).
+- `geoprVista.js`: consulta da vista ao FeatureServer virou fábrica comum
+  (trechos da hidrografia e áreas das ottobacias). `geoprRaster.js`: helpers
+  de imagem do GeoPR saíram de aspectosFisicos.js; export aceita `simbolo`
+  (dynamicLayers) para desenhar só o contorno.
+- Pegadinhas: o cache das áreas vem com preenchimento azul opaco (fica só no
+  zoom 9 a 11, translúcido; depois, contorno pelo export); `zoom` dentro de
+  `case` é inválido no MapLibre, o interpolate tem que estar no topo.
+- QA: qa-ottobacias 12/12; unitários 2920/2920.
+
+---
+
 ## Sessão 2026-10-07 (noite): filtro de classes pela legenda + tooltip da hidrografia
 
 ### Filtro pela legenda (todas as camadas com classes)

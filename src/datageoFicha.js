@@ -30,6 +30,7 @@ import { getCaf } from './data/cafFamilias.js';
 import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
 import { getAspectosFisicos } from './data/aspectosFisicos.js';
+import { getOttobacias } from './data/ottobacias.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -580,14 +581,23 @@ const SECTIONS = [
   },
 
   /** Drenagem (km e densidade) e nascentes (contagem e densidade). */
-  function hidrografia({ fis }) {
+  function hidrografia({ fis, otto }) {
     if (!fis) return null;
     const km2 = fis.areaHa / 100;
     const dens = (v, un) => (km2 > 0 ? ` <span class="fx-dim">(${fmtN(v / km2, 2)} ${un})</span>` : '');
+    const classe = { sanepar: 'Sanepar', idr: 'IDR-Paraná' };
+    const mananciais = otto?.mananciais.length
+      ? otto.mananciais.map((m) => `<b>${esc(m.nome)}</b> <span class="fx-dim">(${classe[m.classe] ?? esc(m.classe)})</span>`).join(' · ')
+      : 'nenhum';
+    const ottoTxt = otto
+      ? `<div>${otto.n != null ? `Ottobacias do IDR: <b>${fmtN(otto.n)}</b> · ` : ''}mananciais de abastecimento: ${mananciais}</div>`
+      : '';
     return section('Hidrografia · IAT + FBDS',
       `<div>Drenagem: <b>${fmtN(fis.drenKm)} km</b>${dens(fis.drenKm, 'km/km²')}</div>` +
       `<div>Nascentes: <b>${fmtN(fis.nascentes)}</b>${dens(fis.nascentes, 'por km²')}</div>` +
-      `<div class="fx-dim">${esc(fis.fonte.drenagem)} · ${esc(fis.fonte.nascentes)} · recortadas pela divisa municipal</div>`);
+      ottoTxt +
+      `<div class="fx-dim">${esc(fis.fonte.drenagem)} · ${esc(fis.fonte.nascentes)} · recortadas pela divisa municipal` +
+      `${otto ? ` · ottobacias: ${esc(otto.fonte)}` : ''}</div>`);
   },
 
   /** Uso e cobertura da terra (IAT 2012-2016), área por classe. */
@@ -948,7 +958,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -964,8 +974,9 @@ export async function openFicha({ ibge, nome, info }) {
       getFontes([ibge]),
       getGetec([ibge]),
       getAspectosFisicos([ibge]),
+      getOttobacias([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto };
   });
 }
 
@@ -1016,7 +1027,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -1030,8 +1041,9 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getFontes(ibges),
       getGetec(ibges),
       getAspectosFisicos(ibges),
+      getOttobacias(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto };
   });
 }
 

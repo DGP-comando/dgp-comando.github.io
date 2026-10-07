@@ -22,6 +22,7 @@ import faxinais from './faxinais.js';
 import programasIdr from './programasIdr.js';
 import defesaAgropecuaria from './defesaAgropecuaria.js';
 import aspectosFisicos from './aspectosFisicos.js';
+import ottobacias from './ottobacias.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
@@ -44,7 +45,8 @@ export const LAYER_ORDER = [
   'datageo-adapar-industrias-poa',
   'datageo-armazens', 'datageo-agroindustrias', 'datageo-ceasas',
   'datageo-conectividade',
-  'datageo-altimetria', 'datageo-declividade', 'datageo-hidrografia', 'datageo-nascentes', 'datageo-curvas-nivel',
+  'datageo-altimetria', 'datageo-declividade', 'datageo-hidrografia', 'datageo-ottobacias-idr', 'datageo-ottobacias-trecho',
+  'datageo-nascentes', 'datageo-curvas-nivel',
   'datageo-uso-solo',
   'datageo-clima-historico', 'datageo-precipitacao', 'datageo-ventos',
   'datageo-radios',
@@ -71,6 +73,7 @@ const all = [
   ...programasIdr,
   ...defesaAgropecuaria,
   ...aspectosFisicos,
+  ...ottobacias,
 ];
 
 const rank = (id) => {
