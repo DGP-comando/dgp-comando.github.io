@@ -21,10 +21,14 @@
   (~15 GB lendo os 650 mil polígonos de uma vez). Reescrita para um município
   por vez com bbox no gpkg; testada em Ponta Grossa e Paranaguá.
 
-### Pendente
-- Rodar `py -3 scripts/build_aspectos_fisicos.py` (~30-40 min), conferir
-  tamanho de `public/data/uso-solo/` (~20 MB esperado), rodar
-  `node scripts/qa-aspectos-fisicos.mjs` com o dev server e commitar os dados.
+### Concluído (build completo)
+- 399 municípios em `aspectos-fisicos-pr.json` (195 KB) e 399 PNGs de uso do
+  solo (23 MB). Cobertura sobre a malha: uso e altitude 96-100%; declividade
+  cai no litoral (64% em Paranaguá, a ZEE não classifica baía e ilhas), por
+  isso o % de relevo forte da ficha é sobre a área classificada.
+- 347.545 nascentes e 413.549 km de drenagem dentro da malha; altitude de 0 a 1.855 m.
+- `node scripts/qa-aspectos-fisicos.mjs`: 21/21 (camadas GeoPR, altimetria, uso
+  do solo seguindo a seleção e a troca de mapa base, ficha municipal e regional).
 
 ---
 
