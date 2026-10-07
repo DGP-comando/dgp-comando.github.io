@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   areasManchas, caixasManchas, cantoLonLat, contornoPixels, encadeia, pixelDe, rotulaManchas, simplifica,
-} from './aspectosFisicos.js';
+} from './manchasRaster.js';
 
 const BBOX = [-50.4, -25.4, -49.6, -24.8];
 const TAM = [800, 700];

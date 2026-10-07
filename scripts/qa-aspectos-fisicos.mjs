@@ -98,9 +98,23 @@ try {
   await page.waitForFunction(() => !(window.__gevEngine.map.getSource('dg-uso-solo-contorno')?.serialize().data?.features?.length),
     { timeout: 5_000 }).catch(() => {});
   check('uso do solo: contorno some ao sair', (await contornoN()) === 0);
+  // Declividade: mesmo tooltip com área e contorno (PNG invisível da ZEE recortada).
+  await setLayer(page, 'datageo-uso-solo', false);
+  await setLayer(page, 'datageo-declividade', true);
+  await page.waitForFunction(() => (window.__gevEngine.map.getSource('dg-declividade-mancha-area')?.serialize().data?.features?.length ?? 0) > 0,
+    { timeout: 30_000 }).catch(() => {});
+  const tipDecl = await hoverTooltip(page, -50.33, -25.0, /Declividade/);
+  check('declividade: tooltip com classe e área do polígono', /Declividade/.test(tipDecl) && /Área deste polígono≈ [\d.,]+ ha/.test(tipDecl)
+    && /Classe no município/.test(tipDecl) && /Ponta Grossa/.test(tipDecl), tipDecl.slice(0, 300));
+  const nDecl = await page.evaluate(() => window.__gevEngine.map.getSource('dg-declividade-mancha-contorno')
+    ?.serialize().data?.features?.[0]?.geometry?.coordinates?.length ?? 0);
+  check('declividade: contorno do polígono destacado', nDecl > 0, nDecl);
+  await page.mouse.move(5, 450);
+  await setLayer(page, 'datageo-declividade', false);
+  await setLayer(page, 'datageo-uso-solo', true);
   // Rotular o maior município (Guarapuava, 313 mil ha) não pode travar o mapa.
   const ms = await page.evaluate(async () => {
-    const { rotulaManchas, areasManchas, caixasManchas } = await import('/src/maplibre/layers/aspectosFisicos.js');
+    const { rotulaManchas, areasManchas, caixasManchas } = await import('/src/maplibre/layers/manchasRaster.js');
     const img = new Image();
     img.src = '/data/uso-solo/4109401.png';
     await img.decode();

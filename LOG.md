@@ -21,6 +21,18 @@
   (~15 GB lendo os 650 mil polígonos de uma vez). Reescrita para um município
   por vez com bbox no gpkg; testada em Ponta Grossa e Paranaguá.
 
+### Declividade com o mesmo tooltip (área por polígono + contorno)
+- `src/maplibre/layers/manchasRaster.js`: pixel/mancha/contorno saem da camada
+  e viram a fábrica `manchasDoMunicipio`, usada pelo uso do solo e pela
+  declividade.
+- Declividade: o desenho segue ao vivo do GeoPR; um PNG da mesma ZEE recortada
+  por município (`public/data/declividade/`, 8,6 MB, não aparece no mapa) diz a
+  classe e a mancha sob o cursor. Polígono inteiro da ZEE não serve (o de
+  0-10 % chega a 3,2 milhões de ha).
+- Build: `py -3 scripts/build_aspectos_fisicos.py --so-declividade` refaz só os
+  PNGs e grava `declBbox` no JSON existente.
+- QA: qa-aspectos-fisicos 31/31.
+
 ### Área de cada polígono e contorno no hover (uso do solo)
 - O navegador rotula as manchas do PNG (pixels vizinhos da mesma classe,
   inclusive na diagonal) uma vez por município: ~0,1 s no maior. A área de

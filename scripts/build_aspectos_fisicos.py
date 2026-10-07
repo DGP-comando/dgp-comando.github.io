@@ -4,6 +4,7 @@
 Saidas:
   public/data/aspectos-fisicos-pr.json   altitude, declividade, drenagem,
                                          nascentes e uso do solo de cada municipio
+  public/data/declividade/{ibge}.png     declividade da ZEE recortada (só para o tooltip)
   public/data/uso-solo/{ibge}.png        uso do solo recortado pela malha do
                                          municipio (PNG paleta, 30 m, mercator)
 
@@ -46,6 +47,7 @@ GEO = Path('H:/IDR-PARANA/GEOPROCESSAMENTO')
 MUNI = ROOT / 'public' / 'data' / 'municipios-pr.geojson'
 OUT = ROOT / 'public' / 'data' / 'aspectos-fisicos-pr.json'
 OUT_USO = ROOT / 'public' / 'data' / 'uso-solo'
+OUT_DECL = ROOT / 'public' / 'data' / 'declividade'
 CACHE = ROOT / 'data' / 'cache'
 
 MDE = GEO / 'MDE_PR_12_5m.tif'
@@ -61,7 +63,14 @@ UTM = 31982
 FAIXAS_ALT = [200, 400, 600, 800, 1000, 1200]
 # A ZEE grava "0 a 3" e "3 a 10" em parte das feicoes; a legenda do IAT junta em 0-10 %.
 DECL_CLASSE = {'0 a 3': '0 a 10', '3 a 10': '0 a 10'}
-USO_RES_M = 30  # pixel do PNG do uso do solo, no chão
+USO_RES_M = 30  # pixel dos PNGs (uso do solo, declividade), no chão
+# Cores da declividade (DECLIVIDADE + DECLIVIDADE_SEM_RELEVO em src/data/aspectosFisicos.js).
+# O PNG da declividade não aparece no mapa (o desenho vem do GeoPR): serve ao
+# tooltip, que lê a classe e a mancha pela cor do pixel.
+DECL_CORES = {
+    '0 a 10': '#016100', '10 a 20': '#a3c500', '20 a 45': '#ffba00', '>45': '#ff2200',
+    'Urbana': '#94a3b8', 'RIOS': '#64748b',
+}
 # Cores do IAT (as mesmas de USO_SOLO em src/data/aspectosFisicos.js); a ordem é o índice da paleta.
 USO_CORES = {
     'Agricultura Anual': '#89cd66', 'Agricultura Perene': '#cdcd66', 'Pastagem/Campo': '#70a800',
@@ -161,7 +170,13 @@ def declividade(munis):
     out = {}
     for (cod, classe), v in ha.items():
         out.setdefault(cod, {})[classe] = round(v)
-    return out
+    OUT_DECL.mkdir(parents=True, exist_ok=True)
+    bboxes, total = {}, 0
+    for cod, grupo in so_areas(r).to_crs(3857).groupby('CD_MUN'):
+        bboxes[cod] = _png(OUT_DECL / f'{cod}.png', grupo, DECL_CORES)
+        total += (OUT_DECL / f'{cod}.png').stat().st_size
+    print(f'declividade: {len(bboxes)} imagens, {total / 1e6:.1f} MB')
+    return out, bboxes
 
 
 def altitude(munis):
@@ -219,7 +234,7 @@ def uso_solo(munis):
             continue
         ha = (r.geometry.area / 1e4).groupby(r['classe']).sum()
         out[mun.CD_MUN] = {c: round(v) for c, v in ha.items() if v >= 0.5}
-        bboxes[mun.CD_MUN] = _png_uso(mun.CD_MUN, r.to_crs(3857))
+        bboxes[mun.CD_MUN] = _png(OUT_USO / f'{mun.CD_MUN}.png', r.to_crs(3857), USO_CORES)
         total += (OUT_USO / f'{mun.CD_MUN}.png').stat().st_size
         print(f'  uso do solo: {i + 1}/{len(munis)}', end=chr(13))
     print()
@@ -228,36 +243,51 @@ def uso_solo(munis):
     return out, bboxes
 
 
-def _png_uso(cod, grupo):
-    """PNG paleta em Web Mercator (o image source do MapLibre estica em mercator);
-    devolve os cantos [w, s, e, n] em graus."""
+def _png(caminho, grupo, cores):
+    """PNG paleta em Web Mercator (o image source do MapLibre estica em mercator),
+    uma cor por classe de `cores` (classe fora da tabela: a última); devolve os
+    cantos [w, s, e, n] em graus."""
     x0, y0, x1, y1 = grupo.total_bounds
     lat = np.degrees(2 * np.arctan(np.exp((y0 + y1) / 2 / 6378137)) - np.pi / 2)
     # ponytail: 30 m no chão; nítido até ~z13. Mais perto, pixel aparente (aceito).
     res = USO_RES_M / np.cos(np.radians(lat))
     w, h = int(np.ceil((x1 - x0) / res)), int(np.ceil((y1 - y0) / res))
     t = rasterio.transform.from_origin(x0, y1, res, res)
-    idx = {c: i + 1 for i, c in enumerate(USO_CORES)}
-    a = rasterize(((g, idx.get(c, idx['Sem classificação'])) for g, c in zip(grupo.geometry, grupo['classe'])),
+    idx = {c: i + 1 for i, c in enumerate(cores)}
+    a = rasterize(((g, idx.get(c, len(cores))) for g, c in zip(grupo.geometry, grupo['classe'])),
                   out_shape=(h, w), transform=t, fill=0, dtype='uint8')
     im = Image.fromarray(a, 'P')
-    paleta = [0, 0, 0] + [int(cor[k:k + 2], 16) for cor in USO_CORES.values() for k in (1, 3, 5)]
+    paleta = [0, 0, 0] + [int(cor[k:k + 2], 16) for cor in cores.values() for k in (1, 3, 5)]
     im.putpalette(paleta)
-    im.save(OUT_USO / f'{cod}.png', 'PNG', optimize=True, transparency=0)
+    im.save(caminho, 'PNG', optimize=True, transparency=0)
     x1r, y0r = x0 + w * res, y1 - h * res  # borda real da imagem (pixels inteiros)
     (lw, ln), (le, ls) = Transformer.from_crs(3857, 4326, always_xy=True).itransform([(x0, y1), (x1r, y0r)])
     return [round(lw, 6), round(ls, 6), round(le, 6), round(ln, 6)]
 
 
+def so_declividade(munis):
+    """`--so-declividade`: refaz só os PNGs da declividade e grava os cantos
+    no JSON já existente (o build completo leva ~40 min)."""
+    saida = json.loads(OUT.read_text(encoding='utf-8'))
+    decl, bboxes = declividade(munis)
+    for cod, m in saida['municipios'].items():
+        m['decl'] = decl.get(cod, {})
+        m['declBbox'] = bboxes.get(cod)
+    OUT.write_text(json.dumps(saida, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+    print(f'{OUT}: {OUT.stat().st_size / 1e3:.0f} KB')
+
+
 def main():
     munis = municipios()
+    if sys.argv[1:] == ['--so-declividade']:
+        return so_declividade(munis)
     amostra = sys.argv[1:]  # IBGEs: roda só esses e imprime, sem gravar o JSON
     if amostra:
         munis = munis[munis['CD_MUN'].isin(amostra)].reset_index(drop=True)
     area_ha = (munis.set_index('CD_MUN').geometry.area / 1e4).round().astype(int).to_dict()
     nasc = nascentes(munis)
     km = drenagem(munis)
-    decl = declividade(munis)
+    decl, decl_bbox = declividade(munis)
     uso, uso_bbox = uso_solo(munis)
     alt = altitude(munis)
     saida = {
@@ -274,6 +304,7 @@ def main():
                 'areaHa': area_ha[cod],
                 'alt': alt.get(cod),
                 'decl': decl.get(cod, {}),
+                'declBbox': decl_bbox.get(cod),
                 'drenKm': round(km.get(cod, 0), 1),
                 'nascentes': int(nasc.get(cod, 0)),
                 'uso': uso.get(cod, {}),
