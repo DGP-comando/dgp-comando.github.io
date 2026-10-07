@@ -113,10 +113,32 @@ test('pointFeatures: estilo, contagem por grupo e id para o tooltip', () => {
   assert.equal(features[1].properties.__size, 7);
   assert.equal(features[1].properties.__ld, 45_000);
   assert.equal(props[features[1].id].nome, 'Silo');
+  assert.equal(features[0].properties.__grupo, 'porto');
+  assert.equal(features[1].properties.__grupo, 'armazem');
   assert.deepEqual(legendWithCounts(ARMAZEM_LEGENDA, counts), [
-    { label: 'Armazém', color: '#fbbf24', count: 1 },
-    { label: 'Porto', color: '#f97316', count: 1 },
+    { label: 'Armazém', color: '#fbbf24', count: 1, key: 'armazem' },
+    { label: 'Porto', color: '#f97316', count: 1, key: 'porto' },
   ]);
+});
+
+test('filtro pela legenda: chave em texto, item sem grupo fica sem key', () => {
+  const legend = legendWithCounts([
+    { grupo: 0, label: 'Zero', color: '#000' },
+    { label: 'Dica', color: '#fff' },
+  ], { 0: 3 });
+  assert.deepEqual(legend, [
+    { label: 'Zero', color: '#000', count: 3, key: '0' },
+    { label: 'Dica', color: '#fff', count: 0 },
+  ]);
+  const { features } = pointFeatures(
+    { features: [{ properties: {}, geometry: { coordinates: [-50, -25] } }] },
+    () => ({ size: 5, color: '#ffffff' }),
+  );
+  assert.equal(features[0].properties.__grupo, '');
+  // Toda camada de pontos declara o filtro pela propriedade gravada.
+  for (const l of layers.filter((x) => x.layers.some((y) => y.id.endsWith('-pt')))) {
+    assert.equal(l.legendFilter, '__grupo', l.id);
+  }
 });
 
 test('usinas: tamanho por potência, aerogerador e tipo desconhecido', () => {

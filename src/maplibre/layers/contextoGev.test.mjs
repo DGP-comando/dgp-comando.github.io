@@ -14,6 +14,7 @@ import layers, {
   EARTHQUAKE_LABEL_CAP,
   earthquakeTooltip,
   FIRMS_ZOOM,
+  filtrosFirms,
   fireTooltip,
   lineLengthKm,
   localInfraTooltip,
@@ -64,6 +65,7 @@ test('terremotos: corte M2.5, cor por profundidade, disco 2^mag km e rótulo nos
   assert.equal(b.color, '#ff0000');
   assert.equal(c.color, '#ffa500');
   assert.equal(d.color, '#ffff00');
+  assert.deepEqual([b.band, c.band, d.band], ['red', 'orange', 'yellow'], 'faixa = chave da legenda');
   assert.equal(c.sig, true);
   assert.equal(b.sig, false);
   assert.equal(c.label, 'M5.1');
@@ -278,6 +280,44 @@ test('focos: payload aplicado às fontes, município no tooltip, faixas de zoom 
   assert.equal(fireTooltip(undefined), '');
   assert.ok(FIRMS_ZOOM.global < FIRMS_ZOOM.regional && FIRMS_ZOOM.regional < FIRMS_ZOOM.detections);
   assert.ok(Math.abs(FIRMS_ZOOM.detections - Math.log2(1e8 / 750000)) < 1e-9);
+});
+
+test('legenda filtra terremotos e focos por chave', () => {
+  const quake = layers.find((l) => l.id === 'earthquakes');
+  assert.equal(quake.legendFilter, 'band');
+  assert.deepEqual(quake.rowControls().legend.map((l) => l.key), ['red', 'orange', 'yellow']);
+
+  assert.deepEqual(filtrosFirms(new Set()), { sev: null, label: null });
+  assert.deepEqual(filtrosFirms(new Set(), 'k1').label, ['!=', ['get', 'key'], 'k1']);
+  const fora = ['!', ['in', ['get', 'sev'], ['literal', ['yellow']]]];
+  assert.deepEqual(filtrosFirms(new Set(['yellow'])).sev, fora);
+  assert.deepEqual(filtrosFirms(new Set(['yellow']), 'k1').label, ['all', ['!=', ['get', 'key'], 'k1'], fora]);
+
+  // Clique na legenda: filtros nos layers por severidade e células sem a classe escondida.
+  const firmsLayer = layers.find((l) => l.id === 'local-firms');
+  assert.deepEqual(firmsLayer.rowControls().legend.map((l) => l.key), ['red', 'orange', 'yellow']);
+  const data = {};
+  const filtros = {};
+  let ocultos = new Set();
+  const ctx = {
+    setData: (id, fcol) => { data[id] = fcol; },
+    legendHidden: () => new Set(ocultos),
+    map: { getLayer: () => true, setFilter: (id, f) => { filtros[id] = f; } },
+  };
+  applyFiresPayload(ctx, { fires: raw }, NOW);
+  assert.equal(data['dg-firms-cells1'].features.length, 2);
+  ocultos = new Set(['yellow', 'orange']);
+  firmsLayer.onLegend(ocultos, ctx);
+  for (const id of ['dg-firms-heat', 'dg-firms-glow', 'dg-firms-core', 'dg-firms-label']) {
+    assert.deepEqual(filtros[id], ['!', ['in', ['get', 'sev'], ['literal', ['yellow', 'orange']]]], id);
+  }
+  assert.deepEqual(data['dg-firms-cells1'].features.map((f) => f.properties.title), ['1 FIRE'], 'só o foco alto');
+  // Recarga mantém o filtro nas células.
+  applyFiresPayload(ctx, { fires: raw }, NOW);
+  assert.equal(data['dg-firms-cells2'].features.length, 1);
+  ocultos = new Set();
+  firmsLayer.onLegend(ocultos, ctx);
+  assert.equal(filtros['dg-firms-heat'], null);
 });
 
 test('nada de Cesium no módulo da camada', () => {

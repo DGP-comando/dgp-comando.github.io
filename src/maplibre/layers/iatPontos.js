@@ -48,18 +48,38 @@ export function classifica(s, modo, a) {
   return modo.legenda.find((g) => likes[g.key]?.some((p) => likeRegex(p).test(t)))?.key ?? m.padrao;
 }
 
-/** [{where, color}] do sistema no modo, de cima para baixo (a última é o resto). */
-export function camadasExport(s, modo) {
+// Camada que não desenha nada (sistema todo escondido, fatia sobrando).
+const VAZIO = Object.freeze([{ where: '1=0', color: '#000000' }]);
+
+/**
+ * [{where, color}] do sistema no modo, de cima para baixo (a última é o resto).
+ * `ocultos` (chaves da legenda) saem do desenho: a camada da classe some e as
+ * de menor prioridade e o resto passam a excluir os registros que casam com
+ * ela, senão eles reapareceriam na cor da classe de baixo.
+ */
+export function camadasExport(s, modo, ocultos = new Set()) {
   const m = s.modos[modo.id];
   const cor = (k) => modo.legenda.find((g) => g.key === k).color;
-  if (m.fixo) return [{ where: s.where, color: cor(m.fixo) }];
+  if (m.fixo) return ocultos.has(m.fixo) ? VAZIO : [{ where: s.where, color: cor(m.fixo) }];
   const likes = likesDo(s, modo);
-  const classes = modo.legenda.filter((g) => likes[g.key]?.length && g.key !== m.padrao).map((g) => ({
-    where: `(${s.where}) AND (${likes[g.key].map((p) => `${m.campo} LIKE '${p}'`).join(' OR ')})`,
-    color: g.color,
-  }));
-  return [...classes, { where: s.where, color: cor(m.padrao) }];
+  const fora = []; // classes escondidas acima da atual
+  const semFora = (w) => [w, ...fora].join(' AND ');
+  const out = [];
+  for (const g of modo.legenda) {
+    if (!likes[g.key]?.length || g.key === m.padrao) continue;
+    const casa = likes[g.key].map((p) => `${m.campo} LIKE '${p}'`).join(' OR ');
+    // Campo nulo não casa com nada (é do resto): NOT (NULL LIKE ..) o tiraria junto.
+    if (ocultos.has(g.key)) fora.push(`(${m.campo} IS NULL OR NOT (${casa}))`);
+    else out.push({ where: semFora(`(${s.where}) AND (${casa})`), color: g.color });
+  }
+  if (!ocultos.has(m.padrao)) out.push({ where: fora.length ? semFora(`(${s.where})`) : s.where, color: cor(m.padrao) });
+  return out.length ? out : VAZIO;
 }
+
+/** Filtro de exclusão dos pontos (perto) pelas classes escondidas; null sem nenhuma. */
+export const filtroPontos = (prop, ocultos) => (ocultos.size
+  ? ['!', ['in', ['to-string', ['get', prop]], ['literal', [...ocultos].map(String)]]]
+  : null);
 
 const symbol = (cor) => {
   const h = cor.slice(1);
@@ -83,7 +103,6 @@ export function exportTileUrl(servico, camadas) {
 // O GeoPR barra (sem cabeçalho CORS) URLs de export perto de 7,7 kB; acima
 // deste teto as classes se dividem em fatias, cada uma numa fonte raster.
 const URL_MAX = 4000;
-const VAZIO = Object.freeze([{ where: '1=0', color: '#000000' }]);
 
 /** URLs de tile das camadas, em fatias de até URL_MAX (a primeira é a de cima). */
 export function fatiasExport(servico, camadas) {
@@ -94,6 +113,20 @@ export function fatiasExport(servico, camadas) {
     else atual.push(c);
   }
   return fatias.map((f) => exportTileUrl(servico, f));
+}
+
+/**
+ * Fatias pré-alocadas de um sistema: cada fatia leva ao menos uma camada, então
+ * o número de camadas sem nada escondido (o máximo) basta para qualquer filtro.
+ */
+export const fatiasMax = (s, modos) => Math.max(...modos.map((m) => camadasExport(s, m).length));
+
+/** URL de cada uma das n fatias do sistema (null na que sobra: não desenha). */
+export function tilesDasFatias(s, modo, ocultos, n) {
+  const cs = camadasExport(s, modo, ocultos);
+  // Tudo escondido: nenhuma fatia desenha (nem pede tiles '1=0' ao GeoPR).
+  const urls = cs === VAZIO ? [] : fatiasExport(s.servico, cs);
+  return Array.from({ length: n }, (_, k) => urls[k] ?? null);
 }
 
 export async function query(servico, where, outFields, extra = {}, signal) {
@@ -155,23 +188,40 @@ export const linhasDoModo = (modo, contagens) => modo.legenda
 export function iatPontosLayer({ id, sigla, sistemas, modos, attribution, load, tooltip, ...rest }) {
   const SRC_VEC = `dg-${sigla}`;
   const PT = `dg-${sigla}-pt`;
-  // Fatias de imagem por sistema: o máximo entre os modos (fatia sobrando
-  // num modo recebe um where vazio).
-  const fatias = sistemas.flatMap((s) => {
-    const n = Math.max(...modos.map((m) => fatiasExport(s.servico, camadasExport(s, m)).length));
-    return Array.from({ length: n }, (_, k) => ({ s, k, id: `dg-${sigla}-${s.key}${k ? `-${k}` : ''}` }));
+  // Fatias de imagem por sistema, pré-alocadas (fatiasMax). A que sobra no modo
+  // e filtro atuais recebe um where vazio e sai da faixa de zoom, para não
+  // pedir tiles em branco ao GeoPR (faixa vazia: minzoom = maxzoom).
+  const porSistema = sistemas.map((s) => {
+    const n = fatiasMax(s, modos);
+    return { s, n, ids: Array.from({ length: n }, (_, k) => `dg-${sigla}-${s.key}${k ? `-${k}` : ''}`) };
   });
+  const fatias = porSistema.flatMap(({ s, ids }) => ids.map((fid) => ({ s, id: fid })));
   let modo = modos[0];
   let ctxRef = null;
   let aborter = null;
   let truncado = false;
 
   const corCirculo = (m) => ['match', ['get', m.prop], ...m.legenda.flatMap((g) => [g.key, g.color]), '#94a3b8'];
-  const tiles = ({ s, k }, m) => [fatiasExport(s.servico, camadasExport(s, m))[k] ?? exportTileUrl(s.servico, VAZIO)];
+  const urlsIniciais = new Map(porSistema.flatMap(({ s, n, ids }) => {
+    const urls = tilesDasFatias(s, modo, new Set(), n);
+    return ids.map((fid, k) => [fid, urls[k]]);
+  }));
 
-  function aplicaModo(map) {
-    for (const f of fatias) map.getSource(f.id)?.setTiles(tiles(f, modo));
-    if (map.getLayer(PT)) map.setPaintProperty(PT, 'circle-color', corCirculo(modo));
+  function aplicaModo(map, ocultos) {
+    for (const { s, n, ids } of porSistema) {
+      const urls = tilesDasFatias(s, modo, ocultos, n);
+      ids.forEach((fid, k) => {
+        // setTiles recarrega a fonte: só quando a URL muda (fatia de outro sistema, religar).
+        const src = map.getSource(fid);
+        const url = urls[k] ?? exportTileUrl(s.servico, VAZIO);
+        if (src && src.serialize?.().tiles?.[0] !== url) src.setTiles([url]);
+        if (map.getLayer(`${fid}-img`)) map.setLayerZoomRange(`${fid}-img`, urls[k] ? 0 : VEC_MINZOOM, VEC_MINZOOM);
+      });
+    }
+    if (map.getLayer(PT)) {
+      map.setPaintProperty(PT, 'circle-color', corCirculo(modo));
+      map.setFilter(PT, filtroPontos(modo.prop, ocultos));
+    }
   }
 
   async function pontosDaVista(bounds, signal) {
@@ -214,14 +264,15 @@ export function iatPontosLayer({ id, sigla, sistemas, modos, attribution, load, 
     ...rest,
     sources: {
       ...Object.fromEntries(fatias.map((f, i) => [f.id, {
-        type: 'raster', tiles: tiles(f, modo), tileSize: 512, ...(i === 0 ? { attribution } : {}),
+        type: 'raster', tiles: [urlsIniciais.get(f.id) ?? exportTileUrl(f.s.servico, VAZIO)], tileSize: 512,
+        ...(i === 0 ? { attribution } : {}),
       }])),
       [SRC_VEC]: { type: 'geojson', data: EMPTY_FC },
     },
     layers: [
       // Layer adicionado depois fica por cima: fatias de baixo (resto) primeiro.
       ...[...fatias].reverse().map((f) => ({
-        id: `${f.id}-img`, type: 'raster', source: f.id, maxzoom: VEC_MINZOOM,
+        id: `${f.id}-img`, type: 'raster', source: f.id, minzoom: urlsIniciais.get(f.id) ? 0 : VEC_MINZOOM, maxzoom: VEC_MINZOOM,
         paint: { 'raster-fade-duration': 0 },
       })),
       {
@@ -241,7 +292,7 @@ export function iatPontosLayer({ id, sigla, sistemas, modos, attribution, load, 
     load,
     onEnable(ctx) {
       ctxRef = ctx;
-      aplicaModo(ctx.map); // o chip pode ter mudado com a camada desligada
+      aplicaModo(ctx.map, ctx.legendHidden(id)); // o chip pode ter mudado com a camada desligada
       ctx.map.off('moveend', onMove);
       ctx.map.on('moveend', onMove);
       onMove();
@@ -255,7 +306,7 @@ export function iatPontosLayer({ id, sigla, sistemas, modos, attribution, load, 
     rowControls: () => ({
       chips: modos.map((m) => ({ id: `modo-${m.id}`, label: m.chip, active: m === modo })),
       legend: [
-        ...modo.legenda.map(({ label, color }) => ({ label, color })),
+        ...modo.legenda.map(({ key, label, color }) => ({ key, label, color })),
         ...(truncado ? [{ label: `Vista com mais de ${fmtInt(MAX_POR_VISTA)} pontos: aproxime`, color: '#64748b' }] : []),
       ],
     }),
@@ -263,7 +314,11 @@ export function iatPontosLayer({ id, sigla, sistemas, modos, attribution, load, 
       const novo = modos.find((m) => `modo-${m.id}` === chipId);
       if (!novo || novo === modo) return;
       modo = novo;
-      aplicaModo(ctx.map);
+      // As chaves mudam com o modo: zera os ocultos (o anfitrião chama onLegend).
+      ctx.setLegendHidden(id, []);
+    },
+    onLegend(ocultos, ctx) {
+      aplicaModo(ctx.map, ocultos);
     },
   });
 }

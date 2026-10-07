@@ -2402,6 +2402,10 @@ export class DataLayerManager {
     const legend = controls?.legend || [];
     container.hidden = chips.length === 0 && legend.length === 0;
 
+    // Itens da legenda são recriados; o clique num item filtrável dispara este
+    // refresh, então o foco do teclado volta ao item de mesma chave.
+    const ativo = globalThis.document?.activeElement;
+    const focoKey = ativo && container.contains?.(ativo) ? ativo.dataset?.key : undefined;
     for (const node of [...container.children]) {
       if (String(node.className).split(/\s+/).includes('data-toggle-legend-item')) node.remove();
     }
@@ -2450,6 +2454,7 @@ export class DataLayerManager {
       text.textContent = `${item.label} ${this._formatCount(item.count)}`;
       entry.append(swatch, text);
       container.appendChild(entry);
+      if (focoKey !== undefined && entry.dataset.key === focoKey) entry.focus();
     }
   }
 

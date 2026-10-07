@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
-  cellFeatures, cellsForView, groupStyles, intersectBbox, layerSpecs, createSlicedLinesLayer,
+  cellFeatures, cellsForView, groupStyles, intersectBbox, layerSpecs, createSlicedLinesLayer, visibilidadePorGrupo,
 } from '../slicedLines.js';
 import transporte, {
   ESTRADAS_GRUPOS, RODOVIAS_STYLE, conveniadaLayerSpec, conveniadaTooltip, conveniadaValor, conveniadasHitFilter,
-  contarPorGrupo, cursorContext, estradaTooltip, ferroviaTooltip, fmtReais, jurisdicaoDe, kmPorChave, lineKm,
-  rodoviaTooltip, trackCursor,
+  contarPorGrupo, conveniadasOcultas, cursorContext, estradaTooltip, ferroviaTooltip, fmtReais, jurisdicaoDe, kmPorChave, lineKm,
+  rodoviaTooltip, rodoviasVisibilidade, trackCursor,
 } from './transporte.js';
 import { GRUPOS } from '../../data/estradasConveniadasTooltip.js';
 import { zoomForHeight } from '../kit.js';
@@ -97,7 +97,7 @@ test('createSlicedLinesLayer devolve uma camada do contrato, sem pick', () => {
   assert.equal(typeof l.onEnable, 'function');
   assert.deepEqual(Object.keys(l.sources), ['dg-x']);
   assert.deepEqual(l.interactive, []);
-  assert.deepEqual(l.rowControls().legend, [{ label: 'a', color: '#ffffff', count: 0 }]);
+  assert.deepEqual(l.rowControls().legend, [{ label: 'a', color: '#ffffff', count: 0, key: 'a' }]);
 });
 
 test('rodovias: cores e larguras do app, federais por baixo', () => {
@@ -249,4 +249,115 @@ test('cursorContext: coordenada do último mousemove e município do preenchimen
   assert.deepEqual(cursorContext({ map }), { lat: -24.8, lon: -50, municipio: 'Castro', ibge: '4104907' });
   handlers.mouseout();
   assert.equal(cursorContext({ map }).lat, null);
+});
+
+// ------------------------------------------------------------------ filtro pela legenda
+
+/** Mapa falso: guarda visibility e filter por layer. */
+function fakeMap(ids) {
+  const vis = new Map();
+  const filt = new Map();
+  return {
+    vis,
+    filt,
+    getLayer: (id) => ids.includes(id),
+    setLayoutProperty: (id, prop, v) => prop === 'visibility' && vis.set(id, v),
+    setFilter: (id, f) => filt.set(id, f),
+    setLayerZoomRange() {},
+    on() {},
+    off() {},
+  };
+}
+
+test('linhas fatiadas: chave da legenda vira visibility do grupo e do hit (13.8 como texto)', () => {
+  const st = groupStyles({ grupos: [13.8, 34.5], maxHeight: 50_000 });
+  assert.deepEqual(visibilidadePorGrupo('d', st, new Set(['13.8'])), [['dg-d-0', 'none'], ['dg-d-1', 'visible']]);
+  assert.deepEqual(visibilidadePorGrupo('d', st, new Set(['34.5']), { comHit: true }), [
+    ['dg-d-0', 'visible'], ['dg-d-hit-0', 'visible'], ['dg-d-1', 'none'], ['dg-d-hit-1', 'none'],
+  ]);
+});
+
+test('linhas fatiadas: onLegend esconde o grupo, filtra a faixa única de quem embrulha e reaplica no onEnable', () => {
+  const base = createSlicedLinesLayer({
+    id: 'datageo-d', name: 'D', category: 'X', baseUrl: '/data/d', groupsKey: 'tensoes', grupos: [13.8, 34.5], maxHeight: 50_000,
+  });
+  assert.deepEqual(base.rowControls().legend.map((l) => l.key), [13.8, 34.5]);
+  const extra = { id: 'dg-d-hit', type: 'line', source: 'dg-d' };
+  const wrapped = { ...base, layers: [...base.layers, extra] };
+  const map = fakeMap(wrapped.layers.map((l) => l.id));
+  let ocultos = new Set(['13.8']);
+  const ctx = { map, getLayer: () => wrapped, legendHidden: () => new Set(ocultos), setData() {}, refreshPanel() {} };
+  wrapped.onLegend(new Set(ocultos), ctx);
+  assert.equal(map.vis.get('dg-d-0'), 'none');
+  assert.equal(map.vis.get('dg-d-1'), 'visible');
+  assert.equal(map.vis.has('dg-d-outros'), false, 'valores fora da legenda continuam visíveis');
+  assert.deepEqual(map.filt.get('dg-d-hit'), ['!', ['in', ['to-string', ['get', 'grupo']], ['literal', ['13.8']]]]);
+  assert.equal(map.filt.has('dg-d-0'), false, 'os layers da fábrica não ganham filtro');
+  // O anfitrião religa tudo ao ligar a camada: o onEnable devolve o escondido.
+  map.vis.set('dg-d-0', 'visible');
+  wrapped.onEnable(ctx);
+  assert.equal(map.vis.get('dg-d-0'), 'none');
+  wrapped.onDisable(ctx);
+  ocultos = new Set();
+  wrapped.onLegend(new Set(), ctx);
+  assert.equal(map.vis.get('dg-d-0'), 'visible');
+  assert.equal(map.filt.get('dg-d-hit'), null);
+});
+
+test('estradas: legenda por classe esconde a linha e a faixa de pick da classe', () => {
+  const est = transporte.find((l) => l.id === 'datageo-estradas');
+  assert.deepEqual(est.rowControls().legend.map((l) => l.key), ['urbanas', 'rurais']);
+  const map = fakeMap(est.layers.map((l) => l.id));
+  est.onLegend(new Set(['rurais']), { map, getLayer: () => est });
+  assert.equal(map.vis.get('dg-estradas-1'), 'none');
+  assert.equal(map.vis.get('dg-estradas-hit-1'), 'none');
+  assert.equal(map.vis.get('dg-estradas-0'), 'visible');
+  assert.equal(map.filt.size, 0);
+});
+
+test('rodovias: legenda federais/estaduais esconde o par linha + hit e reaplica no onEnable', () => {
+  const rod = transporte.find((l) => l.id === 'datageo-rodovias');
+  assert.deepEqual(rod.rowControls().legend.map((l) => [l.key, l.label]), [['federais', 'Federais (BR)'], ['estaduais', 'Estaduais (PR/PRC)']]);
+  assert.deepEqual(rodoviasVisibilidade(new Set(['federais'])), [
+    ['dg-rodovias-fed-line', 'none'], ['dg-rodovias-fed-hit', 'none'],
+    ['dg-rodovias-est-line', 'visible'], ['dg-rodovias-est-hit', 'visible'],
+  ]);
+  const map = fakeMap(rod.layers.map((l) => l.id));
+  rod.onEnable({ map, legendHidden: () => new Set(['estaduais']) });
+  assert.equal(map.vis.get('dg-rodovias-est-line'), 'none');
+  assert.equal(map.vis.get('dg-rodovias-fed-hit'), 'visible');
+});
+
+test('conveniadas: chip e legenda compartilham um estado só', () => {
+  const conv = transporte.find((l) => l.id === 'datageo-estradas-conveniadas');
+  assert.deepEqual(conv.rowControls().legend.map((l) => l.key), ['conveniadas', 'protocolos', 'automatizado']);
+  assert.deepEqual(conveniadasOcultas({ conveniadas: true, protocolos: false, automatizado: false }), ['protocolos', 'automatizado']);
+  const map = fakeMap(conv.layers.map((l) => l.id));
+  let ocultos = new Set();
+  const ctx = {
+    map,
+    legendHidden: () => new Set(ocultos),
+    // Como o anfitrião: guarda e chama onLegend.
+    setLegendHidden: (_id, keys) => {
+      ocultos = new Set(keys);
+      conv.onLegend(new Set(ocultos), ctx);
+    },
+  };
+  // Clique na legenda: o chip apaga junto.
+  ctx.setLegendHidden('datageo-estradas-conveniadas', ['protocolos']);
+  assert.equal(conv.rowControls().chips.find((c) => c.id === 'protocolos').active, false);
+  assert.equal(map.vis.get('dg-estradas-conveniadas-protocolos'), 'none');
+  assert.deepEqual(map.filt.get('dg-estradas-conveniadas-hit'), conveniadasHitFilter({ conveniadas: true, protocolos: false, automatizado: true }));
+  // Chip: a legenda marca o mesmo estado.
+  conv.onChip('automatizado', ctx);
+  assert.deepEqual([...ocultos].sort(), ['automatizado', 'protocolos']);
+  conv.onChip('protocolos', ctx);
+  assert.deepEqual([...ocultos], ['automatizado']);
+  assert.equal(map.vis.get('dg-estradas-conveniadas-protocolos'), 'visible');
+  // O anfitrião religa tudo ao ligar a camada: o onEnable devolve o escondido.
+  map.vis.set('dg-estradas-conveniadas-automatizado', 'visible');
+  conv.onEnable(ctx);
+  assert.equal(map.vis.get('dg-estradas-conveniadas-automatizado'), 'none');
+  ctx.setLegendHidden('datageo-estradas-conveniadas', []);
+  assert.ok(conv.rowControls().chips.every((c) => c.active));
 });

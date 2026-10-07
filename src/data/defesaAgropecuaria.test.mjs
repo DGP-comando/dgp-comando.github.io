@@ -12,7 +12,7 @@ import {
 } from './defesaAgropecuariaEstilos.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
 import { LAYER_ORDER } from '../maplibre/layers/index.js';
-import layers, { DEFESA_AGROPECUARIA, exploracoesFeatures, gunzipJson } from '../maplibre/layers/defesaAgropecuaria.js';
+import layers, { DEFESA_AGROPECUARIA, exploracoesFeatures, exploracoesLegenda, gunzipJson } from '../maplibre/layers/defesaAgropecuaria.js';
 
 // data/privado/ fica fora do git: os testes com dado real só rodam onde o arquivo existe.
 const PRIV = (n) => new URL(`../../data/privado/${n}`, import.meta.url);
@@ -125,6 +125,9 @@ test('propriedades: features por linha, contagem por grupo e tooltip', () => {
     type: 'Feature', id: 1, geometry: { type: 'Point', coordinates: [-51.7, -25.8] }, properties: { g: 2, fora: 1 },
   });
   assert.deepEqual(exploracoesFeatures(null), { features: [], counts: [] });
+  // Legenda filtrável: key = g da feição.
+  assert.deepEqual(exploracoesLegenda(counts, DADOS.grupos).map((l) => [l.key, l.count]), [[0, 1], [1, 0], [2, 1]]);
+  assert.equal(layers.find((l) => l.id === 'datageo-adapar-exploracoes').legendFilter, 'g');
   assert.equal(EXPLORACOES_CORES.length, DADOS.grupos.length);
 
   const html = exploracaoTooltip(DADOS.p[0], DADOS);

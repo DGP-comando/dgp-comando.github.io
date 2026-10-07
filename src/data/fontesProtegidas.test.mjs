@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fontesPorFamilia, resumoFontes } from './fontesProtegidas.js';
-import { fonteFeatures } from '../maplibre/layers/fontesProtegidas.js';
+import fontesLayers, { fonteFeatures, fonteLegenda } from '../maplibre/layers/fontesProtegidas.js';
 import { familiaHtml } from '../datageoCaf.js';
 
 const D = {
@@ -30,6 +30,9 @@ test('fontes: pontos por tipo, vazado fora do município e vínculo com a famíl
   const { features, counts } = fonteFeatures(D);
   assert.deepEqual(counts, [1, 1, 0, 0]);
   assert.equal(features[1].properties.fora, 1);
+  // Tipos vazios saem da legenda, mas a key continua sendo o t da feição.
+  assert.deepEqual(fonteLegenda([0, 2, 0, 1], D.tipos).map((l) => [l.key, l.count]), [[1, 2], [3, 1]]);
+  assert.equal(fontesLayers[0].legendFilter, 't');
   assert.equal(fontesPorFamilia(D).get('123').length, 1);
   const html = familiaHtml({ membros: [], areas: [], producao: [], renda: {}, local: {} }, { fontes: fontesPorFamilia(D).get('123'), tiposFonte: D.tipos });
   assert.match(html, /Fonte protegida pelo IDR \(1\)/);

@@ -20,7 +20,7 @@
 
 import { openFichaRegiao } from '../../datageoFicha.js';
 import { fichaRegionalIdr, TERRITORIO_SPECS } from '../../data/territoriosSpec.js';
-import { CAR_CLASSE_STYLES, CAR_MAX_HEIGHT, carTooltip } from '../../data/carClasses.js';
+import { CAR_CLASSE_FAIXA, CAR_CLASSE_STYLES, CAR_MAX_HEIGHT, carTooltip } from '../../data/carClasses.js';
 import { loadCarMunicipios } from '../../data/carMunicipios.js';
 import { loadCadunicoRural } from '../../data/cadunicoRural.js';
 import { defineLayer, EMPTY_FC, TEXT_FONT, zoomForHeight } from '../kit.js';
@@ -330,6 +330,9 @@ for (const classe of CAR_CLASSES) {
 carColor.push('rgba(255,255,255,0.6)');
 carWidth.push(1);
 
+/** Legenda do CAR por classe de módulos fiscais (key = classe da feição). */
+export const carLegenda = () => CAR_CLASSES.map((classe) => ({ key: classe, label: CAR_CLASSE_FAIXA[classe], color: CAR_CLASSE_STYLES[classe].css }));
+
 export const carLayer = defineLayer({
   id: 'datageo-car',
   name: 'CAR · imóveis ativos',
@@ -370,6 +373,9 @@ export const carLayer = defineLayer({
   onDisable: (ctx) => car.disable(ctx),
   focusOn: (bbox, ctx) => car.setFocus(bbox, ctx),
   tooltip: (p) => (p.classe ? carTooltip(p.classe, { stats: carStatsAgg, municipio: cursor.get() }) : ''),
+  rowControls: () => ({ legend: carLegenda() }),
+  // Filtra a divisa e a linha de pick (senão o hover pega trecho escondido).
+  legendFilter: 'classe',
 });
 
 export const carStats = () => car.stats();

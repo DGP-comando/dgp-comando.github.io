@@ -198,6 +198,21 @@ export const RODOVIAS_STYLE = Object.freeze({
 
 const rodoviaPaint = (st) => ({ 'line-color': st.color, 'line-opacity': st.opacity, 'line-width': st.width });
 
+/** Visibilidade dos pares -line/-hit de cada nível com `ocultos` (chaves 'federais'/'estaduais'). */
+export function rodoviasVisibilidade(ocultos) {
+  return [['fed', 'federais'], ['est', 'estaduais']].flatMap(([sufixo, nivel]) => {
+    const vis = ocultos.has(nivel) ? 'none' : 'visible';
+    return [[`dg-rodovias-${sufixo}-line`, vis], [`dg-rodovias-${sufixo}-hit`, vis]];
+  });
+}
+
+/** Aplica no mapa uma lista [[layerId, visibility]] (layers ausentes são ignorados). */
+function aplicaVisibilidade(map, pares) {
+  for (const [lid, vis] of pares) {
+    if (map?.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', vis);
+  }
+}
+
 /** Esfera e órgão de uma sigla: BR (DNIT), PRC (coincidente, DER-PR), PR (DER-PR). */
 export function jurisdicaoDe(ref) {
   const r = String(ref ?? '').trim().toUpperCase();
@@ -242,6 +257,8 @@ export function rodoviaTooltip(p, { nivel = 'estaduais', kmPorSigla = new Map(),
 
 export const rodoviasLayer = (() => {
   let kmPorSigla = new Map();
+  let trechos = { federais: 0, estaduais: 0 };
+  const legenda = (ocultos, ctx) => aplicaVisibilidade(ctx.map, rodoviasVisibilidade(ocultos));
   const tip = (nivel) => (p, _f, ctx) => rodoviaTooltip(p, { nivel, kmPorSigla, cur: cursorContext(ctx) });
   const tipFed = tip('federais');
   const tipEst = tip('estaduais');
@@ -263,7 +280,17 @@ export const rodoviasLayer = (() => {
     { id: 'dg-rodovias-est-hit', type: 'line', source: 'dg-rodovias-est', paint: HIT_PAINT },
   ],
   interactive: ['dg-rodovias-fed-hit', 'dg-rodovias-est-hit'],
-  onEnable: (ctx) => trackCursor(ctx.map),
+  onEnable(ctx) {
+    trackCursor(ctx.map);
+    // O anfitrião religa todos os layers ao ligar: o nível escondido volta a sumir.
+    legenda(ctx.legendHidden?.('datageo-rodovias') ?? new Set(), ctx);
+  },
+  rowControls: () => ({
+    legend: ['federais', 'estaduais'].map((nivel) => ({
+      label: RODOVIAS_STYLE[nivel].label, color: RODOVIAS_STYLE[nivel].color, count: trechos[nivel], key: nivel,
+    })),
+  }),
+  onLegend: legenda,
   // Contagem do app: trechos desenháveis (lineStringsFromGeojson) dos dois níveis.
   async load(ctx) {
     trackCursor(ctx.map);
@@ -274,7 +301,8 @@ export const rodoviasLayer = (() => {
     kmPorSigla = kmPorChave([...(fed.features ?? []), ...(est.features ?? [])], (p) => splitList(p.ref));
     ctx.setData('dg-rodovias-fed', fed);
     ctx.setData('dg-rodovias-est', est);
-    return lineStringsFromGeojson(fed).length + lineStringsFromGeojson(est).length;
+    trechos = { federais: lineStringsFromGeojson(fed).length, estaduais: lineStringsFromGeojson(est).length };
+    return trechos.federais + trechos.estaduais;
   },
   // Os dois níveis são a mesma camada: o layer atingido diz o nível.
   tooltip: (p, f, ctx) => (f?.layer?.id === 'dg-rodovias-fed-hit' ? tipFed : tipEst)(p, f, ctx),
@@ -360,6 +388,9 @@ export function conveniadaLayerSpec(g) {
     paint: { 'line-color': g.css, 'line-opacity': g.alpha, 'line-width': g.width },
   };
 }
+
+/** Conjuntos escondidos (chaves da legenda) a partir do estado dos chips. */
+export const conveniadasOcultas = (visivel) => GRUPOS.filter((g) => !visivel[g.id]).map((g) => g.id);
 
 /** Filtro do layer de hover: só os conjuntos visíveis. */
 export const conveniadasHitFilter = (visivel) => ['in', ['get', 'grupo'], ['literal', GRUPOS.filter((g) => visivel[g.id]).map((g) => g.id)]];
@@ -492,6 +523,11 @@ export const estradasConveniadasLayer = (() => {
     onEnable(ctx) {
       applyVisibility(ctx.map);
     },
+    // Chip e legenda são o mesmo estado: escondido na legenda = chip desligado.
+    onLegend(ocultos, ctx) {
+      for (const g of GRUPOS) visivel[g.id] = !ocultos.has(g.id);
+      applyVisibility(ctx.map);
+    },
     async load(ctx) {
       const geo = await fetchJson(CONVENIADAS_URL, dgFetchData);
       const features = geo.features ?? [];
@@ -502,12 +538,14 @@ export const estradasConveniadasLayer = (() => {
     tooltip: (props) => conveniadaTooltip(props),
     rowControls: () => ({
       chips: GRUPOS.map((g) => ({ id: g.id, label: g.label, active: visivel[g.id] })),
-      legend: GRUPOS.map((g) => ({ label: g.label, color: g.css, count: counts[g.id] })),
+      legend: GRUPOS.map((g) => ({ label: g.label, color: g.css, count: counts[g.id], key: g.id })),
     }),
     onChip(chipId, ctx) {
       if (!(chipId in visivel)) return;
       visivel[chipId] = !visivel[chipId];
-      applyVisibility(ctx.map);
+      // Pelo anfitrião, para a legenda marcar o mesmo estado (ele chama onLegend).
+      if (ctx.setLegendHidden) ctx.setLegendHidden('datageo-estradas-conveniadas', conveniadasOcultas(visivel));
+      else applyVisibility(ctx.map);
     },
   });
 })();

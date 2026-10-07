@@ -19,7 +19,8 @@ import {
 } from '../../data/aspectosFisicos.js';
 import { defineLayer, fmtInt, tipCard } from '../kit.js';
 import { BASE } from './iatPontos.js';
-import { manchasDoMunicipio } from './manchasRaster.js';
+import { manchasDoMunicipio, pngSemCores } from './manchasRaster.js';
+import { trechosDaHidrografia } from './hidrografiaTrechos.js';
 
 
 const CATEGORY = 'Aspectos físicos';
@@ -33,8 +34,11 @@ const somaHa = (classes) => Object.values(classes ?? {}).reduce((a, v) => a + v,
 const FONTE_MANCHA = 'polígono = mancha contínua da classe em pixels de 30 m, recortada na divisa';
 
 const tileCache = (servico) => `${BASE}/${servico}/MapServer/tile/{z}/{y}/{x}`;
-const tileExport = (servico) => `${BASE}/${servico}/MapServer/export?bbox={bbox-epsg-3857}` +
-  '&bboxSR=3857&imageSR=3857&size=512,512&format=png32&transparent=true&f=image&layers=show:0';
+// `where` (SQL do ArcGIS) filtra a camada 0 no servidor (layerDefs). O JSON vai
+// codificado: as chaves dele não se confundem com o {bbox-epsg-3857} do MapLibre.
+const tileExport = (servico, where = null) => `${BASE}/${servico}/MapServer/export?bbox={bbox-epsg-3857}` +
+  '&bboxSR=3857&imageSR=3857&size=512,512&format=png32&transparent=true&f=image&layers=show:0' +
+  (where ? `&layerDefs=${encodeURIComponent(JSON.stringify({ 0: where }))}` : '');
 
 /**
  * Camada só de imagem do GeoPR: fontes [{servico, cache, minzoom, maxzoom}]
@@ -72,13 +76,20 @@ const geoprRaster = (opts) => defineLayer(geoprSpec(opts));
 // --- altimetria ------------------------------------------------------------
 
 // color-relief interpola: dois pontos colados em cada limite viram degraus,
-// as mesmas faixas da ficha.
-const reliefColor = ['interpolate', ['linear'], ['elevation'],
-  ...CORES_ALTITUDE.flatMap((cor, i) => [
-    ...(i ? [FAIXAS_ALTITUDE[i - 1], cor] : [-50, cor]),
-    ...(i < FAIXAS_ALTITUDE.length ? [FAIXAS_ALTITUDE[i] - 0.1, cor] : [3000, cor]),
-  ]),
-];
+// as mesmas faixas da ficha. Faixa escondida pela legenda (chave = índice da
+// faixa, como texto) fica transparente nas duas paradas dela.
+const TRANSPARENTE = 'rgba(0,0,0,0)';
+export function reliefColor(ocultas = new Set()) {
+  return ['interpolate', ['linear'], ['elevation'],
+    ...CORES_ALTITUDE.flatMap((c, i) => {
+      const cor = ocultas.has(String(i)) ? TRANSPARENTE : c;
+      return [
+        ...(i ? [FAIXAS_ALTITUDE[i - 1], cor] : [-50, cor]),
+        ...(i < FAIXAS_ALTITUDE.length ? [FAIXAS_ALTITUDE[i] - 0.1, cor] : [3000, cor]),
+      ];
+    }),
+  ];
+}
 
 const DEM = {
   type: 'raster-dem',
@@ -98,11 +109,15 @@ export const altimetriaLayer = defineLayer({
   sources: { 'dg-altimetria-dem': DEM },
   layers: [
     { id: 'dg-altimetria-cor', type: 'color-relief', source: 'dg-altimetria-dem',
-      paint: { 'color-relief-color': reliefColor, 'color-relief-opacity': 0.6 } },
+      paint: { 'color-relief-color': reliefColor(), 'color-relief-opacity': 0.6 } },
     { id: 'dg-altimetria-sombra', type: 'hillshade', source: 'dg-altimetria-dem',
       paint: { 'hillshade-exaggeration': 0.35, 'hillshade-shadow-color': 'rgba(0,0,0,0.45)' } },
   ],
-  rowControls: () => ({ legend: CORES_ALTITUDE.map((color, i) => ({ label: rotuloFaixa(i), color })) }),
+  rowControls: () => ({ legend: CORES_ALTITUDE.map((color, i) => ({ key: String(i), label: rotuloFaixa(i), color })) }),
+  // O sombreado continua em todo o relevo; só a cor da faixa some.
+  onLegend: (ocultas, ctx) => {
+    if (ctx.map.getLayer('dg-altimetria-cor')) ctx.map.setPaintProperty('dg-altimetria-cor', 'color-relief-color', reliefColor(ocultas));
+  },
 });
 
 // --- GeoPR -----------------------------------------------------------------
@@ -111,6 +126,17 @@ export const altimetriaLayer = defineLayer({
 // o do GeoPR, e um PNG da mesma ZEE recortada (public/data/declividade, não
 // aparece) diz a classe e a mancha sob o cursor. Polígono da ZEE inteiro não
 // serve: o de 0-10 % chega a 3,2 milhões de ha.
+// O serviço zee_declividade (campo `classe`) guarda '0 a 10' e também a
+// subdivisão '0 a 3' e '3 a 10'; a legenda só tem '0 a 10', que esconde as três.
+const DECL_SUBCLASSES = Object.freeze({ '0 a 10': ['0 a 10', '0 a 3', '3 a 10'] });
+
+/** Cláusula do layerDefs do GeoPR sem as classes escondidas, ou null. */
+export function whereDeclividade(ocultas) {
+  const classes = [...ocultas].flatMap((k) => DECL_SUBCLASSES[k] ?? [k]);
+  if (!classes.length) return null;
+  return `classe NOT IN (${classes.map((c) => `'${String(c).replaceAll("'", "''")}'`).join(',')})`;
+}
+
 const DECL_CORES = Object.fromEntries([...DECLIVIDADE, ...DECLIVIDADE_SEM_RELEVO].map((c) => [c.key, c.color]));
 const DECL_LABEL = Object.fromEntries([...DECLIVIDADE, ...DECLIVIDADE_SEM_RELEVO].map((c) => [c.key, c.label]));
 
@@ -158,16 +184,25 @@ export const declividadeLayer = defineLayer({
   onDisable: (ctx) => decl.desligar(ctx),
   rowControls: () => ({
     legend: [
-      ...DECLIVIDADE.map(({ label, color }) => ({ label, color })),
+      ...DECLIVIDADE.map(({ key, label, color }) => ({ key, label, color })),
       ...(decl.estado.ibge ? [] : [{ label: 'Clique num município para ver a área de cada polígono', color: '#64748b' }]),
     ],
   }),
+  // Desenho do GeoPR refeito no servidor sem as classes (tiles novos, alguns
+  // segundos cada); o tooltip e o contorno param de responder sobre elas.
+  onLegend: (ocultas, ctx) => {
+    decl.estado.ocultas = ocultas;
+    ctx.map.getSource('dg-declividade')?.setTiles([tileExport('zee_declividade', whereDeclividade(ocultas))]);
+  },
 });
 
 // A rede completa (1 milhão de trechos) só a partir do zoom 9; antes, a
 // generalizada do mesmo serviço. O cache da generalizada começa no zoom 8
 // (minScale); na vista do estado ela vem do export.
-export const hidrografiaLayer = geoprRaster({
+// Tooltip: a partir do zoom 12, os trechos da vista vêm do FeatureServer
+// (hidrografiaTrechos.js) para uma linha invisível de hover com realce.
+const trechos = trechosDaHidrografia();
+const hidroSpec = geoprSpec({
   id: 'datageo-hidrografia',
   sufixo: 'hidrografia',
   name: 'Hidrografia · rede ottocodificada 2020',
@@ -178,6 +213,18 @@ export const hidrografiaLayer = geoprRaster({
     { servico: 'rede_otto_trech_drena_2020_iat_generalizada', cache: 15, minzoom: 8, maxzoom: 9 },
     { servico: 'rede_otto_trech_drena_2020_iat', cache: 14, minzoom: 9 },
   ],
+});
+
+export const hidrografiaLayer = defineLayer({
+  ...hidroSpec,
+  sources: { ...hidroSpec.sources, ...trechos.sources },
+  layers: [...hidroSpec.layers, ...trechos.layers],
+  interactive: trechos.interactive,
+  hoverState: trechos.hoverState,
+  tooltip: trechos.tooltip,
+  onEnable: (ctx) => trechos.ligar(ctx),
+  onDisable: (ctx) => trechos.desligar(ctx),
+  rowControls: () => ({ legend: trechos.legenda() }),
 });
 
 // 348 mil pontos: no estado inteiro viram mancha (e o export leva 7 s).
@@ -215,10 +262,9 @@ const uso = manchasDoMunicipio({
     const m = (await loadAspectosFisicos()).municipios?.[ibge];
     return m?.usoBbox ? { bbox: m.usoBbox, classes: m.uso ?? {} } : null;
   },
-  aoTrocar: (st) => {
-    st.ctx.map.getSource(USO_SRC)?.updateImage(st.m
-      ? { url: `/data/uso-solo/${st.ibge}.png`, coordinates: cantos(st.m.bbox) }
-      : { url: VAZIO, coordinates: cantos(PR) });
+  aoTrocar: (st) => desenhaUso(st),
+  aoLer: (st) => {
+    if (st.ocultas.size) desenhaUso(st);
   },
   tooltip: ({ classe, ha }, st) => {
     const haClasse = st.m.classes[classe] ?? 0;
@@ -234,6 +280,34 @@ const uso = manchasDoMunicipio({
     });
   },
 });
+
+/** Cores (hex minúsculo do PNG) das classes escondidas; classe sem cor em USO_SOLO não tem como sumir. */
+export const coresUsoOcultas = (ocultas) => new Set([...ocultas].map((c) => USO_SOLO[c]?.toLowerCase()).filter(Boolean));
+
+// Desenho do município: o PNG original ou, com classes escondidas pela
+// legenda, uma cópia repintada (blob URL, revogada na troca seguinte).
+let usoBlob = null;
+let usoVez = 0;
+async function desenhaUso(st) {
+  const src = st.ctx?.map.getSource(USO_SRC);
+  if (!src) return;
+  const vez = ++usoVez;
+  let url = VAZIO;
+  try {
+    if (st.m && !st.ocultas.size) url = `/data/uso-solo/${st.ibge}.png`;
+    // Pixels ainda chegando: nada desenhado até eles (aoLer repinta).
+    else if (st.m && st.img) url = await pngSemCores(st.img, coresUsoOcultas(st.ocultas));
+  } catch (err) {
+    console.warn('[maplibre:uso-solo] repintura falhou', err);
+  }
+  if (vez !== usoVez) {
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+    return;
+  }
+  src.updateImage({ url, coordinates: cantos(st.m?.bbox ?? PR) });
+  if (usoBlob) URL.revokeObjectURL(usoBlob);
+  usoBlob = url.startsWith('blob:') ? url : null;
+}
 
 export const carregaUso = uso.selecionar;
 
@@ -262,8 +336,19 @@ export const usoSoloLayer = defineLayer({
     if (!st.m) return { legend: [{ label: `Sem uso do solo para ${st.nome}`, color: '#64748b' }] };
     return {
       legend: Object.entries(st.m.classes).sort((x, y) => y[1] - x[1])
-        .map(([classe, ha]) => ({ label: classe, color: USO_SOLO[classe] ?? '#94a3b8', count: `${fmtInt(ha)} ha` })),
+        .map(([classe, ha]) => ({
+          ...(USO_SOLO[classe] ? { key: classe } : {}),
+          label: classe,
+          color: USO_SOLO[classe] ?? '#94a3b8',
+          count: `${fmtInt(ha)} ha`,
+        })),
     };
+  },
+  // Classes escondidas: o PNG é repintado com alfa 0 nelas (também na troca de
+  // município) e o tooltip/contorno param de responder sobre elas.
+  onLegend: (ocultas) => {
+    uso.estado.ocultas = ocultas;
+    desenhaUso(uso.estado);
   },
 });
 

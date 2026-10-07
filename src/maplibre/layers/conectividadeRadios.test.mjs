@@ -28,10 +28,16 @@ test('classe e legenda iguais às do app antigo', () => {
   }
   const counts = { '5G': 3, '4G': 2, na: 1 };
   assert.deepEqual(conectividadeLegend(counts), [
-    { label: '5G', color: '#a3e635', count: 3 },
-    { label: '4G', color: '#4ade80', count: 2 },
-    { label: 'SEM INFO', color: '#52525b', count: 1 },
+    { key: '5G', label: '5G', color: '#a3e635', count: 3 },
+    { key: '4G', label: '4G', color: '#4ade80', count: 2 },
+    { key: 'na', label: 'SEM INFO', color: '#52525b', count: 1 },
   ]);
+  // A key casa com o `k` gravado na feição da torre; só as torres são filtradas.
+  const built = buildTorres({ operadoras: ['X'], torres: [[-25, -50, 0, 8, 4106902], [-25.1, -50.1, 0, 0, 4106902]] }, () => null);
+  assert.deepEqual(built.fc.features.map((f) => f.properties.k), built.legend.map((l) => l.key));
+  const [conect] = layers;
+  assert.equal(conect.legendFilter, 'k');
+  assert.deepEqual(conect.layers.filter((l) => l.metadata?.['dg:legenda'] !== false).map((l) => l.id), ['dg-conect-torres']);
 });
 
 test('buildTorres: uma feição por torre, vizinhas e município', () => {

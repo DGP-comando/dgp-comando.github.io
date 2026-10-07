@@ -96,7 +96,24 @@ test('vínculo com o CAR: destacado, ausente ou camada desligada', () => {
 
 import { pjsPorFamilia, resumoPj } from './cafFamilias.js';
 import { pjHtml } from '../datageoCaf.js';
-import { extensao, pjFeatures, redeFeatures } from '../maplibre/layers/cafPj.js';
+import { extensao, pjFeatures, pjLegenda, redeFeatures } from '../maplibre/layers/cafPj.js';
+import cafLayers, { cafFeatures, cafLegenda } from '../maplibre/layers/caf.js';
+import cafPjLayers from '../maplibre/layers/cafPj.js';
+
+test('CAF: legenda por grupo filtra só os pontos, nunca a seleção nem a rede', () => {
+  const d = { grupos: ['Leite', 'Soja', 'Café'], status: ['ok'], p: [[-50, -24, 1, '4100103', 2, 'A', 0, 0, 0, 0]] };
+  const { features, counts } = cafFeatures(d);
+  const leg = cafLegenda(counts, d.grupos);
+  assert.deepEqual(leg.map((l) => [l.key, l.label, l.count]), [[0, 'Leite', 0], [1, 'Soja', 0], [2, 'Café', 1]]);
+  assert.equal(leg[features[0].properties.g].label, 'Café');
+  const [caf] = cafLayers;
+  const [pj] = cafPjLayers;
+  assert.equal(caf.legendFilter, 'g');
+  assert.equal(pj.legendFilter, 't');
+  const filtrados = (def) => def.layers.filter((l) => l.metadata?.['dg:legenda'] !== false).map((l) => l.id);
+  assert.deepEqual(filtrados(caf), ['dg-caf-pt']);
+  assert.deepEqual(filtrados(pj), ['dg-caf-pj-pt', 'dg-caf-pj-label']);
+});
 
 const PJ = {
   tipos: ['Associação', 'Cooperativa Singular', 'Cooperativa Central', 'Empreendimento Familiar'],
@@ -122,6 +139,10 @@ test('CAF PJ: pontos por tipo e rede até sócios e filiadas', () => {
   const { features, counts } = pjFeatures(PJ);
   assert.deepEqual(counts, [0, 1, 1, 0]);
   assert.equal(features[1].properties.aprox, 1);
+  // Legenda filtrável: key = t de cada feição, também nos tipos sem entidade.
+  const leg = pjLegenda(counts, PJ.tipos);
+  assert.deepEqual(leg.map((l) => l.key), [0, 1, 2, 3]);
+  assert.equal(leg[features[0].properties.t].count, 1);
   const rede = redeFeatures(PJ.pj[0], PJ.pj, PONTOS);
   // central -> família 10, central -> filiada, filiada -> 10 e 11 (99 sem ponto fica fora)
   assert.equal(rede.filter((f) => f.geometry.type === 'LineString').length, 4);

@@ -34,3 +34,10 @@ test('imagens por modalidade e tooltip sem razão social', () => {
   assert.ok(!JSON.stringify(p).includes('FULANO'));
   assert.match(licencaTooltipHtml(p), /Suinocultura/);
 });
+
+test('legenda: modalidade escondida sai das imagens e o resto a exclui', () => {
+  const cs = camadasExport(LICENCAS, MODALIDADE, new Set(['oper']));
+  assert.equal(cs.length, MODALIDADE.legenda.length - 1);
+  assert.ok(!cs.some((c) => c.color === MODALIDADE.legenda[0].color));
+  assert.ok(cs.every((c) => /sigla_modalidade IS NULL OR NOT \(sigla_modalidade LIKE 'LO%'/.test(c.where)));
+});

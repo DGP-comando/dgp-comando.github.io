@@ -6,6 +6,43 @@
 
 ---
 
+## Sessão 2026-10-07 (noite): filtro de classes pela legenda + tooltip da hidrografia
+
+### Filtro pela legenda (todas as camadas com classes)
+- Núcleo (kit/layerHost/managerAdapter/manager): item da legenda com `key` vira
+  botão; clique esconde/mostra a classe, Shift+clique mostra só ela (de novo,
+  todas). `legendFilter: '<prop>'` (comparado como texto, combinado por "all"
+  com o filter de cada layer) ou `onLegend(ocultos, ctx)` para desenho em
+  imagem. Legenda de uma classe só segue informativa. Estado não persiste no
+  link (YAGNI).
+- 5 frentes em paralelo (workflow), cada uma com revisor adversarial:
+  A fábrica de pontos (`__grupo`, ~25 camadas); B linhas fatiadas (estradas,
+  distribuição, rodovias, conveniadas com chip e legenda num estado só);
+  C índices (CAF, CAF PJ, fontes, conectividade, explorações ADAPAR, CAR com
+  legenda nova); D GeoPR com modo (outorgas, licenciamento: where do export
+  exclui a classe também das camadas de menor prioridade); E imagens
+  (altimetria por paint, declividade por layerDefs no export, uso do solo
+  repintado em blob, clima histórico e precipitação repintados, terremotos,
+  FIRMS com helper único de filtro do rótulo).
+- QA: `scripts/qa-legenda-filtro.mjs` (genérico: esconder tudo zera as
+  feições, mostrar devolve, Shift deixa só a classe) 64/64 nas camadas que
+  carregam sem login; qa-aspectos-fisicos cobre uso do solo e declividade.
+  FIRMS não testado no navegador (feed fora no momento).
+
+### Tooltip da hidrografia
+- `src/maplibre/layers/hidrografiaTrechos.js`: zoom 12+, trechos da vista do
+  FeatureServer (rede_otto 2020) numa linha invisível de hover com realce do
+  trecho; nome do rio, Strahler, comprimento, área a montante, domínio,
+  ottobacia.
+
+### Pegadinhas
+- O GeoPR alterna 500/503 nos MapServer (export e cache) em alguns momentos:
+  falha de imagem no QA nessas horas é do servidor, não do código.
+- Arquivos com CRLF na cópia de trabalho quebram edição exata; normalizar
+  para LF antes (o repositório guarda LF).
+
+---
+
 ## Sessão 2026-10-07 (tarde): termo de responsabilidade LGPD
 
 - No login, depois da senha e antes do boot/tutorial, o usuário assina o termo

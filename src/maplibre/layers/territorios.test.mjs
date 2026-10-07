@@ -39,6 +39,15 @@ test('camadas na ordem e com os ids/categorias do app', () => {
   assert.ok(carLayer.focusOn && carLayer.onEnable && carLayer.onDisable);
 });
 
+test('CAR: legenda por classe filtra a divisa e a linha de pick', () => {
+  const legend = carLayer.rowControls().legend;
+  assert.deepEqual(legend.map((l) => l.key), ['0-4', '4-10', '10-20', '20-50', '>50']);
+  assert.equal(legend[0].label, 'até 4 módulos fiscais');
+  assert.equal(legend[4].color, CAR_CLASSE_STYLES['>50'].css);
+  assert.equal(carLayer.legendFilter, 'classe');
+  assert.ok(carLayer.layers.every((l) => l.metadata?.['dg:legenda'] !== false));
+});
+
 test('buildTerritorioFeatures: partes válidas, borda fechada pelo anel externo, rótulo no centroide', () => {
   const gj = {
     type: 'FeatureCollection',

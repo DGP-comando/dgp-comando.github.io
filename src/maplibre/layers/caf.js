@@ -46,6 +46,9 @@ export function cafFeatures(d) {
   return { features, counts };
 }
 
+/** Legenda por grupo, key = g (o índice do grupo; clicar filtra o ponto). */
+export const cafLegenda = (counts, grupos) => counts.map((count, i) => ({ key: i, label: grupos[i], color: CAF_CORES[i], count }));
+
 const cor = ['match', ['get', 'g'], ...CAF_CORES.flatMap((c, i) => [i, c]), '#94a3b8'];
 
 function linha(id) {
@@ -87,6 +90,7 @@ export default [defineLayer({
       type: 'line',
       source: SEL,
       filter: ['==', ['geometry-type'], 'LineString'],
+      metadata: { 'dg:legenda': false }, // seleção, não classe
       paint: { 'line-color': '#fde047', 'line-width': 3 },
     },
     {
@@ -94,6 +98,7 @@ export default [defineLayer({
       type: 'circle',
       source: SEL,
       filter: ['==', ['geometry-type'], 'Point'],
+      metadata: { 'dg:legenda': false },
       paint: { 'circle-radius': 9, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#fde047', 'circle-stroke-width': 2.5 },
     },
   ],
@@ -102,7 +107,7 @@ export default [defineLayer({
     dados = await loadCafPontos();
     if (!dados) throw new Error('acesso restrito: entre com usuário liberado');
     const { features, counts } = cafFeatures(dados);
-    legenda = counts.map((count, i) => ({ label: dados.grupos[i], color: CAF_CORES[i], count }));
+    legenda = cafLegenda(counts, dados.grupos);
     ctx.setData(SRC, fc(features));
     const fora = features.filter((f) => f.properties.fora).length;
     return { count: features.length, info: `${periodo(dados.referencia)} · ${fmtInt(fora)} fora do município declarado (vazados)` };
@@ -135,6 +140,7 @@ export default [defineLayer({
     if (f) abrirFamilia(f, ctx);
   },
   rowControls: () => ({ legend: legenda }),
+  legendFilter: 'g',
 })];
 
 /** Cadastro da família no painel; destaque no mapa só com a camada CAF ligada. */

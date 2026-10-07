@@ -9,7 +9,7 @@
  * Requer dev server rodando e acesso a geopr.iat.pr.gov.br.
  */
 import {
-  argValue, createReport, hoverTooltip, launchQaBrowser, openApp, setCamera, setLayer, waitMapIdle,
+  argValue, createReport, hoverTooltip, interactiveFeature, launchQaBrowser, sleep, openApp, setCamera, setLayer, waitMapIdle,
 } from './lib/qaBrowser.mjs';
 
 const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
@@ -53,6 +53,21 @@ try {
     return Boolean(m.getLayer('dg-altimetria-cor')) && m.getLayoutProperty('dg-altimetria-cor', 'visibility') !== 'none';
   });
   check('altimetria: color-relief no estilo e visível', relevo);
+  // Hidrografia: tooltip do trecho (zoom 12+, trechos da vista vindos do FeatureServer).
+  let trecho = null;
+  for (let i = 0; i < 40 && !trecho; i++) {
+    trecho = await interactiveFeature(page, 'datageo-hidrografia');
+    if (!trecho) await sleep(500);
+  }
+  check('hidrografia: trechos da vista para o hover', Boolean(trecho), trecho);
+  if (trecho) {
+    const tip = await hoverTooltip(page, trecho.lon, trecho.lat, /Hidrografia · trecho/);
+    check('hidrografia: tooltip do trecho com Strahler e comprimento', /Hidrografia · trecho/.test(tip) && /Ordem de Strahler/.test(tip)
+      && /Comprimento do trecho/.test(tip), tip.slice(0, 300));
+    const realce = await page.evaluate(() => window.__gevEngine.map.queryRenderedFeatures({ layers: ['dg-hidrografia-trechos-hit'] })
+      .some((f) => window.__gevEngine.map.getFeatureState({ source: 'dg-hidrografia-trechos', id: f.id }).hover));
+    check('hidrografia: trecho sob o cursor realçado', realce);
+  }
   check('altimetria: legenda por faixa', /600-800 m/.test(await rowText('datageo-altimetria')));
   check('declividade: legenda', /20-45 %/.test(await rowText('datageo-declividade')));
   if (shot) await page.screenshot({ path: shot.replace(/\.png$/, '-relevo.png') });
@@ -98,6 +113,21 @@ try {
   await page.waitForFunction(() => !(window.__gevEngine.map.getSource('dg-uso-solo-contorno')?.serialize().data?.features?.length),
     { timeout: 5_000 }).catch(() => {});
   check('uso do solo: contorno some ao sair', (await contornoN()) === 0);
+  // Filtro pela legenda: esconder "Área Urbanizada" repinta o PNG (blob) e tira o tooltip dela.
+  const clicaLegenda = (lid, key) => page.evaluate(([l, k]) => {
+    const el = document.querySelector(`[data-layer-id="${l}"] .data-toggle-legend-item[data-key="${CSS.escape(k)}"]`);
+    el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return Boolean(el);
+  }, [lid, key]);
+  check('uso do solo: legenda clicável', await clicaLegenda('datageo-uso-solo', 'Área Urbanizada'));
+  await page.waitForFunction(() => /^blob:/.test(window.__gevEngine.map.getSource('dg-uso-solo')?.url ?? ''), { timeout: 15_000 }).catch(() => {});
+  check('uso do solo: classe escondida repinta a imagem', /^blob:/.test((await usoSrc())?.url ?? ''), (await usoSrc())?.url);
+  const tipEscondida = await hoverTooltip(page, -50.16, -25.095, /Uso do solo/);
+  check('uso do solo: sem tooltip sobre classe escondida', !/Área Urbanizada/.test(tipEscondida), tipEscondida.slice(0, 120));
+  await clicaLegenda('datageo-uso-solo', 'Área Urbanizada');
+  await page.waitForFunction(() => /4119905\.png$/.test(window.__gevEngine.map.getSource('dg-uso-solo')?.url ?? ''), { timeout: 15_000 }).catch(() => {});
+  check('uso do solo: mostrar de novo volta à imagem original', /4119905\.png$/.test((await usoSrc())?.url ?? ''), (await usoSrc())?.url);
+  await page.mouse.move(5, 450);
   // Declividade: mesmo tooltip com área e contorno (PNG invisível da ZEE recortada).
   await setLayer(page, 'datageo-uso-solo', false);
   await setLayer(page, 'datageo-declividade', true);
@@ -110,6 +140,13 @@ try {
     ?.serialize().data?.features?.[0]?.geometry?.coordinates?.length ?? 0);
   check('declividade: contorno do polígono destacado', nDecl > 0, nDecl);
   await page.mouse.move(5, 450);
+  // Filtro pela legenda na declividade: o export do GeoPR ganha layerDefs sem a classe.
+  await clicaLegenda('datageo-declividade', '>45');
+  const tilesDecl = await page.evaluate(() => decodeURIComponent(window.__gevEngine.map.getSource('dg-declividade')?.serialize().tiles?.[0] ?? ''));
+  check('declividade: classe escondida vai no layerDefs do GeoPR', /layerDefs=\{"0":".*>45/.test(tilesDecl), tilesDecl.slice(-160));
+  await clicaLegenda('datageo-declividade', '>45');
+  const tilesDecl2 = await page.evaluate(() => window.__gevEngine.map.getSource('dg-declividade')?.serialize().tiles?.[0] ?? '');
+  check('declividade: mostrar de novo tira o filtro', !/layerDefs/.test(tilesDecl2));
   await setLayer(page, 'datageo-declividade', false);
   await setLayer(page, 'datageo-uso-solo', true);
   // Rotular o maior município (Guarapuava, 313 mil ha) não pode travar o mapa.

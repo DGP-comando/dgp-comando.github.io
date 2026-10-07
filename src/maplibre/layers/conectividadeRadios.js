@@ -42,7 +42,7 @@ export function classeDaTorre(mask) {
 export function conectividadeLegend(counts) {
   return [...TEC_CLASSES, TEC_INDEFINIDA]
     .filter((k) => (counts?.[k.key] || 0) > 0)
-    .map((k) => ({ label: k.label, color: k.color, count: counts[k.key] }));
+    .map((k) => ({ key: k.key, label: k.label, color: k.color, count: counts[k.key] }));
 }
 
 /**
@@ -172,18 +172,21 @@ const conectividade = (() => {
         id: 'dg-conect-cobertura',
         type: 'fill',
         source: 'dg-conect-cobertura',
+        metadata: { 'dg:legenda': false },
         paint: { 'fill-color': '#64748b', 'fill-opacity': 0.22 },
       },
       {
         id: 'dg-conect-aneis-fill',
         type: 'fill',
         source: 'dg-conect-aneis',
+        metadata: { 'dg:legenda': false },
         paint: { 'fill-color': ['match', ['get', 'tec'], ...Object.entries(TEC_COR).flat(), '#71717a'], 'fill-opacity': 0.12 },
       },
       {
         id: 'dg-conect-aneis-line',
         type: 'line',
         source: 'dg-conect-aneis',
+        metadata: { 'dg:legenda': false },
         paint: {
           'line-color': ['match', ['get', 'tec'], ...Object.entries(TEC_COR).flat(), '#71717a'],
           'line-opacity': 0.85,
@@ -244,6 +247,8 @@ const conectividade = (() => {
     },
 
     rowControls: () => ({ chips: [], legend }),
+    // Só as torres: cobertura e anéis do hover não são classe.
+    legendFilter: 'k',
   });
 })();
 

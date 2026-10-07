@@ -76,18 +76,25 @@ export function classeDe(value, quebras) {
  * @param {number} [maxAbs]
  */
 export function corDe(value, ind, quebras, maxAbs = 0) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return [0, 0, 0, 0];
+  const idx = indiceDe(value, ind, quebras, maxAbs);
+  if (idx < 0) return [0, 0, 0, 0];
+  return [...hexBytes(ind.rampa[idx]), Math.round(255 * CAMPO_ALPHA)];
+}
+
+/**
+ * Indice na rampa (a classe da legenda) de um valor, ou -1 para celula sem
+ * dado. Mesma regra de corDe.
+ */
+export function indiceDe(value, ind, quebras, maxAbs = 0) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return -1;
   const v = Number(value);
-  let idx;
   if (ind.divergente) {
     const neutro = Math.max(1e-9, 0.1 * maxAbs);
-    if (Math.abs(v) < neutro) idx = 2;
-    else if (v < 0) idx = v < -0.5 * maxAbs ? 0 : 1;
-    else idx = v > 0.5 * maxAbs ? 4 : 3;
-  } else {
-    idx = Math.min(ind.rampa.length - 1, classeDe(v, quebras));
+    if (Math.abs(v) < neutro) return 2;
+    if (v < 0) return v < -0.5 * maxAbs ? 0 : 1;
+    return v > 0.5 * maxAbs ? 4 : 3;
   }
-  return [...hexBytes(ind.rampa[idx]), Math.round(255 * CAMPO_ALPHA)];
+  return Math.min(ind.rampa.length - 1, classeDe(v, quebras));
 }
 
 const fmt = (v, casas) => Number(v).toLocaleString('pt-BR', {
@@ -105,10 +112,8 @@ export function legendaDe(valores, ind, quebras) {
   const maxAbs = maiorModulo(valores);
   const counts = new Array(ind.rampa.length).fill(0);
   for (const value of valores) {
-    if (value === null || value === undefined) continue;
-    const [r, g, b] = corDe(value, ind, quebras, maxAbs);
-    const hex = `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
-    counts[ind.rampa.indexOf(hex)] += 1;
+    const k = indiceDe(value, ind, quebras, maxAbs);
+    if (k >= 0) counts[k] += 1;
   }
   const rotulos = ind.divergente
     ? ['DÉFICIT ALTO', 'DÉFICIT', '≈ 0', 'EXCEDENTE', 'EXCEDENTE ALTO']
@@ -118,7 +123,9 @@ export function legendaDe(valores, ind, quebras) {
       return `${fmt(quebras[k - 1], ind.casas)}–${fmt(quebras[k], ind.casas)}`;
     });
   return ind.rampa
-    .map((color, k) => ({ label: rotulos[k], color, blurb: `${rotulos[k]} ${ind.unidade}`, count: counts[k] }))
+    // key = indice na rampa: filtro pela legenda (o mesmo em todo indicador,
+    // por isso a camada zera os ocultos ao trocar de chip).
+    .map((color, k) => ({ key: String(k), label: rotulos[k], color, blurb: `${rotulos[k]} ${ind.unidade}`, count: counts[k] }))
     .filter((item) => item.count > 0);
 }
 

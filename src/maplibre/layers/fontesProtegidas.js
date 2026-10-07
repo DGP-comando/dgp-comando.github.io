@@ -27,6 +27,11 @@ export function fonteFeatures(d) {
   return { features, counts };
 }
 
+/** Legenda dos tipos com fonte; key = t entra antes do filtro (a posição não é o t). */
+export const fonteLegenda = (counts, tipos) => counts
+  .map((count, i) => ({ key: i, label: tipos[i], color: FONTE_CORES[i], count }))
+  .filter((l) => l.count);
+
 const cor = ['match', ['get', 't'], ...FONTE_CORES.flatMap((c, i) => [i, c]), '#e2e8f0'];
 
 export default [defineLayer({
@@ -52,7 +57,7 @@ export default [defineLayer({
     dados = await loadFontes();
     if (!dados) throw new Error('acesso restrito: entre com usuário liberado');
     const { features, counts } = fonteFeatures(dados);
-    legenda = counts.map((count, i) => ({ label: dados.tipos[i], color: FONTE_CORES[i], count })).filter((l) => l.count);
+    legenda = fonteLegenda(counts, dados.tipos);
     ctx.setData(SRC, fc(features));
     const caf = dados.p.filter((r) => r[9]).length;
     return { count: features.length, info: `planilha de ${dados.referencia.split('-').reverse().join('/')} · ${fmtInt(caf)} ligadas a família da CAF` };
@@ -80,4 +85,5 @@ export default [defineLayer({
     if (caf) abrirFamiliaCaf(caf, ctx);
   },
   rowControls: () => ({ legend: legenda }),
+  legendFilter: 't',
 })];

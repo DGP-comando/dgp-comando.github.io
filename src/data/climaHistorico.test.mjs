@@ -11,7 +11,9 @@ import {
   corDe,
   indicador,
   legendaDe,
+  indiceDe,
 } from './climaHistoricoRamp.js';
+import { pintarPixels } from './climaHistoricoPixels.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const arquivo = (nome) => path.join(ROOT, 'public', 'data', nome);
@@ -107,4 +109,21 @@ test('series anuais alinham com os anos declarados', { skip: semDados }, () => {
     assert.equal(serie.tmed.length, a1 - a0 + 1);
     assert.equal(serie.pr.length, s.anos.pr[1] - s.anos.pr[0] + 1);
   }
+});
+
+test('legenda: chave = índice da rampa; pintura deixa a classe oculta transparente', () => {
+  const ind = indicador('geada3');
+  const quebras = [2, 5, 10, 20];
+  const valores = [0, 3, 30, null];
+  assert.deepEqual(legendaDe(valores, ind, quebras).map((l) => l.key), ['0', '1', '4']);
+  assert.deepEqual(valores.map((v) => indiceDe(v, ind, quebras)), [0, 1, 4, -1]);
+  const grade = { width: 4, height: 1 };
+  const alfa = (px, i) => px.data[(px.w * 1 + i + 1) * 4 + 3]; // linha do meio (anel de 1 célula)
+  const todas = pintarPixels(grade, valores, ind, quebras);
+  assert.deepEqual([0, 1, 2, 3].map((i) => alfa(todas, i) > 0), [true, true, true, false]);
+  const semUm = pintarPixels(grade, valores, ind, quebras, new Set(['1']));
+  assert.deepEqual([0, 1, 2, 3].map((i) => alfa(semUm, i) > 0), [true, false, true, false]);
+  // Divergente: a chave segue o sinal, não as quebras.
+  const bal = indicador('balanco');
+  assert.deepEqual(legendaDe([-800, 900], bal, []).map((l) => l.key), ['0', '4']);
 });

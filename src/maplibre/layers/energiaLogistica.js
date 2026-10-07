@@ -81,15 +81,25 @@ export function pointFeatures(gj, estilo) {
         __color: rgba(s.color, s.alpha ?? 1),
         __label: s.label ?? '',
         __ld: s.labelMaxDist ?? 0,
+        // Classe da legenda (texto): o filtro pela legenda compara por ela.
+        __grupo: String(s.grupo ?? ''),
       },
     });
   }
   return { features, counts, props };
 }
 
-/** Legenda do painel: [{label, color, count}] na ordem de `legend`. */
+/**
+ * Legenda do painel: [{label, color, count, key}] na ordem de `legend`.
+ * `key` (o grupo, em texto) torna o item filtrável; item sem grupo fica sem key.
+ */
 export function legendWithCounts(legend, counts) {
-  return legend.map((g) => ({ label: g.label, color: g.color, count: counts?.[g.grupo] ?? 0 }));
+  return legend.map((g) => ({
+    label: g.label,
+    color: g.color,
+    count: counts?.[g.grupo] ?? 0,
+    ...(g.grupo != null ? { key: String(g.grupo) } : {}),
+  }));
 }
 
 // ------------------------------------------------------------------ pontos
@@ -172,6 +182,8 @@ export function makePointsLayer({
       return p.__label ? tipCard({ title: p.__label, source }) : '';
     },
     rowControls: () => ({ legend: legendWithCounts(legend, counts) }),
+    // Clique na legenda esconde o grupo nos pontos e nos rótulos.
+    legendFilter: '__grupo',
   });
 }
 

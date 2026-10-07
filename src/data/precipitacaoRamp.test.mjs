@@ -10,6 +10,7 @@ import {
   precipClassOf,
   precipLegend,
   precipRgba,
+  precipSemClasses,
   tallyPrecip,
 } from './precipitacaoRamp.js';
 import { LAYER_STATE_REGISTRY, REGISTERED_LAYER_IDS, validateLayerStateRegistry } from './layerState.js';
@@ -148,4 +149,12 @@ test('a camada de chuva fica abaixo das partículas de vento, e as duas dividem 
   assert.match(client, /_weatherGridCache/, 'sem memoização as duas camadas dobrariam o tráfego');
   assert.match(grades, /await fetchWeatherGrid\(\)/);
   assert.match(grades, /await fetchWindGrid\(\)/);
+});
+
+test('legenda com chave por classe; grade sem as classes escondidas', () => {
+  assert.deepEqual(precipLegend({ fraca: 1, forte: 2 }).map((l) => l.key), ['fraca', 'forte']);
+  const grid = new Float32Array([0, 0.5, 2, 12]);
+  assert.deepEqual(precipSemClasses(grid, new Set(['fraca'])), [0, 0.5, 0, 12]);
+  assert.deepEqual(precipSemClasses(grid, new Set()), [0, 0.5, 2, 12]);
+  assert.deepEqual(precipSemClasses(undefined, new Set(['fraca'])), []);
 });

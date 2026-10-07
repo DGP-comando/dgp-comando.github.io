@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  areasManchas, caixasManchas, cantoLonLat, contornoPixels, encadeia, pixelDe, rotulaManchas, simplifica,
+  apagaCores, areasManchas, caixasManchas, cantoLonLat, contornoPixels, encadeia, pixelDe, rotulaManchas, simplifica,
 } from './manchasRaster.js';
 
 const BBOX = [-50.4, -25.4, -49.6, -24.8];
@@ -118,4 +118,16 @@ test('simplifica: escada de pixels vira reta, quina de verdade fica', () => {
   for (let i = 1; i <= 20; i++) escada.push([i - 1, i], [i, i]);
   assert.deepEqual(simplifica(escada, 0.75), [[0, 0], [20, 20]]);
   assert.equal(simplifica([[0, 0], [10, 0], [10, 10]], 0.75).length, 3);
+});
+
+test('apagaCores: alfa 0 só nas cores escondidas, sem mexer no original', () => {
+  const rgba = new Uint8ClampedArray([
+    0x89, 0xcd, 0x66, 255, // escondida
+    0x26, 0x73, 0x00, 255, // fica
+    0x89, 0xcd, 0x66, 0, // já transparente
+  ]);
+  const out = apagaCores(rgba, new Set(['#89cd66']));
+  assert.deepEqual([out[3], out[7], out[11]], [0, 255, 0]);
+  assert.equal(rgba[3], 255, 'cópia: o tooltip lê os pixels originais');
+  assert.deepEqual([...apagaCores(rgba, new Set())], [...rgba]);
 });

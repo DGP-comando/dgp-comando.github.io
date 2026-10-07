@@ -21,7 +21,8 @@
 //                       // uma faixa invisível de pick por grupo (`dg-<slug>-hit-<k>`,
 //                       // mesmo filtro e minzoom, `hitWidth` px, padrão 12)
 //   }) -> objeto do contrato defineLayer (kit.js), com onEnable/onDisable/focusOn/
-//        rowControls (legenda com os trechos carregados por grupo).
+//        rowControls (legenda com os trechos carregados por grupo, `key` = valor
+//        do grupo) e onLegend (clicar no item esconde o grupo).
 //
 // Um layer de linha por grupo (filtro na propriedade `grupo`), mais um de
 // reserva para valores fora de `grupos` (estilo branco do app). Os tetos viram
@@ -36,6 +37,7 @@
 
 import { decodeCell } from '../data/slicedCells.js';
 import { EMPTY_FC, defineLayer, fc, zoomForHeight } from './kit.js';
+import { filtroComLegenda } from './layerHost.js';
 
 const FALLBACK_STYLE = Object.freeze({ color: '#ffffff', opacity: 0.6, width: 1 });
 const MAX_ZOOM = 24;
@@ -157,6 +159,21 @@ export function layerSpecs(slug, styles, layerMin, { hitWidth = 0 } = {}) {
     });
   }
   return { sourceId, layers, hitIds };
+}
+
+/**
+ * Visibilidade de cada layer de grupo (e da faixa de pick do grupo) com as
+ * classes `ocultos` (chaves da legenda, texto) escondidas: [[layerId, 'visible'|'none']].
+ * O `-outros` não entra: valores fora da legenda continuam visíveis.
+ */
+export function visibilidadePorGrupo(slug, styles, ocultos, { comHit = false } = {}) {
+  const out = [];
+  styles.forEach((st, k) => {
+    const vis = ocultos.has(String(st.value)) ? 'none' : 'visible';
+    out.push([`dg-${slug}-${k}`, vis]);
+    if (comHit) out.push([`dg-${slug}-hit-${k}`, vis]);
+  });
+  return out;
 }
 
 export function createSlicedLinesLayer(config) {
@@ -294,6 +311,23 @@ export function createSlicedLinesLayer(config) {
     }, ms);
   }
 
+  // Filtro pela legenda. Os layers da fábrica somem por visibility; layers que
+  // quem embrulha a camada acrescentou (faixa de pick única da distribuição)
+  // recebem um filtro de exclusão por `grupo`, comparado como texto (13.8).
+  const proprios = new Set(layers.map((l) => l.id));
+  function applyLegend(ocultos, ctx) {
+    const map = ctx?.map;
+    if (!map) return;
+    for (const [lid, vis] of visibilidadePorGrupo(slug, styles, ocultos, { comHit: pickable })) {
+      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', vis);
+    }
+    const escondidas = [...ocultos].map(String);
+    for (const layer of ctx.getLayer?.(id)?.layers ?? []) {
+      if (proprios.has(layer.id) || layer.type !== 'line' || !map.getLayer(layer.id)) continue;
+      map.setFilter(layer.id, filtroComLegenda(layer.filter, ['to-string', ['get', 'grupo']], escondidas));
+    }
+  }
+
   function applyZoomRanges(map) {
     for (const [lid, min] of minzoomOf) {
       if (map.getLayer(lid)) map.setLayerZoomRange(lid, focus ? 0 : min, MAX_ZOOM);
@@ -316,6 +350,8 @@ export function createSlicedLinesLayer(config) {
       ctxRef = ctx;
       enabled = true;
       applyZoomRanges(ctx.map);
+      // O anfitrião religa todos os layers ao ligar: as classes escondidas voltam a sumir.
+      applyLegend(ctx.legendHidden?.(id) ?? new Set(), ctx);
       if (!onMoveEnd) {
         onMoveEnd = () => schedule();
         ctx.map.on('moveend', onMoveEnd);
@@ -349,8 +385,10 @@ export function createSlicedLinesLayer(config) {
     rowControls() {
       const { byGroup } = counts();
       return {
-        legend: styles.map((st) => ({ label: st.label, color: st.color, count: byGroup.get(st.value) ?? 0 })),
+        legend: styles.map((st) => ({ label: st.label, color: st.color, count: byGroup.get(st.value) ?? 0, key: st.value })),
       };
     },
+
+    onLegend: applyLegend,
   });
 }

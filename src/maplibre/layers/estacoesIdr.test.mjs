@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
-import { estacaoTooltipHtml, estacoesIdrLayer, unidadeEstilo, unidadeTooltipHtml } from './estacoesIdr.js';
+import { estacaoTooltipHtml, estacoesIdrLayer, unidadeEstilo, unidadeTooltipHtml, unidadesIdrLayer } from './estacoesIdr.js';
 
 // data/privado/ fica fora do git: o teste com dado real só roda onde o arquivo existe.
 const UNIDADES = new URL('../../../data/privado/unidades-idr-pr.geojson', import.meta.url);
@@ -102,4 +102,11 @@ test('tooltip da unidade regional mostra o gerente da regional', () => {
   assert.match(html, /RH do IDR \(Setembro\/2026\)/);
   assert.doesNotMatch(unidadeTooltipHtml({ ...p, tipo: 'ume', municipio: 'X' }, null, ger), /FULANO/);
   assert.doesNotMatch(unidadeTooltipHtml(p, null, null), /Gerente/);
+});
+
+test('unidades: filtro pela legenda nos pontos, rede do GETEC fora dele', () => {
+  assert.equal(unidadesIdrLayer.legendFilter, '__grupo');
+  const rede = unidadesIdrLayer.layers.filter((l) => l.id.startsWith('dg-getec-rede'));
+  assert.equal(rede.length, 2);
+  for (const l of rede) assert.equal(l.metadata['dg:legenda'], false, l.id);
 });

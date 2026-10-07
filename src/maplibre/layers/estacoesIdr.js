@@ -210,7 +210,7 @@ export const unidadesIdrLayer = defineLayer({
       type: 'line',
       source: REDE,
       filter: ['==', ['geometry-type'], 'LineString'],
-      metadata: { 'dg:slot': 'point' },
+      metadata: { 'dg:slot': 'point', 'dg:legenda': false },
       paint: { 'line-color': '#ffffff', 'line-width': 1.2, 'line-opacity': 0.8 },
     },
     {
@@ -218,7 +218,7 @@ export const unidadesIdrLayer = defineLayer({
       type: 'circle',
       source: REDE,
       filter: ['==', ['geometry-type'], 'Point'],
-      metadata: { 'dg:slot': 'label' },
+      metadata: { 'dg:slot': 'label', 'dg:legenda': false },
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 4, 12, 8],
         'circle-color': 'rgba(0,0,0,0)',

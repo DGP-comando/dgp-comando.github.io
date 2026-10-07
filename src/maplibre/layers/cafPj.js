@@ -76,6 +76,9 @@ export function extensao(feats) {
   return Number.isFinite(w) ? [[w, s], [e, n]] : null;
 }
 
+/** Legenda por tipo, key = t (índice do tipo; filtra ponto e rótulo). */
+export const pjLegenda = (counts, tipos) => counts.map((count, i) => ({ key: i, label: tipos[i], color: PJ_CORES[i], count }));
+
 const cor = ['match', ['get', 't'], ...PJ_CORES.flatMap((c, i) => [i, c]), '#e2e8f0'];
 
 export default [defineLayer({
@@ -91,7 +94,7 @@ export default [defineLayer({
       type: 'line',
       source: REDE,
       filter: ['==', ['geometry-type'], 'LineString'],
-      metadata: { 'dg:slot': 'point' }, // acima das divisas do CAR e dos pontos das famílias
+      metadata: { 'dg:slot': 'point', 'dg:legenda': false }, // acima das divisas do CAR e dos pontos das famílias
       paint: {
         'line-color': ['match', ['get', 'nivel'], 2, '#fb7185', '#ffffff'],
         'line-width': ['match', ['get', 'nivel'], 2, 2.5, 1.4],
@@ -103,7 +106,7 @@ export default [defineLayer({
       type: 'circle',
       source: REDE,
       filter: ['==', ['geometry-type'], 'Point'],
-      metadata: { 'dg:slot': 'label' },
+      metadata: { 'dg:slot': 'label', 'dg:legenda': false },
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 4, 12, 8],
         'circle-color': 'rgba(0,0,0,0)',
@@ -141,7 +144,7 @@ export default [defineLayer({
     dados = pj;
     pontoDe = new Map(pontos.p.map((r) => [String(r[2]), [r[0], r[1], r[5]]]));
     const { features, counts } = pjFeatures(pj);
-    legenda = counts.map((count, i) => ({ label: pj.tipos[i], color: PJ_CORES[i], count }));
+    legenda = pjLegenda(counts, pj.tipos);
     ctx.setData(SRC, fc(features));
     const aprox = features.filter((f) => f.properties.aprox).length;
     return { count: features.length, info: `${periodo(pj.referencia)} · ${fmtInt(aprox)} com posição aproximada (sede do município)` };
@@ -183,4 +186,5 @@ export default [defineLayer({
     });
   },
   rowControls: () => ({ legend: legenda }),
+  legendFilter: 't',
 })];

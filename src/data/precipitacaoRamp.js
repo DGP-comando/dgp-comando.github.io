@@ -120,15 +120,29 @@ export function tallyPrecip(cells) {
  * ali. Classes sem celula nenhuma ficam de fora — a legenda nunca anuncia o
  * que nao esta na tela.
  * @param {Record<string, number>} counts
- * @returns {Array<{label: string, color: string, blurb: string, count: number}>}
+ * O `key` (classe) e o que o filtro pela legenda esconde (precipSemClasses).
+ * @returns {Array<{key: string, label: string, color: string, blurb: string, count: number}>}
  */
 export function precipLegend(counts) {
   return PRECIP_CLASSES
     .filter((klass) => (counts?.[klass.key] || 0) > 0)
     .map((klass) => ({
+      key: klass.key,
       label: klass.label,
       color: klass.color,
       blurb: klass.blurb,
       count: counts[klass.key],
     }));
+}
+
+/**
+ * Grade de chuva sem as classes escondidas pela legenda: a celula de classe
+ * oculta vira 0 mm (abaixo do piso, nada desenhado). Copia; a grade original
+ * segue inteira para a contagem e o tooltip.
+ * @param {ArrayLike<number>} cells
+ * @param {Set<string>} ocultos keys de PRECIP_CLASSES
+ * @returns {number[]}
+ */
+export function precipSemClasses(cells, ocultos) {
+  return Array.from(cells ?? [], (mm) => (ocultos?.has(precipClassOf(mm)) ? 0 : mm));
 }

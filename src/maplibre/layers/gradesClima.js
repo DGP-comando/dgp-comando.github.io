@@ -24,8 +24,12 @@
 import { fetchWeatherGrid, fetchWindGrid } from '../../data/datageoClient.js';
 import { loadClimaGrade } from '../../data/climaHistorico.js';
 import { pintarPixels } from '../../data/climaHistoricoPixels.js';
-import { INDICADORES, INDICADOR_PADRAO, indicador, legendaDe } from '../../data/climaHistoricoRamp.js';
-import { PRECIP_CLASSES, PRECIP_FLOOR_MM, precipClassOf, precipLegend, tallyPrecip } from '../../data/precipitacaoRamp.js';
+import {
+  INDICADORES, INDICADOR_PADRAO, indicador, indiceDe, legendaDe, maiorModulo,
+} from '../../data/climaHistoricoRamp.js';
+import {
+  PRECIP_CLASSES, PRECIP_FLOOR_MM, precipClassOf, precipLegend, precipSemClasses, tallyPrecip,
+} from '../../data/precipitacaoRamp.js';
 import { EMPTY_FC, defineLayer, fc, fmtCoord, fmtNum, tipCard } from '../kit.js';
 import { cursorContext, trackCursor } from './transporte.js';
 import {
@@ -246,15 +250,22 @@ function keepClimaBelowPrecip(map) {
 
 // ------------------------------------------------------- clima histórico
 
+const CLIMA_ID = 'datageo-clima-historico';
+
 const climaHistorico = (() => {
   let grade = null;
   let params = { indicador: INDICADOR_PADRAO };
   let legend = [];
   let cells = 0;
+  // Classe (índice na rampa) de cada célula no desenho atual: o tooltip some
+  // sobre célula escondida pela legenda.
+  let ocultos = new Set();
+  let classeDaCelula = () => -1;
 
   let pickReady = false;
 
   function render(ctx) {
+    ocultos = ctx.legendHidden?.(CLIMA_ID) ?? new Set();
     if (!grade) return;
     if (!pickReady) {
       // Máscara do PR: a chuva anual existe em toda célula dentro do estado.
@@ -267,6 +278,8 @@ const climaHistorico = (() => {
     const quebras = grade.classes?.[ind.key] || [];
     cells = valores.filter((v) => v !== null && v !== undefined).length;
     legend = legendaDe(valores, ind, quebras);
+    const maxAbs = maiorModulo(valores);
+    classeDaCelula = (k) => indiceDe(valores[k], ind, quebras, maxAbs);
     const src = ctx.map.getSource('dg-clima-historico');
     if (!src) return;
     const box = expandBounds(grade, 1.5);
@@ -274,7 +287,7 @@ const climaHistorico = (() => {
       src.updateImage({ url: BLANK_PNG, coordinates: imageCoordinates(box) });
       return;
     }
-    const url = gridImageUrl(pintarPixels(grade, valores, ind, quebras), {
+    const url = gridImageUrl(pintarPixels(grade, valores, ind, quebras, ocultos), {
       // Classes discretas: sem suavização a célula de 11 km fica visível como tal.
       scale: TEXTURE_SCALE, smooth: false, south: box.south, north: box.north,
     });
@@ -282,7 +295,7 @@ const climaHistorico = (() => {
   }
 
   return defineLayer({
-    id: 'datageo-clima-historico',
+    id: CLIMA_ID,
     name: 'Clima histórico (normal 1990–2019)',
     category: 'Clima',
     icon: '📈',
@@ -309,7 +322,8 @@ const climaHistorico = (() => {
       trackCursor(ctx.map);
       keepClimaBelowPrecip(ctx.map);
     },
-    tooltip: (p, _f, ctx) => (grade ? climaTooltip(grade, Number(p.k), { ativo: params.indicador, cur: cursorContext(ctx) }) : ''),
+    tooltip: (p, _f, ctx) => (grade && !ocultos.has(String(classeDaCelula(Number(p.k))))
+      ? climaTooltip(grade, Number(p.k), { ativo: params.indicador, cur: cursorContext(ctx) }) : ''),
     async load(ctx) {
       trackCursor(ctx.map);
       if (!grade) {
@@ -328,19 +342,40 @@ const climaHistorico = (() => {
       const key = String(chipId).replace(/^ind-/, '');
       if (!INDICADORES.some((i) => i.key === key) || key === params.indicador) return;
       params = { ...params, indicador: key };
-      render(ctx);
+      // As chaves (índice na rampa) são as mesmas em todo indicador, mas as
+      // quebras não: zera os ocultos, e o onLegend redesenha (uma vez só).
+      ctx.setLegendHidden(CLIMA_ID, []);
     },
+    // Filtro pela legenda: repinta a imagem com as classes ocultas transparentes.
+    onLegend: (_ocultos, ctx) => render(ctx),
   });
 })();
 
 // ---------------------------------------------------------- precipitação
 
+const PRECIP_ID = 'datageo-precipitacao';
+
 const precipitacao = (() => {
   let legend = [];
   let grid = null;
 
+  // Desenho e pick da grade guardada, sem as classes escondidas pela legenda
+  // (load e clique na legenda; a contagem segue a grade inteira).
+  function render(ctx) {
+    if (!grid) return;
+    const precip = precipSemClasses(grid.precip, ctx.legendHidden?.(PRECIP_ID));
+    ctx.setData('dg-precipitacao-pick', fc(gridCellFeatures(grid, (k) => Number(precip[k]) >= PRECIP_FLOOR_MM)));
+    const box = expandBounds(grid, 1);
+    // Grade seca: nada desenhado (um véu roxo diria "chuva fraca em tudo").
+    // ponytail: a imagem suavizada borra um pouco a borda da classe escondida; smooth false se incomodar.
+    const url = precip.some((mm) => Number(mm) >= PRECIP_FLOOR_MM)
+      ? gridImageUrl(precipPixels({ ...grid, precip }), { scale: TEXTURE_SCALE, smooth: true, south: box.south, north: box.north })
+      : BLANK_PNG;
+    ctx.map.getSource('dg-precipitacao')?.updateImage({ url, coordinates: imageCoordinates(box) });
+  }
+
   return defineLayer({
-    id: 'datageo-precipitacao',
+    id: PRECIP_ID,
     name: 'Precipitação',
     category: 'Clima',
     icon: '🌧️',
@@ -370,16 +405,10 @@ const precipitacao = (() => {
     async load(ctx) {
       trackCursor(ctx.map);
       grid = await fetchWeatherGrid();
-      // Pick só onde há chuva desenhada.
-      ctx.setData('dg-precipitacao-pick', fc(gridCellFeatures(grid, (k) => Number(grid.precip[k]) >= PRECIP_FLOOR_MM)));
       const tally = tallyPrecip(grid.precip);
       legend = precipLegend(tally.counts);
-      const box = expandBounds(grid, 1);
-      // Grade seca: nada desenhado (um véu roxo diria "chuva fraca em tudo").
-      const url = tally.wet === 0
-        ? BLANK_PNG
-        : gridImageUrl(precipPixels(grid), { scale: TEXTURE_SCALE, smooth: true, south: box.south, north: box.north });
-      ctx.map.getSource('dg-precipitacao')?.updateImage({ url, coordinates: imageCoordinates(box) });
+      // Pick só onde há chuva desenhada.
+      render(ctx);
       const fetchedAt = Number.isFinite(grid.fetchedAt) ? grid.fetchedAt : null;
       return {
         count: tally.wet,
@@ -391,6 +420,7 @@ const precipitacao = (() => {
       };
     },
     rowControls: () => ({ chips: [], legend }),
+    onLegend: (_ocultos, ctx) => render(ctx),
   });
 })();
 

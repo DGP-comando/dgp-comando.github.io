@@ -60,6 +60,7 @@ import {
   tipCard,
   zoomForHeight,
 } from '../kit.js';
+import { filtroComLegenda } from '../layerHost.js';
 
 // Sem `category` no app, as camadas GEV caem no grupo padrão do painel.
 const CONTEXTO = 'Contexto global';
@@ -116,6 +117,7 @@ export function buildEarthquakeFeatures(geojson) {
       alert: f.properties.alert ?? '',
       felt: Number.isFinite(Number(f.properties.felt)) && f.properties.felt !== null ? Number(f.properties.felt) : null,
       status: f.properties.status ?? '',
+      band, // faixa de profundidade: a classe do filtro pela legenda
       color: EARTHQUAKE_DEPTH_CSS[band],
       sig: mag >= EARTHQUAKE_SIGNIFICANT_MAG,
       r0: radiusPxAtZ0(earthquakeRadiusM(mag), lat),
@@ -251,7 +253,7 @@ const earthquakes = defineLayer({
     if (!Array.isArray(json?.features)) throw new Error('Malformed USGS response');
     const data = buildEarthquakeFeatures(json);
     quakeCounts = { red: 0, orange: 0, yellow: 0 };
-    for (const f of data.features) quakeCounts[earthquakeDepthBand(f.properties.depth ?? 0)] += 1;
+    for (const f of data.features) quakeCounts[f.properties.band] += 1;
     ctx.setData('dg-earthquakes', data);
     lastQuakes = data.features;
     return data.features.length;
@@ -261,11 +263,13 @@ const earthquakes = defineLayer({
   tooltip: (p, f) => earthquakeTooltip(p, f?.geometry?.coordinates),
   rowControls: () => ({
     legend: [
-      { label: '< 70 km', color: EARTHQUAKE_DEPTH_CSS.red, count: quakeCounts.red },
-      { label: '70–300 km', color: EARTHQUAKE_DEPTH_CSS.orange, count: quakeCounts.orange },
-      { label: '> 300 km', color: EARTHQUAKE_DEPTH_CSS.yellow, count: quakeCounts.yellow },
+      { key: 'red', label: '< 70 km', color: EARTHQUAKE_DEPTH_CSS.red, count: quakeCounts.red },
+      { key: 'orange', label: '70–300 km', color: EARTHQUAKE_DEPTH_CSS.orange, count: quakeCounts.orange },
+      { key: 'yellow', label: '> 300 km', color: EARTHQUAKE_DEPTH_CSS.yellow, count: quakeCounts.yellow },
     ],
   }),
+  // Disco e rótulo filtram pela faixa (o anfitrião soma ao filtro do rótulo).
+  legendFilter: 'band',
 });
 
 // ------------------------------------------------ datacenters e barragens
@@ -864,14 +868,50 @@ export function applyFiresPayload(ctx, payload, nowMs = Date.now()) {
   const points = buildFireFeatures(fires, nowMs);
   ctx.setData('dg-firms', points);
   ctx.setData('dg-firms-lbl', points);
-  ctx.setData('dg-firms-cells2', buildFireCells(fires, 2.0, nowMs));
-  ctx.setData('dg-firms-cells1', buildFireCells(fires, 1.0, nowMs));
   const sev = { red: 0, orange: 0, yellow: 0 };
   for (const f of points.features) sev[f.properties.sev] += 1;
   firmsState = { count: fires.length, sev, info: payload?.stale ? 'dado antigo (cache)' : null };
   if (selectedKey && !points.features.some((f) => f.properties.key === selectedKey)) selectFire(ctx, null);
+  redesenhaFirms(ctx, nowMs);
   ctx.refreshPanel?.();
   return firmsState;
+}
+
+const FIRMS_ID = 'local-firms';
+const FIRMS_SEV_LAYERS = ['dg-firms-heat', 'dg-firms-glow', 'dg-firms-core'];
+
+/**
+ * Filtros dos layers de focos: severidades escondidas pela legenda (heatmap,
+ * brilho, núcleo e cards) e, no card ambiente, o foco selecionado (o card
+ * completo dele é outro layer).
+ */
+export function filtrosFirms(ocultos, selKey = null) {
+  const sev = filtroComLegenda(null, ['get', 'sev'], [...(ocultos ?? [])]);
+  return {
+    sev,
+    label: filtroComLegenda(selKey ? ['!=', ['get', 'key'], selKey] : null, ['get', 'sev'], [...(ocultos ?? [])]),
+  };
+}
+
+const firmsOcultos = (ctx) => ctx.legendHidden?.(FIRMS_ID) ?? new Set();
+
+function aplicaFiltrosFirms(ctx) {
+  const { sev, label } = filtrosFirms(firmsOcultos(ctx), selectedKey);
+  for (const id of FIRMS_SEV_LAYERS) if (ctx.map.getLayer(id)) ctx.map.setFilter(id, sev);
+  if (ctx.map.getLayer('dg-firms-label')) ctx.map.setFilter('dg-firms-label', label);
+}
+
+/**
+ * Filtro pela legenda: layers por severidade, células agregadas refeitas só
+ * com os focos visíveis e a seleção limpa se o foco escolhido sumiu.
+ */
+function redesenhaFirms(ctx, nowMs = Date.now()) {
+  const ocultos = firmsOcultos(ctx);
+  const visiveis = ocultos.size ? lastFires.filter((f) => !ocultos.has(detectionSeverity(f))) : lastFires;
+  ctx.setData('dg-firms-cells2', buildFireCells(visiveis, 2.0, nowMs));
+  ctx.setData('dg-firms-cells1', buildFireCells(visiveis, 1.0, nowMs));
+  if (selectedKey && !visiveis.some((f) => fireDetectionKey(f) === selectedKey)) selectFire(ctx, null);
+  else aplicaFiltrosFirms(ctx);
 }
 
 /** Seleciona (card completo, anel) ou limpa; o card ambiente do selecionado some. */
@@ -881,9 +921,7 @@ function selectFire(ctx, feature) {
     'dg-firms-sel',
     feature ? fc([{ type: 'Feature', geometry: feature.geometry, properties: { ...feature.properties } }]) : EMPTY_FC,
   );
-  if (ctx.map.getLayer('dg-firms-label')) {
-    ctx.map.setFilter('dg-firms-label', selectedKey ? ['!=', ['get', 'key'], selectedKey] : null);
-  }
+  aplicaFiltrosFirms(ctx);
 }
 
 const fireCardLayout = (padding) => ({
@@ -896,7 +934,7 @@ const fireCardLayout = (padding) => ({
 });
 
 const firms = defineLayer({
-  id: 'local-firms',
+  id: FIRMS_ID,
   name: 'Focos de calor (queimadas)',
   analystRecords: (maxCount) => fireAnalystRecords(lastFires, maxCount),
   category: 'Ambiente',
@@ -1059,11 +1097,14 @@ const firms = defineLayer({
   },
   rowControls: () => ({
     legend: [
-      { label: 'alta', color: rgbAccent('red'), count: firmsState.sev.red },
-      { label: 'média', color: rgbAccent('orange'), count: firmsState.sev.orange },
-      { label: 'baixa', color: rgbAccent('yellow'), count: firmsState.sev.yellow },
+      { key: 'red', label: 'alta', color: rgbAccent('red'), count: firmsState.sev.red },
+      { key: 'orange', label: 'média', color: rgbAccent('orange'), count: firmsState.sev.orange },
+      { key: 'yellow', label: 'baixa', color: rgbAccent('yellow'), count: firmsState.sev.yellow },
     ],
   }),
+  // onLegend e não legendFilter: o card ambiente já recebe setFilter da
+  // seleção, e as células agregadas são recalculadas sem as severidades ocultas.
+  onLegend: (_ocultos, ctx) => redesenhaFirms(ctx),
 });
 
 export default [earthquakes, datacenters, dams, submarineCables, firms];

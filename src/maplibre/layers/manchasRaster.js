@@ -232,6 +232,32 @@ export function cantoLonLat(x, y, w, h, [oeste, sul, leste, norte]) {
 }
 
 /**
+ * Cópia dos pixels RGBA com alfa 0 onde a cor (hex minúsculo) está em
+ * `cores`: o desenho sem as classes escondidas pela legenda.
+ * @param {Uint8ClampedArray} rgba
+ * @param {Set<string>} cores
+ */
+export function apagaCores(rgba, cores) {
+  const out = new Uint8ClampedArray(rgba);
+  if (!cores.size) return out;
+  for (let k = 0; k < out.length; k += 4) {
+    if (out[k + 3] && cores.has(hex(out[k], out[k + 1], out[k + 2]))) out[k + 3] = 0;
+  }
+  return out;
+}
+
+/** PNG (blob URL; quem chama revoga) dos pixels lidos sem as `cores`. */
+export function pngSemCores(img, cores) {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.w;
+  canvas.height = img.h;
+  canvas.getContext('2d').putImageData(new ImageData(apagaCores(img.data, cores), img.w, img.h), 0, 0);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(URL.createObjectURL(blob)) : reject(new Error('PNG não gerado'))), 'image/png');
+  });
+}
+
+/**
  * Pixels do PNG e as manchas dele, para o tooltip. Uma vez por município.
  */
 function lePixels(url, bbox) {
@@ -279,13 +305,18 @@ async function divisa(ibge) {
  *   dados     async (ibge) => {bbox, ...} do município, ou null sem dado
  *   tooltip   ({classe, ha}, estado) => html do cartão
  *   aoTrocar  (estado) => void, depois de cada troca de município (ex.: desenho)
+ *   aoLer     (estado) => void, quando os pixels do município chegam (estado.img)
+ *
+ * `estado.ocultas` (Set de classes escondidas pela legenda; a camada atribui
+ * no onLegend): sobre elas não há tooltip nem contorno.
  */
-export function manchasDoMunicipio({ prefixo, cores, png, dados, tooltip, aoTrocar = () => {} }) {
+export function manchasDoMunicipio({ prefixo, cores, png, dados, tooltip, aoTrocar = () => {}, aoLer = () => {} }) {
   const AREA = `dg-${prefixo}-area`;
   const CONTORNO = `dg-${prefixo}-contorno`;
   const classeDaCor = new Map(Object.entries(cores).map(([classe, cor]) => [cor.toLowerCase(), classe]));
   const st = {
     ctx: null, ibge: null, nome: null, m: null, seq: 0, img: null, lngLat: null, realce: 0, tipVisto: false,
+    ocultas: new Set(),
   };
 
   /** Classe, área e rótulo da mancha sob [lon, lat], ou null (fora, transparente, PNG chegando). */
@@ -300,7 +331,7 @@ export function manchasDoMunicipio({ prefixo, cores, png, dados, tooltip, aoTroc
     if (!img.data[k + 3]) return null;
     const classe = classeDaCor.get(hex(img.data[k], img.data[k + 1], img.data[k + 2]));
     const r = img.manchas.rotulo[i];
-    return classe ? { classe, ha: img.ha[r], r } : null;
+    return classe && !st.ocultas.has(classe) ? { classe, ha: img.ha[r], r } : null;
   }
 
   /** Desenha o contorno da mancha `r` (0 apaga). Só refaz quando a mancha muda; em cache por mancha. */
@@ -356,6 +387,7 @@ export function manchasDoMunicipio({ prefixo, cores, png, dados, tooltip, aoTroc
       if (seq !== st.seq || !st.ctx) return;
       st.img = img;
       if (area) st.ctx.setData(AREA, { type: 'FeatureCollection', features: [area] });
+      aoLer(st);
     } catch (err) {
       console.warn(`[maplibre:${prefixo}] tooltip indisponível`, err);
     }

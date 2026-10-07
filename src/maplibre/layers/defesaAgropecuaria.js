@@ -46,6 +46,9 @@ export function exploracoesFeatures(d) {
   return { features, counts };
 }
 
+/** Legenda por grupo de DAP/CAF, key = g (índice do grupo). */
+export const exploracoesLegenda = (counts, grupos) => counts.map((count, i) => ({ key: i, label: grupos[i], color: EXPLORACOES_CORES[i], count }));
+
 const cor = ['match', ['get', 'g'], ...EXPLORACOES_CORES.flatMap((c, i) => [i, c]), '#94a3b8'];
 const vazado = ['==', ['get', 'fora'], 1];
 
@@ -79,7 +82,7 @@ export const exploracoesLayer = defineLayer({
     if (!resp.ok) throw new Error(resp.status < 500 ? 'acesso restrito: entre com usuário liberado' : `HTTP ${resp.status}`);
     dados = await gunzipJson(resp);
     const { features, counts } = exploracoesFeatures(dados);
-    legenda = counts.map((count, i) => ({ label: dados.grupos[i], color: EXPLORACOES_CORES[i], count }));
+    legenda = exploracoesLegenda(counts, dados.grupos);
     ctx.setData(SRC, fc(features));
     return {
       count: features.length,
@@ -88,6 +91,7 @@ export const exploracoesLayer = defineLayer({
   },
   tooltip: (_p, feature) => exploracaoTooltip(dados?.p?.[feature?.id], dados),
   rowControls: () => ({ legend: legenda }),
+  legendFilter: 'g',
 });
 
 // -------------------------------------------------------- estabelecimentos
