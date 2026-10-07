@@ -81,11 +81,40 @@ try {
   // Tooltip pelo pixel do PNG: o centro de Ponta Grossa é área urbanizada.
   await page.waitForFunction(() => (window.__gevEngine.map.getSource('dg-uso-solo-area')?.serialize().data?.features?.length ?? 0) > 0,
     { timeout: 30_000 }).catch(() => {});
+  const contornoN = () => page.evaluate(() => window.__gevEngine.map.getSource('dg-uso-solo-contorno')
+    ?.serialize().data?.features?.[0]?.geometry?.coordinates?.length ?? 0);
   const tipCentro = await hoverTooltip(page, -50.16, -25.095, /Uso do solo/);
-  check('uso do solo: tooltip com a classe do pixel', /Área Urbanizada/.test(tipCentro) && /Área da classe no município/.test(tipCentro)
+  check('uso do solo: tooltip com a classe do pixel', /Área Urbanizada/.test(tipCentro) && /Classe no município/.test(tipCentro)
     && /Ponta Grossa/.test(tipCentro), tipCentro.slice(0, 300));
+  // Área deste polígono: a mancha urbana contínua, menor ou igual ao total da classe (10.047 ha).
+  const haPoligono = Number((/Área deste polígono≈ ([\d.,]+) ha/.exec(tipCentro)?.[1] ?? '').replace(/\./g, '').replace(',', '.'));
+  check('uso do solo: área do polígono sob o cursor', haPoligono > 1000 && haPoligono <= 10_047 * 1.01, haPoligono);
+  const nSeg = await contornoN();
+  check('uso do solo: contorno do polígono destacado no hover', nSeg > 4, nSeg);
   const tipRural = await hoverTooltip(page, -50.33, -25.0, /Uso do solo/);
   check('uso do solo: tooltip rural com outra classe', /Uso do solo/.test(tipRural) && !/Área Urbanizada/.test(tipRural), tipRural.slice(0, 200));
+  check('uso do solo: contorno troca para o polígono novo', (await contornoN()) !== nSeg && (await contornoN()) > 0);
+  await page.mouse.move(5, 450); // fora do mapa
+  await page.waitForFunction(() => !(window.__gevEngine.map.getSource('dg-uso-solo-contorno')?.serialize().data?.features?.length),
+    { timeout: 5_000 }).catch(() => {});
+  check('uso do solo: contorno some ao sair', (await contornoN()) === 0);
+  // Rotular o maior município (Guarapuava, 313 mil ha) não pode travar o mapa.
+  const ms = await page.evaluate(async () => {
+    const { rotulaManchas, areasManchas, caixasManchas } = await import('/src/maplibre/layers/aspectosFisicos.js');
+    const img = new Image();
+    img.src = '/data/uso-solo/4109401.png';
+    await img.decode();
+    const c = Object.assign(document.createElement('canvas'), { width: img.naturalWidth, height: img.naturalHeight });
+    const c2d = c.getContext('2d', { willReadFrequently: true });
+    c2d.drawImage(img, 0, 0);
+    const { data } = c2d.getImageData(0, 0, c.width, c.height);
+    const t0 = performance.now();
+    const m = rotulaManchas(data, c.width, c.height);
+    areasManchas(m, c.width, c.height, [-52, -26, -51, -25]);
+    caixasManchas(m, c.width, c.height);
+    return Math.round(performance.now() - t0);
+  });
+  check('uso do solo: manchas do maior município em menos de 1,5 s', ms < 1500, `${ms} ms`);
   // Camada normal por cima (UC estadual: APA da Escarpa Devoniana em Ponta Grossa)
   // mantém o tooltip dela; o uso do solo só vence as bases.
   await setLayer(page, 'datageo-ucs-estaduais', true);

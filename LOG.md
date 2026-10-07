@@ -21,6 +21,21 @@
   (~15 GB lendo os 650 mil polígonos de uma vez). Reescrita para um município
   por vez com bbox no gpkg; testada em Ponta Grossa e Paranaguá.
 
+### Área de cada polígono e contorno no hover (uso do solo)
+- O navegador rotula as manchas do PNG (pixels vizinhos da mesma classe,
+  inclusive na diagonal) uma vez por município: ~0,1 s no maior. A área de
+  cada mancha soma os pixels com cos²(lat) por linha.
+- Tooltip: "Área deste polígono ≈ X ha" + total da classe no município. O
+  polígono é a mancha contínua em pixels de 30 m, recortada na divisa; não é o
+  polígono original do IAT, que vem cortado por folha de carta.
+- Contorno do polígono sob o cursor (amarelo com halo): arestas de borda
+  emendadas em anéis e simplificadas (Douglas-Peucker, 1 px), em cache por
+  mancha. Pior caso do estado: ~200 ms na primeira vez.
+- Revisão adversarial: vizinhança 4 fazia rio em diagonal virar pixel solto
+  (agora 8); contorno sem cache passava de 60 mil segmentos; clicar no próprio
+  município reprocessava tudo (agora ignora a mesma seleção).
+- QA: qa-aspectos-fisicos 29/29; unitários 2879.
+
 ### Tooltip do uso do solo
 - Classe exata sob o cursor: um polígono invisível da divisa recebe o hover e a
   cor do pixel do PNG (paleta = USO_SOLO) diz a classe; o cartão traz a área da
