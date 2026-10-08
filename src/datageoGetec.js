@@ -41,8 +41,23 @@ export function escritorioHtml({ servidores, getec, ativo = null }) {
 export function extensionistaHtml(ext) {
   if (!ext) return '';
   const r = resumo(ext);
+  // comCaf/semCaf e programas: produtores únicos (nome+ibge), como em resumo().
+  const vistos = new Set();
+  const programas = [];
+  let comCaf = 0;
+  for (const g of ext.grupos) {
+    if (g.projeto && !programas.includes(g.projeto)) programas.push(g.projeto);
+    for (const c of g.clientes) {
+      const k = `${c.nome}|${c.ibge}`;
+      if (vistos.has(k)) continue;
+      vistos.add(k);
+      if (c.caf) comCaf += 1;
+    }
+  }
+  const semCaf = r.clientes - comCaf;
   const cab = `<div>Assistidos: <b>${n(r.clientes)}</b> em <b>${n(r.grupos)}</b> grupo${r.grupos === 1 ? '' : 's'} ` +
-    `<span class="fx-dim">· ${n(r.comPonto)} com ponto na CAF (ligados ao escritório no mapa)</span></div>`;
+    `<span class="fx-dim">· ${n(comCaf)} com CAF (${n(r.comPonto)} com ponto, ligados ao escritório no mapa) · ${n(semCaf)} sem CAF</span></div>` +
+    (programas.length ? `<div class="fx-sub">Programas: ${programas.map(esc).join(' · ')}</div>` : '');
   let restantes = MAX_LISTA;
   const blocos = ext.grupos.map((g) => {
     const itens = g.clientes.slice(0, Math.max(0, restantes));

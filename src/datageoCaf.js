@@ -161,10 +161,40 @@ export function carHtml(car, areaCaf) {
     '<div class="fx-dim">Divisa generalizada do SICAR; o menor imóvel que contém o ponto</div>';
 }
 
+/**
+ * Prontuário de atendimento do produtor no GETEC (getecFichaProdutor.prontuario).
+ * `p` = entrada por CAF, ou null (sem vínculo no GETEC). Programas e técnicos
+ * vêm dos vínculos de grupo do ano; o evento datado (nº histórico, últimos
+ * atendimentos) vem da view do banco e ainda não está disponível.
+ */
+export function secaoProntuario(p) {
+  if (!p) return null;
+  const rows = [];
+  const nv = p.nVinculos ?? 0;
+  rows.push(`<div>Vínculos de grupo: <b>${n(nv)}</b> grupo${nv === 1 ? '' : 's'} no ano</div>`);
+  if (p.programas?.length) {
+    rows.push(`<div class="fx-sub" style="margin-top:6px">Programas</div>` +
+      p.programas.map((pr) => `<div>${esc(pr)}</div>`).join(''));
+  }
+  if (p.tecnicos?.length) {
+    rows.push(`<div class="fx-sub" style="margin-top:6px">Técnicos (${p.tecnicos.length})</div>` +
+      p.tecnicos.map((t) => `<div>${esc(t.nome)}</div>`).join(''));
+  }
+  if (p.grupos?.length) {
+    rows.push(`<div class="fx-sub" style="margin-top:6px">Grupos</div>` +
+      p.grupos.map((g) => `<div>${esc(g.nome)} <span class="fx-dim">· ${esc(g.projeto)} · ${esc(g.tecnicoNome)}</span></div>`).join(''));
+  }
+  rows.push('<div class="fx-dim" style="margin-top:6px">IDR GETEC (SISATER) · programas e técnicos dos vínculos de grupo. ' +
+    'Nº de atendimentos histórico e últimos atendimentos datados pendentes da view do banco.</div>');
+  return section('Prontuário de atendimento · GETEC', rows.join(''));
+}
+
 /** Cadastro completo de uma família (painel do clique). */
-export function familiaHtml(f, { car = null, grupos = [], grupo = null, pjs = [], fontes = [], tiposFonte = [] } = {}) {
+export function familiaHtml(f, { car = null, grupos = [], grupo = null, pjs = [], fontes = [], tiposFonte = [], prontuario = null } = {}) {
   const out = [];
   if (f.alertas?.length) out.push(section('Conferir', f.alertas.map((a) => `<div class="fx-warn">${esc(a)}</div>`).join('')));
+  const pront = secaoProntuario(prontuario);
+  if (pront) out.push(pront);
 
   const r = f.renda ?? {};
   const r24 = f.renda_2024;
