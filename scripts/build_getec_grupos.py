@@ -72,7 +72,9 @@ def entrar():
 
 def extensionistas(s):
     """{codigo: nome} do select do relatório de grupos."""
-    html = s.get(BASE + 'principal.php', params={'content': 'rel_prog_grupo.php'}, timeout=60).text
+    r = s.get(BASE + 'principal.php', params={'content': 'rel_prog_grupo.php'}, timeout=60)
+    r.encoding = 'utf-8'  # a página é UTF-8; sem isto requests assume latin1 e mojibaca acentos (José -> JosÃ©)
+    html = r.text
     sel = re.search(r'<select[^>]*name="codext"[^>]*>(.*?)</select>', html, re.S)
     if not sel:
         sys.exit('rel_prog_grupo.php: select de extensionistas não encontrado (sessão caiu?)')
