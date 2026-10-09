@@ -15,10 +15,16 @@
 - Pegadinhas: o serviço `Processos_Minerários_ANM` só responde com o nome
   codificado na URL (`encodeURIComponent`); o cache da litologia vai do zoom 7
   ao 16 (404 fora disso).
-- Copel: postes e transformadores existem na BDGD 2022 já baixada
-  (PONNOT 3,75 milhões; UNTRMT 458 mil), mesma base das linhas de MT.
-  Não entraram nesta sessão.
-- QA: qa-geologia 14/14; unitários 2925/2925.
+- Copel: transformadores (UNTRMT, 458 mil) e postes (PONNOT, 3,75 milhões)
+  da BDGD 2022 já baixada, a mesma das linhas de MT, em PMTiles escritos
+  pelo GDAL do pyogrio (`build_rede_copel_pontos.py`) e lidos pelo protocolo
+  `pmtiles://` (dependência `pmtiles`, registrada no engine.js). Trafos
+  9,1 MB (zoom 10 a 12), postes 24,5 MB (só zoom 13); contagem conferida
+  contra a .gdb (perda só de pontos coincidentes, ~1% em área densa).
+- Pegadinhas: o PMTiles lido pelo pyogrio está em EPSG:3857 (bbox em graus
+  devolve zero); o MVT do GDAL sai sem id de feição, então não há realce
+  por feature-state no hover desses pontos.
+- QA: qa-geologia 14/14; qa-rede-copel 7/7; unitários 2925/2925.
 
 ---
 

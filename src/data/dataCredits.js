@@ -67,7 +67,7 @@ export const DATA_CREDITS = [
   {
     key: 'aneel-bdgd',
     html:
-      'Linhas de distribuição (média tensão Copel): ' +
+      'Linhas de distribuição (média tensão), transformadores e postes da Copel: ' +
       '<a href="https://dadosabertos-aneel.opendata.arcgis.com/" target="_blank" rel="noopener">ANEEL · Base de Dados Geográfica da Distribuidora (BDGD)</a>, COPEL-DIS 2022-12-31',
   },
   {

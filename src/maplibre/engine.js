@@ -37,6 +37,7 @@
 
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import { Protocol as PmtilesProtocol } from 'pmtiles';
 import { BASEMAPS, buildBaseStyle } from './basemaps.js';
 import { mapViewForSceneCamera, sceneCameraFromMap } from './cameraMath.js';
 
@@ -101,6 +102,8 @@ export function createEngine({
     flight: null, // {complete, cancel} do voo em curso
   };
 
+  // Fontes `pmtiles://` (postes e trafos da Copel): um arquivo estático lido por HTTP Range.
+  maplibregl.addProtocol('pmtiles', new PmtilesProtocol().tile);
   const map = new maplibregl.Map({
     container,
     style: buildBaseStyle(state.basemap, { esriLabels }),

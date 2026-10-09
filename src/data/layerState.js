@@ -372,6 +372,9 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-geomorfologia', token: 'Fk', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-processos-minerarios', token: 'Fl', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-ocorrencias-minerais', token: 'Fm', disposition: 'enabled-only' }),
+  // Prefixo 'C' = rede da Copel (BDGD).
+  Object.freeze({ id: 'datageo-copel-transformadores', token: 'Ca', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-copel-postes', token: 'Cb', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));

@@ -24,6 +24,7 @@ import defesaAgropecuaria from './defesaAgropecuaria.js';
 import aspectosFisicos from './aspectosFisicos.js';
 import ottobacias from './ottobacias.js';
 import geologia from './geologia.js';
+import redeCopel from './redeCopel.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
@@ -37,7 +38,8 @@ export const LAYER_ORDER = [
   'datageo-clima', 'datageo-rios', 'datageo-cemaden', 'datageo-irtc', 'datageo-dengue', 'datageo-ar',
   'datageo-anomalias', 'datageo-incidentes', 'datageo-infohidro', 'datageo-maritimo',
   'datageo-ferrovias', 'datageo-rodovias', 'datageo-estradas', 'datageo-estradas-conveniadas',
-  'datageo-transmissao', 'datageo-distribuicao', 'datageo-subestacoes', 'datageo-geracao',
+  'datageo-transmissao', 'datageo-distribuicao', 'datageo-copel-transformadores', 'datageo-copel-postes',
+  'datageo-subestacoes', 'datageo-geracao',
   'datageo-agroindustrias-idr', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
   'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas',
   // Grupo Defesa Agropecuária: escritórios da ADAPAR primeiro, cadastros depois.
@@ -78,6 +80,7 @@ const all = [
   ...aspectosFisicos,
   ...ottobacias,
   ...geologia,
+  ...redeCopel,
 ];
 
 const rank = (id) => {
