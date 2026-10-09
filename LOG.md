@@ -27,11 +27,14 @@
 - QA: qa-geologia 14/14; qa-rede-copel 7/7; unitários 2928/2928.
 - Código MAT=MT dos postes é metálico (coincide com as ~16 mil torres,
   altura mediana 34 m), não madeira; ALT confere com metros.
-- Pausado aqui (42b4cb1 e 6b57423 no main, ambos com push). Pendente:
-  conferir o deploy do Pages e os PMTiles servidos por Range em produção;
-  rotular ESF (esforço) e ESTR (estrutura) dos postes, hoje em código BDGD
-  (pesquisa das tabelas de domínio do PRODIST Módulo 10 não concluiu);
-  opcional: zee_geologia, plerh_geolog_mineropar e unidades aquíferas.
+- Retomada: deploy do Pages ok; em produção os dois PMTiles respondem
+  206 Partial Content (Range funciona no GitHub Pages).
+- ESF (esforço) e ESTR (estrutura) dos postes seguem em código BDGD: as
+  tabelas TESTESF e TESTR estão no Manual de Instruções da BDGD, mas o PDF
+  da ANEEL fica atrás de Cloudflare, o item do ArcGIS Hub é privado e as
+  cópias abertas (Scribd, repositórios no GitHub) não trazem as tabelas.
+  Quem tiver o manual: rotular em `redeCopel.js` (posteTooltip).
+- Opcional, não feito: zee_geologia, plerh_geolog_mineropar, unidades aquíferas.
 
 ---
 
