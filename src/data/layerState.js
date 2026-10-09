@@ -377,6 +377,8 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-copel-postes', token: 'Cb', disposition: 'enabled-only' }),
   // 'Ua' = pivôs (ao lado das outorgas, 'U').
   Object.freeze({ id: 'datageo-pivos', token: 'Ua', disposition: 'enabled-only' }),
+  // 'Ea' = empresas do agro (CNPJ).
+  Object.freeze({ id: 'datageo-cnpj-agro', token: 'Ea', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));

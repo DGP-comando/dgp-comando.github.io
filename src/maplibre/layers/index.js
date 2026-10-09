@@ -26,6 +26,7 @@ import ottobacias from './ottobacias.js';
 import geologia from './geologia.js';
 import redeCopel from './redeCopel.js';
 import pivos from './pivos.js';
+import cnpjAgro from './cnpjAgro.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
@@ -47,7 +48,7 @@ export const LAYER_ORDER = [
   'datageo-adapar-unidades', 'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
   'datageo-adapar-agrotoxicos', 'datageo-adapar-fertilizantes', 'datageo-adapar-unidades-consolidacao',
   'datageo-adapar-industrias-poa',
-  'datageo-armazens', 'datageo-agroindustrias', 'datageo-ceasas',
+  'datageo-armazens', 'datageo-agroindustrias', 'datageo-cnpj-agro', 'datageo-ceasas',
   'datageo-conectividade',
   'datageo-altimetria', 'datageo-declividade', 'datageo-hidrografia', 'datageo-ottobacias-idr', 'datageo-ottobacias-trecho',
   'datageo-nascentes', 'datageo-curvas-nivel',
@@ -83,6 +84,7 @@ const all = [
   ...geologia,
   ...redeCopel,
   ...pivos,
+  ...cnpjAgro,
 ];
 
 const rank = (id) => {

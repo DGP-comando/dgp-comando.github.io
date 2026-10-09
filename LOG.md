@@ -39,6 +39,14 @@
   hídricos): os 302 do projeto pivos-pr (ANA/INPE 2022 × outorgas IAT/ANA),
   ponto no estado e círculo do zoom 10 em diante, cor e filtro pelo vínculo
   com a outorga; sem requerente. QA: qa-pivos 7/7; unitários 2931/2931.
+- Empresas do agro (CNPJ, `datageo-cnpj-agro`, token Ea, bucket privado):
+  35.203 da extração geocodificada do gestaodeater, com todos os campos da
+  Receita relidos dos zips (inclui Simples/MEI; Naturezas, Motivos,
+  Qualificações e Simples baixados do WebDAV da Receita, mês 2026-07).
+  Usuário autorizou dado sensível completo (plataforma com login e termo).
+  Pegadinhas: CSV do gestaodeater com BOM (utf-8-sig); telefone ausente vem
+  como '(0000) 00000000'; o primeiro upload levou reset de conexão (repetir
+  resolve). QA: qa-cnpj-agro 6/6; unitários 2934/2934.
 
 ---
 

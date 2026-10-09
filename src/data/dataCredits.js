@@ -85,6 +85,12 @@ export const DATA_CREDITS = [
       'cruzado com as outorgas do IAT e da ANA',
   },
   {
+    key: 'receita-cnpj',
+    html:
+      'Empresas do agro: ' +
+      '<a href="https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj" target="_blank" rel="noopener">Receita Federal · Dados Abertos do CNPJ</a>',
+  },
+  {
     key: 'sgb-ocorrencias',
     html:
       'Ocorrências de recursos minerais: ' +
