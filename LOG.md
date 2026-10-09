@@ -35,6 +35,10 @@
   cópias abertas (Scribd, repositórios no GitHub) não trazem as tabelas.
   Quem tiver o manual: rotular em `redeCopel.js` (posteTooltip).
 - Opcional, não feito: zee_geologia, plerh_geolog_mineropar, unidades aquíferas.
+- Pivôs centrais de irrigação (camada `datageo-pivos`, token Ua, aba Recursos
+  hídricos): os 302 do projeto pivos-pr (ANA/INPE 2022 × outorgas IAT/ANA),
+  ponto no estado e círculo do zoom 10 em diante, cor e filtro pelo vínculo
+  com a outorga; sem requerente. QA: qa-pivos 7/7; unitários 2931/2931.
 
 ---
 

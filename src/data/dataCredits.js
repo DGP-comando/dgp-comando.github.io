@@ -78,6 +78,13 @@ export const DATA_CREDITS = [
       'via IAT/GeoPR; sem o titular',
   },
   {
+    key: 'ana-pivos',
+    html:
+      'Pivôs centrais de irrigação: ' +
+      '<a href="https://metadados.snirh.gov.br/" target="_blank" rel="noopener">ANA/INPE · Levantamento da Agricultura Irrigada por Pivôs Centrais (2022)</a>, ' +
+      'cruzado com as outorgas do IAT e da ANA',
+  },
+  {
     key: 'sgb-ocorrencias',
     html:
       'Ocorrências de recursos minerais: ' +

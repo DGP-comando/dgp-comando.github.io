@@ -25,12 +25,13 @@ import aspectosFisicos from './aspectosFisicos.js';
 import ottobacias from './ottobacias.js';
 import geologia from './geologia.js';
 import redeCopel from './redeCopel.js';
+import pivos from './pivos.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-faxinais-territorios',
   'datageo-faxinais', 'datageo-ucs-federais',
-  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-licenciamento', 'datageo-regionais-idr',
+  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-pivos', 'datageo-licenciamento', 'datageo-regionais-idr',
   // Grupo IDR-Paraná: unidades (escritórios) primeiro, estações de pesquisa em seguida.
   'datageo-unidades-idr', 'datageo-estacoes-idr', 'datageo-fontes-protegidas',
   'datageo-associacoes', 'datageo-equipamentos-suas',
@@ -81,6 +82,7 @@ const all = [
   ...ottobacias,
   ...geologia,
   ...redeCopel,
+  ...pivos,
 ];
 
 const rank = (id) => {
