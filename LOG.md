@@ -24,7 +24,14 @@
 - Pegadinhas: o PMTiles lido pelo pyogrio está em EPSG:3857 (bbox em graus
   devolve zero); o MVT do GDAL sai sem id de feição, então não há realce
   por feature-state no hover desses pontos.
-- QA: qa-geologia 14/14; qa-rede-copel 7/7; unitários 2925/2925.
+- QA: qa-geologia 14/14; qa-rede-copel 7/7; unitários 2928/2928.
+- Código MAT=MT dos postes é metálico (coincide com as ~16 mil torres,
+  altura mediana 34 m), não madeira; ALT confere com metros.
+- Pausado aqui (42b4cb1 e 6b57423 no main, ambos com push). Pendente:
+  conferir o deploy do Pages e os PMTiles servidos por Range em produção;
+  rotular ESF (esforço) e ESTR (estrutura) dos postes, hoje em código BDGD
+  (pesquisa das tabelas de domínio do PRODIST Módulo 10 não concluiu);
+  opcional: zee_geologia, plerh_geolog_mineropar e unidades aquíferas.
 
 ---
 
