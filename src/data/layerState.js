@@ -367,6 +367,11 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-uso-solo', token: 'Ff', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-ottobacias-idr', token: 'Fg', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-ottobacias-trecho', token: 'Fh', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-litologia', token: 'Fi', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-estruturas-geologicas', token: 'Fj', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-geomorfologia', token: 'Fk', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-processos-minerarios', token: 'Fl', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-ocorrencias-minerais', token: 'Fm', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));

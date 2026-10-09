@@ -6,6 +6,22 @@
 
 ---
 
+## Sessão 2026-10-09: geologia e recursos minerais; postes e trafos da Copel
+
+- Cinco camadas novas em Aspectos físicos (`geologia.js`, tokens Fi a Fm):
+  litologia (GeoPR, padrão SGB), geomorfologia e falhas/diques da ZEE-PR,
+  processos minerários da ANM (via GeoPR, sem titular) e ocorrências
+  minerais do SGB (WFS com CORS aberto, 233 pontos).
+- Pegadinhas: o serviço `Processos_Minerários_ANM` só responde com o nome
+  codificado na URL (`encodeURIComponent`); o cache da litologia vai do zoom 7
+  ao 16 (404 fora disso).
+- Copel: postes e transformadores existem na BDGD 2022 já baixada
+  (PONNOT 3,75 milhões; UNTRMT 458 mil), mesma base das linhas de MT.
+  Não entraram nesta sessão.
+- QA: qa-geologia 14/14; unitários 2925/2925.
+
+---
+
 ## Sessão 2026-10-07 (noite, 2): ottobacias
 
 - Duas leituras, duas camadas: microbacias do IDR (PROtto, 6.210 ottobacias,

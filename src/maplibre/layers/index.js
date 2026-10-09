@@ -23,6 +23,7 @@ import programasIdr from './programasIdr.js';
 import defesaAgropecuaria from './defesaAgropecuaria.js';
 import aspectosFisicos from './aspectosFisicos.js';
 import ottobacias from './ottobacias.js';
+import geologia from './geologia.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
@@ -47,6 +48,8 @@ export const LAYER_ORDER = [
   'datageo-conectividade',
   'datageo-altimetria', 'datageo-declividade', 'datageo-hidrografia', 'datageo-ottobacias-idr', 'datageo-ottobacias-trecho',
   'datageo-nascentes', 'datageo-curvas-nivel',
+  'datageo-litologia', 'datageo-estruturas-geologicas', 'datageo-geomorfologia',
+  'datageo-processos-minerarios', 'datageo-ocorrencias-minerais',
   'datageo-uso-solo',
   'datageo-clima-historico', 'datageo-precipitacao', 'datageo-ventos',
   'datageo-radios',
@@ -74,6 +77,7 @@ const all = [
   ...defesaAgropecuaria,
   ...aspectosFisicos,
   ...ottobacias,
+  ...geologia,
 ];
 
 const rank = (id) => {

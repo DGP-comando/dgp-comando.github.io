@@ -71,6 +71,19 @@ export const DATA_CREDITS = [
       '<a href="https://dadosabertos-aneel.opendata.arcgis.com/" target="_blank" rel="noopener">ANEEL · Base de Dados Geográfica da Distribuidora (BDGD)</a>, COPEL-DIS 2022-12-31',
   },
   {
+    key: 'anm-processos',
+    html:
+      'Processos minerários ativos: ' +
+      '<a href="https://www.gov.br/anm/pt-br/assuntos/acesso-a-sistemas/sigmine" target="_blank" rel="noopener">ANM · SIGMINE</a>, ' +
+      'via IAT/GeoPR; sem o titular',
+  },
+  {
+    key: 'sgb-ocorrencias',
+    html:
+      'Ocorrências de recursos minerais: ' +
+      '<a href="https://geosgb.sgb.gov.br/" target="_blank" rel="noopener">SGB/CPRM · GeoSGB</a>',
+  },
+  {
     key: 'sicar-car',
     html:
       'Imóveis rurais (CAR, apenas ativos): ' +
