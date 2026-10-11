@@ -28,12 +28,14 @@ import redeCopel from './redeCopel.js';
 import pivos from './pivos.js';
 import cnpjAgro from './cnpjAgro.js';
 import cnesSaude from './cnesSaude.js';
+import umidadeSolo from './umidadeSolo.js';
+import gdSolar from './gdSolar.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
   'datageo-terras-indigenas', 'datageo-quilombolas', 'datageo-assentamentos', 'datageo-faxinais-territorios',
   'datageo-faxinais', 'datageo-ucs-federais',
-  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-pivos', 'datageo-licenciamento', 'datageo-regionais-idr',
+  'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-pivos', 'datageo-umidade-solo', 'datageo-licenciamento', 'datageo-regionais-idr',
   // Grupo IDR-Paraná: unidades (escritórios) primeiro, estações de pesquisa em seguida.
   'datageo-unidades-idr', 'datageo-estacoes-idr', 'datageo-fontes-protegidas',
   'datageo-associacoes', 'datageo-cnes-saude', 'datageo-equipamentos-suas',
@@ -42,7 +44,7 @@ export const LAYER_ORDER = [
   'datageo-anomalias', 'datageo-incidentes', 'datageo-infohidro', 'datageo-maritimo',
   'datageo-ferrovias', 'datageo-rodovias', 'datageo-estradas', 'datageo-estradas-conveniadas',
   'datageo-transmissao', 'datageo-distribuicao', 'datageo-copel-transformadores', 'datageo-copel-postes',
-  'datageo-subestacoes', 'datageo-geracao',
+  'datageo-subestacoes', 'datageo-geracao', 'datageo-gd-solar',
   'datageo-agroindustrias-idr', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
   'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas',
   // Grupo Defesa Agropecuária: escritórios da ADAPAR primeiro, cadastros depois.
@@ -87,6 +89,8 @@ const all = [
   ...pivos,
   ...cnpjAgro,
   ...cnesSaude,
+  ...umidadeSolo,
+  ...gdSolar,
 ];
 
 const rank = (id) => {

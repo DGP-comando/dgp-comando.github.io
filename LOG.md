@@ -21,6 +21,28 @@
   código só do CNES, fora da tabela da Receita. 4 sem coordenada ficam fora;
   1.504 empilhados espalhados em espiral.
 - QA: qa-cnes-saude 6/6; unitários das camadas 227/227.
+- Umidade do solo (`datageo-umidade-solo`, token Ub, aba Recursos hídricos,
+  JSON aberto `public/data/umidade-solo-pr.json`): pedido foi o NASA-USDA
+  Global Soil Moisture, mas no Earth Engine ele parou (0,25° em 2020-12-31,
+  10 km em 2022-08-02) e o HTTPS do GIMMS não tem mais o SMAP; usado o
+  sucessor do catálogo, SMAP L4 (`NASA/SMAP/SPL4SMGP/008`, 9 km, 3/3 h).
+  Grade 0,09° (75x48) do último dia (média das 8 imagens), 2.446 células no
+  PR, cor pelo percentil da zona de raiz (5 classes, seco a úmido), tooltip
+  com raiz, percentil, saturação, superfície, anomalia e perfil. **Estático:**
+  rerodar `scripts/build_umidade_solo.py` (EE_PROJECT=ee-avnerpaesgomes) para
+  atualizar. Pegadinha: `atScale` em EPSG:4326 é em metros (grade explodiu);
+  usar `ee.Projection('EPSG:4326', [passo, 0, x0, 0, -passo, y0])` e fixar
+  W x H. QA: qa-umidade-solo 6/6.
+- Geração distribuída solar (`datageo-gd-solar`, token Ga, aba Energia e
+  conectividade, JSON gz aberto `public/data/gd-solar-pr.json.gz`, 9,7 MB):
+  330.413 UFV da relação de GD da ANEEL (ref. 07/2026, parquet do projeto
+  energy em G:/UPWORK/01-CONTRACTS/energy), data de conexão do SIGEL pelo
+  código GD (270 mil). PF já vem mascarada pela ANEEL (CPF, nome, CEP);
+  coordenada arredondada a 0,01° na fonte, então os empilhados (até 642 no
+  mesmo ponto) saem em espiral de 15 m, avisado no tooltip. Cor pela classe
+  de consumo, raio pelo log da potência. 884 sem coordenada no PR ficam fora.
+  O leitor aceita o .gz descomprimido ou não (`lerJsonGz`), porque servidor
+  pode mandar Content-Encoding. QA: qa-gd-solar 6/6; unitários 235/235.
 
 ---
 
