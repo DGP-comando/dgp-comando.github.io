@@ -43,6 +43,9 @@ URL_SIGEL = 'https://sigel.aneel.gov.br/arcgis/rest/services/Geracao_distribuida
 MIN_UFV = 300_000  # o PR tinha 336 mil em 10/2026: abaixo disso a fonte veio quebrada
 MIN_SIGEL = 0.7  # fração mínima de UFV com coordenada do SIGEL
 MUNICIPIOS = Path(__file__).resolve().parent.parent / 'public' / 'data' / 'municipios-pr.geojson'
+# O SIGEL não responde fora do Brasil (GitHub Actions): extrato no repo, atualizado
+# sempre que o build consegue baixar (rodando daqui).
+CACHE_SIGEL = Path(__file__).resolve().parent.parent / 'data' / 'cache' / 'sigel-gd-pr.csv.gz'
 CAMPOS_SIGEL = ['CodGD', 'DthConexao', 'Tipo', 'MdaLongitude', 'MdaLatitude', 'MdaPotenciaInstalada']
 # Ref. 10/2026: a ANEEL trocou por 75 kW (teto da microgeração) a potência de ~36 mil
 # sistemas da Copel que em 07/2026 tinham a real (mediana 5 kW, igual ao SIGEL).
@@ -116,8 +119,22 @@ def carregar_aneel() -> pd.DataFrame:
 def carregar_sigel() -> pd.DataFrame:
     if ENERGY:
         return pd.read_parquet(Path(ENERGY) / 'data' / 'raw' / 'aneel' / 'sigel_gd_pr.parquet', columns=CAMPOS_SIGEL)
+    try:
+        s = baixar_sigel()
+    except Exception as exc:  # noqa: BLE001
+        if not CACHE_SIGEL.exists():
+            raise
+        print(f'AVISO: SIGEL fora do ar daqui ({exc}); usando o extrato {CACHE_SIGEL.name}')
+        return pd.read_csv(CACHE_SIGEL, dtype={'CodGD': str, 'Tipo': str})
+    CACHE_SIGEL.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.GzipFile(CACHE_SIGEL, 'wb', mtime=0) as fh:
+        fh.write(s.sort_values('CodGD').to_csv(index=False).encode('utf-8'))
+    return s
+
+
+def baixar_sigel() -> pd.DataFrame:
     total = json.loads(baixar(URL_SIGEL + '?' + urllib.parse.urlencode(
-        {'where': "SigUF='PR'", 'returnCountOnly': 'true', 'f': 'json'})))['count']
+        {'where': "SigUF='PR'", 'returnCountOnly': 'true', 'f': 'json'}), tentativas=2))['count']
     linhas = []
     for off in range(0, total, 2000):
         q = {'where': "SigUF='PR'", 'outFields': ','.join(CAMPOS_SIGEL), 'returnGeometry': 'false',

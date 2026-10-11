@@ -1,5 +1,7 @@
 # Atualiza todo mês a geração distribuída solar (relação de GD da ANEEL + SIGEL,
-# scripts/build_gd_solar.py, baixa ~100 MB). O script aborta sem gravar se a fonte vier
+# scripts/build_gd_solar.py, baixa ~100 MB). O SIGEL não responde ao Actions (IP de
+# fora do Brasil): vale o extrato data/cache/sigel-gd-pr.csv.gz, renovado rodando localmente.
+# O script aborta sem gravar se a fonte vier
 # com volume ou cobertura de coordenada abaixo do mínimo. Só faz commit se algo mudou
 # e então dispara o deploy (push com GITHUB_TOKEN não aciona deploy-pages.yml).
 name: Atualiza dados de energia
@@ -37,7 +39,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ARQ='public/data/gd-solar-pr.json.gz'
+          ARQ='public/data/gd-solar-pr.json.gz data/cache/sigel-gd-pr.csv.gz'
           if git diff --quiet -- $ARQ; then
             echo "GD solar sem mudança."
             exit 0

@@ -55,6 +55,11 @@
   SIGEL (mediana 5 kW), inflando o total em 2,3 GW: quando ANEEL = 75 e SIGEL
   < 75, vale o SIGEL, com aviso no tooltip. Total ficou 4.552 MW (jul: 4.273).
   Gzip com mtime=0 para o mesmo dado dar os mesmos bytes (sem commit à toa).
+- No Actions: a conta de serviço `datageo-actions@ee-avnerpaesgomes` (secret
+  EE_SERVICE_ACCOUNT_KEY) autenticou na 1ª rodada. O SIGEL dá timeout para os
+  runners do GitHub (IP de fora do Brasil; a ANEEL baixa normal): o build cai
+  no extrato `data/cache/sigel-gd-pr.csv.gz` (2,9 MB, renovado sempre que o
+  build roda daqui), com o mesmo resultado byte a byte.
 
 ---
 
