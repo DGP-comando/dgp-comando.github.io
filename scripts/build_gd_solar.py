@@ -126,9 +126,7 @@ def carregar_sigel() -> pd.DataFrame:
             raise
         print(f'AVISO: SIGEL fora do ar daqui ({exc}); usando o extrato {CACHE_SIGEL.name}')
         return pd.read_csv(CACHE_SIGEL, dtype={'CodGD': str, 'Tipo': str})
-    CACHE_SIGEL.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.GzipFile(CACHE_SIGEL, 'wb', mtime=0) as fh:
-        fh.write(s.sort_values('CodGD').to_csv(index=False).encode('utf-8'))
+    gravar_gz(CACHE_SIGEL, s.sort_values('CodGD').to_csv(index=False).encode('utf-8'))
     return s
 
 
@@ -147,6 +145,18 @@ def baixar_sigel() -> pd.DataFrame:
     if len(linhas) < total * 0.99:
         raise RuntimeError(f'SIGEL incompleto: {len(linhas)} de {total}')
     return pd.DataFrame(linhas)
+
+
+def gravar_gz(arq: Path, dados: bytes) -> None:
+    """Grava gzip só se o conteúdo mudou: o zlib de cada sistema comprime diferente,
+    e o Actions só faz commit quando o arquivo muda."""
+    if arq.exists():
+        with gzip.open(arq, 'rb') as fh:
+            if fh.read() == dados:
+                return
+    arq.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.GzipFile(arq, 'wb', mtime=0) as fh:
+        fh.write(dados)
 
 
 def pontos_municipios() -> dict[str, tuple[float, float]]:
@@ -239,10 +249,7 @@ def main() -> None:
         'dic': {k: v[0] for k, v in dic.items()},
         'p': p,
     }
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    # mtime=0: mesmo dado = mesmos bytes (o Actions só faz commit se mudou).
-    with gzip.GzipFile(OUT, 'wb', mtime=0) as fh:
-        fh.write(json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+    gravar_gz(OUT, json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
     mw = d.kw.sum() / 1000
     print(f'{len(p)} pontos, {mw:,.0f} MW, {sum(1 for v in p if v[17])} com data de conexão '
           f'-> {OUT.name} {OUT.stat().st_size / 1e6:.1f} MB')

@@ -46,7 +46,7 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add $ARQ
+          git add -f $ARQ  # data/cache está no .gitignore
           git commit -m 'chore: atualiza geração distribuída solar (ANEEL)'
           git pull --rebase
           git push
