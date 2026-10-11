@@ -11,6 +11,8 @@ regular lat/lon sobre o PR, fora do estado = null.
 
 Saída: public/data/umidade-solo-pr.json (dado aberto da NASA).
 Uso: set EE_PROJECT=<projeto> && py -3 scripts/build_umidade_solo.py
+     GitHub Actions (atualiza-umidade-solo.yml, diário): conta de serviço no
+     secret EE_SERVICE_ACCOUNT_KEY (JSON da chave), projeto no próprio JSON.
 """
 
 import json
@@ -53,7 +55,13 @@ def grade(ee, img, pr):
 
 def main() -> None:
     import ee
-    ee.Initialize(project=os.environ.get('EE_PROJECT'))
+    chave = os.environ.get('EE_SERVICE_ACCOUNT_KEY')
+    if chave:
+        info = json.loads(chave)
+        cred = ee.ServiceAccountCredentials(info['client_email'], key_data=chave)
+        ee.Initialize(cred, project=os.environ.get('EE_PROJECT') or info['project_id'])
+    else:
+        ee.Initialize(project=os.environ.get('EE_PROJECT'))
     col = ee.ImageCollection(ASSET)
     fim = ee.Date(col.sort('system:time_start', False).first().get('system:time_start'))
     dia = col.filterDate(fim.advance(-21, 'hour'), fim.advance(1, 'minute'))

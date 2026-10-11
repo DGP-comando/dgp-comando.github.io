@@ -1,11 +1,12 @@
 // src/maplibre/layers/gdSolar.js
 //
-// Geração distribuída fotovoltaica no PR (ANEEL, ref. 07/2026): 330 mil
-// sistemas, um ponto por empreendimento, cor pela classe de consumo e raio pela
-// potência. JSON gzipado aberto (scripts/build_gd_solar.py), linhas em array
-// com strings repetidas em dicionário (`campos`, `dic`). Pessoa física vem
-// mascarada pela própria ANEEL; a coordenada da fonte é arredondada a 0,01°,
-// então os sistemas do mesmo ponto vêm espalhados em espiral.
+// Geração distribuída fotovoltaica no PR (ANEEL, atualizada todo mês pelo
+// GitHub Actions): ~336 mil sistemas, um ponto por empreendimento, cor pela
+// classe de consumo e raio pela potência. JSON gzipado aberto
+// (scripts/build_gd_solar.py), linhas em array com strings repetidas em
+// dicionário (`campos`, `dic`). Pessoa física vem mascarada pela própria ANEEL.
+// Posição do SIGEL, arredondada a 0,01° (empilhados em espiral); quem não está
+// no SIGEL fica num ponto do município, VAZADO.
 
 import { EMPTY_FC, defineLayer, fc, fmtInt, fmtNum, tipCard } from '../kit.js';
 
@@ -36,7 +37,7 @@ export function gdFeatures(d) {
   const counts = new Array(d?.classes?.length ?? 0).fill(0);
   const features = (d?.p ?? []).map((row, id) => {
     counts[row[3]] = (counts[row[3]] ?? 0) + 1;
-    return { type: 'Feature', id, geometry: { type: 'Point', coordinates: [row[0], row[1]] }, properties: { c: row[3], kw: row[2] } };
+    return { type: 'Feature', id, geometry: { type: 'Point', coordinates: [row[0], row[1]] }, properties: { c: row[3], kw: row[2], aprox: row[21] ?? 0 } };
   });
   return { features, counts };
 }
@@ -55,6 +56,7 @@ export function gdTooltip(r, d) {
     wide: true,
     rows: [
       ['Potência instalada', kw(r.kw)],
+      ['Observação', r.obs, 'warn'],
       ['Porte', r.porte],
       ['Modalidade', r.mod],
       ['UCs que recebem crédito', r.qtdUC > 1 ? fmtInt(r.qtdUC) : ''],
@@ -70,9 +72,10 @@ export function gdTooltip(r, d) {
       ['Área', r.local],
       ['Distribuidora', r.ag],
       ['Subestação', r.se],
-      ['Posição no mapa', r.nPonto > 1
-        ? `aproximada (ANEEL arredonda a ~1 km); espalhado entre ${fmtInt(r.nPonto)} no mesmo ponto`
-        : 'aproximada (ANEEL arredonda a ~1 km)', 'warn'],
+      ['Posição no mapa', [
+        r.aprox ? 'no município (fora do SIGEL, sem coordenada)' : 'aproximada (SIGEL arredonda a ~1 km)',
+        r.nPonto > 1 ? `espalhado entre ${fmtInt(r.nPonto)} no mesmo ponto` : '',
+      ].filter(Boolean).join('; '), 'warn'],
     ] }],
     source: d?.fonte ?? 'ANEEL',
   });
@@ -83,7 +86,7 @@ export const gdSolarLayer = defineLayer({
   name: 'Geração distribuída solar (ANEEL)',
   category: 'Energia e conectividade',
   icon: '☀️',
-  source: 'ANEEL · GD (jul/2026)',
+  source: 'ANEEL · GD (mensal)',
   sources: { [SRC]: { type: 'geojson', data: EMPTY_FC } },
   layers: [{
     id: PT,
@@ -95,9 +98,11 @@ export const gdSolarLayer = defineLayer({
         6, ['interpolate', ['linear'], ['ln', ['max', ['get', 'kw'], 1]], 0, 0.8, 4.3, 1.4, 8.5, 5],
         12, ['interpolate', ['linear'], ['ln', ['max', ['get', 'kw'], 1]], 0, 2, 4.3, 3.5, 8.5, 12],
         16, ['interpolate', ['linear'], ['ln', ['max', ['get', 'kw'], 1]], 0, 4, 4.3, 6, 8.5, 18]],
-      'circle-color': ['match', ['get', 'c'], ...CORES.flatMap((cor, i) => [i, cor]), '#94a3b8'],
-      'circle-stroke-color': 'rgba(0,0,0,0.5)',
-      'circle-stroke-width': 0.4,
+      'circle-color': ['case', ['==', ['get', 'aprox'], 1], 'rgba(0,0,0,0)',
+        ['match', ['get', 'c'], ...CORES.flatMap((cor, i) => [i, cor]), '#94a3b8']],
+      'circle-stroke-color': ['case', ['==', ['get', 'aprox'], 1],
+        ['match', ['get', 'c'], ...CORES.flatMap((cor, i) => [i, cor]), '#94a3b8'], 'rgba(0,0,0,0.5)'],
+      'circle-stroke-width': ['case', ['==', ['get', 'aprox'], 1], 1.2, 0.4],
       'circle-opacity': 0.85,
     },
   }],
@@ -111,7 +116,8 @@ export const gdSolarLayer = defineLayer({
     legenda = counts.map((count, i) => ({ key: i, label: dados.classes[i], color: CORES[i], count }));
     ctx.setData(SRC, fc(features));
     const mw = dados.p.reduce((s, row) => s + row[2], 0) / 1000;
-    return { count: features.length, info: `${fmtNum(mw, 0)} MW instalados; posição aproximada (~1 km)` };
+    const noMun = dados.p.filter((row) => row[21]).length;
+    return { count: features.length, info: `${fmtNum(mw, 0)} MW instalados; ${fmtInt(noMun)} no ponto do município (vazados)` };
   },
   tooltip: (_p, feature) => gdTooltip(registro(dados, feature?.id), dados),
   rowControls: () => ({ legend: legenda }),

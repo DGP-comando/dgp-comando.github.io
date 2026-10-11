@@ -1,0 +1,52 @@
+# Atualiza todo dia a umidade do solo (NASA SMAP L4 pelo Google Earth Engine,
+# scripts/build_umidade_solo.py). Precisa do secret EE_SERVICE_ACCOUNT_KEY (JSON da
+# chave de uma conta de serviço registrada no Earth Engine). Só faz commit se o dia
+# mudou e então dispara o deploy (push com GITHUB_TOKEN não aciona deploy-pages.yml).
+name: Atualiza umidade do solo
+
+on:
+  schedule:
+    - cron: '0 10 * * *' # todo dia, 07h de Brasília
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: atualiza-dados
+  cancel-in-progress: false
+
+jobs:
+  umidade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install earthengine-api
+
+      - run: python scripts/build_umidade_solo.py
+        env:
+          PYTHONUTF8: '1'
+          EE_SERVICE_ACCOUNT_KEY: ${{ secrets.EE_SERVICE_ACCOUNT_KEY }}
+
+      - name: Commit se mudou e dispara deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ARQ='public/data/umidade-solo-pr.json'
+          if git diff --quiet -- $ARQ; then
+            echo "Umidade do solo sem dia novo."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add $ARQ
+          git commit -m 'chore: atualiza umidade do solo (SMAP L4)'
+          git pull --rebase
+          git push
+          gh workflow run deploy-pages.yml --ref main

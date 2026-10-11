@@ -1,0 +1,51 @@
+# Atualiza todo mês a geração distribuída solar (relação de GD da ANEEL + SIGEL,
+# scripts/build_gd_solar.py, baixa ~100 MB). O script aborta sem gravar se a fonte vier
+# com volume ou cobertura de coordenada abaixo do mínimo. Só faz commit se algo mudou
+# e então dispara o deploy (push com GITHUB_TOKEN não aciona deploy-pages.yml).
+name: Atualiza dados de energia
+
+on:
+  schedule:
+    - cron: '0 11 15 * *' # dia 15, 08h de Brasília (a ANEEL publica no começo do mês)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: atualiza-dados
+  cancel-in-progress: false
+
+jobs:
+  gd-solar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install pandas pyarrow shapely
+
+      - run: python scripts/build_gd_solar.py
+        env:
+          PYTHONUTF8: '1'
+
+      - name: Commit se mudou e dispara deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ARQ='public/data/gd-solar-pr.json.gz'
+          if git diff --quiet -- $ARQ; then
+            echo "GD solar sem mudança."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add $ARQ
+          git commit -m 'chore: atualiza geração distribuída solar (ANEEL)'
+          git pull --rebase
+          git push
+          gh workflow run deploy-pages.yml --ref main

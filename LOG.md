@@ -43,6 +43,18 @@
   de consumo, raio pelo log da potência. 884 sem coordenada no PR ficam fora.
   O leitor aceita o .gz descomprimido ou não (`lerJsonGz`), porque servidor
   pode mandar Content-Encoding. QA: qa-gd-solar 6/6; unitários 235/235.
+- Automação (GitHub Actions, padrão do atualiza-dados-mds.yml: commit só se
+  mudou + dispara deploy): `atualiza-umidade-solo.yml` diário 07h (conta de
+  serviço do Earth Engine no secret `EE_SERVICE_ACCOUNT_KEY`) e
+  `atualiza-dados-energia.yml` mensal dia 15 (build da GD baixa direto da
+  ANEEL e do SIGEL; ENERGY=<pasta> ainda lê os parquets locais).
+- Pegadinhas da ANEEL ref. 10/2026: (1) o parquet não traz mais a coordenada
+  do empreendimento: posição agora vem do SIGEL (272 mil, 80%) e o resto vai
+  para um ponto interno do município, vazado; (2) ~35 mil sistemas da Copel
+  passaram a 75 kW (teto da microgeração) com potência real em 07/2026 e no
+  SIGEL (mediana 5 kW), inflando o total em 2,3 GW: quando ANEEL = 75 e SIGEL
+  < 75, vale o SIGEL, com aviso no tooltip. Total ficou 4.552 MW (jul: 4.273).
+  Gzip com mtime=0 para o mesmo dado dar os mesmos bytes (sem commit à toa).
 
 ---
 

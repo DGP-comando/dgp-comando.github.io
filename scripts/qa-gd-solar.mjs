@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * qa-gd-solar — geração distribuída solar (ANEEL, JSON gz aberto): carrega os
- * 330 mil sistemas, legenda por classe de consumo filtrável, tooltip com todos
+ * ~336 mil sistemas, legenda por classe de consumo filtrável, tooltip com todos
  * os campos. Requer public/data/gd-solar-pr.json.gz (scripts/build_gd_solar.py).
  *
  * Uso: node scripts/qa-gd-solar.mjs [--url http://localhost:5173] [--shot arquivo.png]
@@ -26,7 +26,7 @@ try {
   await openApp(page, url);
   await setLayer(page, 'datageo-gd-solar', true);
   const st = await waitForStats(page, 'datageo-gd-solar', 's => s.count > 0 || s.error', 120_000);
-  check('330.413 sistemas carregados', st.stats?.count === 330413, st.stats);
+  check('mais de 300 mil sistemas carregados', st.stats?.count > 300_000 && !st.stats?.error, st.stats);
 
   await setCamera(page, { lon: -51.5, lat: -24.6, alt: 900_000 });
   await waitMapIdle(page, 60_000);
