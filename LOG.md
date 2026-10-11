@@ -6,6 +6,24 @@
 
 ---
 
+## Sessão 2026-10-11: estabelecimentos de saúde (CNES)
+
+- Camada `datageo-cnes-saude` (token Sa, aba Saúde e proteção social,
+  bucket privado): os 32.337 estabelecimentos ativos do PR com coordenada,
+  lidos dos brutos do saude-parana (CNES nacional, leitos CGHID/MS, região de
+  saúde por município). Cor e filtro pelas 9 famílias de tipo do saude-parana
+  (hospital e pronto atendimento maiores). Tooltip com todos os campos do
+  cadastro: tipo, SUS, leitos e UTI, serviços, turno, ensino, esfera, gestão,
+  natureza jurídica, CNPJ e mantenedora, endereço, região de saúde, telefone,
+  e-mail. Consultório de pessoa física traz nome e contato (autorizado).
+- Pegadinhas: `['zoom']` não pode ficar dentro de `['*', ...]` no
+  circle-radius (só no interpolate de fora); natureza 4000 (pessoa física) é
+  código só do CNES, fora da tabela da Receita. 4 sem coordenada ficam fora;
+  1.504 empilhados espalhados em espiral.
+- QA: qa-cnes-saude 6/6; unitários das camadas 227/227.
+
+---
+
 ## Sessão 2026-10-09: geologia e recursos minerais; postes e trafos da Copel
 
 - Cinco camadas novas em Aspectos físicos (`geologia.js`, tokens Fi a Fm):

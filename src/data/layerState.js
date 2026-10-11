@@ -379,6 +379,8 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-pivos', token: 'Ua', disposition: 'enabled-only' }),
   // 'Ea' = empresas do agro (CNPJ).
   Object.freeze({ id: 'datageo-cnpj-agro', token: 'Ea', disposition: 'enabled-only' }),
+  // 'Sa' = estabelecimentos de saúde (CNES).
+  Object.freeze({ id: 'datageo-cnes-saude', token: 'Sa', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));

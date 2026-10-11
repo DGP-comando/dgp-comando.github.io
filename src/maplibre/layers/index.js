@@ -27,6 +27,7 @@ import geologia from './geologia.js';
 import redeCopel from './redeCopel.js';
 import pivos from './pivos.js';
 import cnpjAgro from './cnpjAgro.js';
+import cnesSaude from './cnesSaude.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
@@ -35,7 +36,7 @@ export const LAYER_ORDER = [
   'datageo-ucs-estaduais', 'datageo-outorgas', 'datageo-pivos', 'datageo-licenciamento', 'datageo-regionais-idr',
   // Grupo IDR-Paraná: unidades (escritórios) primeiro, estações de pesquisa em seguida.
   'datageo-unidades-idr', 'datageo-estacoes-idr', 'datageo-fontes-protegidas',
-  'datageo-associacoes', 'datageo-equipamentos-suas',
+  'datageo-associacoes', 'datageo-cnes-saude', 'datageo-equipamentos-suas',
   'datageo-car', 'datageo-caf', 'datageo-caf-pj',
   'datageo-clima', 'datageo-rios', 'datageo-cemaden', 'datageo-irtc', 'datageo-dengue', 'datageo-ar',
   'datageo-anomalias', 'datageo-incidentes', 'datageo-infohidro', 'datageo-maritimo',
@@ -85,6 +86,7 @@ const all = [
   ...redeCopel,
   ...pivos,
   ...cnpjAgro,
+  ...cnesSaude,
 ];
 
 const rank = (id) => {
