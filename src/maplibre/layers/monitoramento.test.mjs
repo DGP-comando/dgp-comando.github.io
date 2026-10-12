@@ -416,6 +416,37 @@ test('tooltip InfoHidro: nome, código, coordenadas', () => {
   assert.match(infohidroTooltip(props(buildInfohidro, [{ codigo: 1, latitude: -26, longitude: -49 }])), /tt-title">Estação 1</);
 });
 
+test('tooltip InfoHidro: cadastro, última leitura, ontem e mês (cache do scrape-infohidro)', () => {
+  // recorte real de Balsa Jaracatiá (2026-10-12), com qualidade alterada para testar
+  const p = props(buildInfohidro, [{
+    codigo: '25345816', nome: 'Balsa Jaracatiá', tipo_id: 'H', coleta_id: 'T', orgao_id: 1, municipio_id: 4127858,
+    latitude: -25.5832, longitude: -53.2668, altitude: 273, inicio_operacao: '2006-05-26', data_instalacao: '2006-05-26T00:00:00Z',
+    sensores: [33, 7, 18],
+    leituras: { 7: [0, '2026-10-12T11:00:00+0000', 4], 18: [324.13, '2026-10-12T11:00:00+0000', 0], 33: [9.9, '2026-10-12T10:00:00+0000', 3] },
+    resumo_dia: { data: '2026-10-11', sensores: { 7: { sum07: 16.6, sum: 1.2 }, 18: { max: 324.426, max_hora: '09:45', min: 324.185, min_hora: '23:30', avg: 324.329 } } },
+    resumo_mes: { mes: '2026-09', sensores: { 7: { sum: 274.4 }, 18: { max: 324.641, max_em: '2026-09-03T16:00:00+0000' } } },
+  }]);
+  // o MapLibre devolve a propriedade como string; o tooltip aceita as duas formas
+  const html = infohidroTooltip({ ...p, telemetria: String(p.telemetria) });
+  assert.match(html, /tt-badge tt-info">HIDROLÓGICA</);
+  assert.equal(row(html, 'Município').value, 'Três Barras do Paraná');
+  assert.equal(row(html, 'Órgão').value, 'Simepar');
+  assert.equal(row(html, 'Altitude').value, '273 m');
+  assert.equal(row(html, 'Em operação desde').value, '26/05/2006');
+  assert.equal(row(html, 'Instalação'), null);
+  assert.equal(row(html, 'Sensores').value, 'Nível, Vazão, Chuva');
+  assert.match(html, /Última leitura · 12\/10 08:00/);
+  assert.deepEqual(row(html, 'Nível'), { tone: '', value: '324,13 m' });
+  assert.deepEqual(row(html, 'Chuva'), { tone: 'tt-muted', value: '0,0 mm · não verificado' });
+  assert.deepEqual(row(html, 'Vazão'), { tone: 'tt-alert', value: 'reprovado' });
+  assert.match(html, /Ontem · 11\/10\/2026/);
+  assert.equal(row(html, 'Chuva acum. até às 07h').value, '16,6 mm');
+  assert.match(html, /máx 324,43 m \(09:45\) · mín 324,19 m \(23:30\) · méd 324,33 m/);
+  assert.match(html, /Mês · set\/2026/);
+  assert.match(html, /<dd class="">324,64 m \(03\/09 13:00\)</); // valor único: sem "máx"
+  assert.equal(row(html, 'Chuva total').value, '1,2 mm'); // 1ª ocorrência = ontem
+});
+
 test('tooltip AIS: dimensões, calado, ETA e IMO zero omitido', () => {
   const p = buildMaritimo({ lineup: null, vessels: [{
     mmsi: 710000001, vessel_name: 'NAVIO', ship_type_label: 'Tanker', latitude: -25.6, longitude: -48.3, sog_knots: 0, cog_deg: 90,

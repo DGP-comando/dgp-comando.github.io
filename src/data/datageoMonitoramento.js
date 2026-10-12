@@ -16,7 +16,7 @@ import { centroidByIbge, centroidByName } from './prCentroids.js';
 import { lineupEntityRows } from './portLineup.js';
 import { farIconPixels, headingToRotation, shipDimensions } from './vesselIcon.js';
 import { progressoOperacao } from './vesselTooltip.js';
-import { fmtCoord, fmtDateTime, fmtInt, fmtNum, fmtPct, tipCard } from '../maplibre/tooltipCard.js';
+import { fmtCoord, fmtDate, fmtDateTime, fmtInt, fmtNum, fmtPct, tipCard } from '../maplibre/tooltipCard.js';
 
 /** Mesmo teto de rótulo por camada do app (datageoLayers.LABEL_MAX_DISTANCE), em metros de câmera. */
 export const LABEL_MAX_DISTANCE = Object.freeze({
@@ -416,13 +416,20 @@ export function buildInfohidro(rows) {
       label: `${row.nome ?? row.codigo}`,
       codigo: row.codigo,
       tipoId: row.tipo_id,
-      // tooltip (infohidroTooltip): campos escalares do cache, se houver
+      // tooltip (infohidroTooltip): cadastro da /telemetry/v1/station
       nome: row.nome,
-      municipio: row.municipio ?? row.municipality,
-      rio: row.rio,
-      bacia: row.bacia,
+      municipio: centroidByIbge(row.municipio_id)?.name ?? null,
+      municipioId: row.municipio_id,
+      orgaoId: row.orgao_id,
+      coletaId: row.coleta_id,
       altitude: numOrNull(row.altitude),
-      responsavel: row.responsavel ?? row.orgao,
+      inicioOperacao: row.inicio_operacao,
+      dataInstalacao: row.data_instalacao,
+      // telemetria (só PR, scrape-infohidro): JSON porque o MapLibre achata
+      // propriedades aninhadas em string no hover
+      telemetria: row.leituras || row.resumo_dia || row.resumo_mes || row.sensores?.length
+        ? JSON.stringify({ sensores: row.sensores, leituras: row.leituras, dia: row.resumo_dia, mes: row.resumo_mes })
+        : null,
       lat,
       lon,
     }));
@@ -885,22 +892,114 @@ export function incidentesTooltip(p) {
 
 // ------------------------------------------------ InfoHidro
 
+// Tabelas de domínio da API (/telemetry/v1/stationtype, /organization,
+// /sensor, /quality), conferidas em 2026-10-12. coletaId (T/C) não tem
+// tabela na API: vai cru.
+const IH_TIPO = { H: 'Hidrológica', M: 'Meteorológica', P: 'Pluviométrica' };
+const IH_ORGAO = { 1: 'Simepar', 4: 'Inmet' };
+// sensorId -> [rótulo, unidade, casas, chaves do resumo]; ordem = exibição
+const IH_SENSOR = new Map([
+  [18, ['Nível', 'm', 2, ['max', 'min', 'avg']]],
+  [33, ['Vazão', 'm³/s', 2, ['max', 'min', 'avg']]],
+  [7, ['Chuva', 'mm', 1, ['sum07', 'sum']]],
+  [1, ['Temperatura', '°C', 1, ['avg']]],
+  [4, ['Temp. máxima', '°C', 1, ['max']]],
+  [5, ['Temp. mínima', '°C', 1, ['min']]],
+  [3, ['Temp. mín. de relva', '°C', 1, ['min']]],
+  [2, ['Umidade relativa', '%', 0, ['max', 'min', 'avg']]],
+  [15, ['Pressão', 'hPa', 1, ['avg']]],
+  [8, ['Vento', 'm/s', 1, ['max', 'avg']]],
+  [9, ['Rajada', 'm/s', 1, ['max']]],
+  [10, ['Direção do vento', '°', 0, ['pred']]],
+  [6, ['Radiação solar', 'W/m²', 0, ['max', 'avg']]],
+]);
+// qualidadeId -> [rótulo, tom]; 0 (aprovado) não aparece
+const IH_QUALIDADE = { 1: ['suspeito', 'warn'], 2: ['possível erro', 'warn'], 3: ['reprovado', 'alert'], 4: ['não verificado', 'muted'] };
+const IH_RESUMO = { max: 'máx', min: 'mín', avg: 'méd', pred: 'pred.' };
+
+const ihJson = (v) => {
+  if (!v) return null;
+  if (typeof v !== 'string') return v;
+  try { return JSON.parse(v); } catch { return null; }
+};
+
+/** ISO da API ("...+0000") -> ISO que o Date entende ("...+00:00"). */
+const ihIso = (iso) => String(iso ?? '').replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+/** "dd/mm hh:mm" (Brasília). */
+const ihDiaHora = (iso) => fmtDateTime(ihIso(iso)).replace(/\/\d{4}/, '');
+
+function ihLeituraRows(leituras) {
+  const rows = [];
+  for (const [sid, [rotulo, unid, casas]] of IH_SENSOR) {
+    const l = leituras?.[sid];
+    if (!l) continue;
+    const [valor, , q] = l;
+    const [qRotulo, tom] = IH_QUALIDADE[q] ?? [];
+    // reprovado: o número engana, mostra só o status
+    const txt = q === 3 ? '' : fmtNum(valor, casas, unid);
+    rows.push([rotulo, [txt, qRotulo].filter(Boolean).join(' · '), tom]);
+  }
+  return rows;
+}
+
+function ihResumoRows(sensores, quando) {
+  const rows = [];
+  for (const [sid, [rotulo, unid, casas, chaves]] of IH_SENSOR) {
+    const s = sensores?.[sid];
+    if (!s) continue;
+    if (sid === 7) {
+      rows.push(['Chuva acum. até às 07h', fmtNum(s.sum07, casas, unid)]);
+      rows.push(['Chuva total', fmtNum(s.sum, casas, unid)]);
+      continue;
+    }
+    const ks = chaves.filter((k) => Number.isFinite(s[k]));
+    // um valor só ("Temp. máxima 20,9 °C") dispensa o prefixo máx/mín/méd
+    const partes = ks.map((k) => {
+      const em = quando(s[`${k}_hora`], s[`${k}_em`]);
+      return `${ks.length > 1 ? `${IH_RESUMO[k]} ` : ''}${fmtNum(s[k], casas, unid)}${em ? ` (${em})` : ''}`;
+    });
+    if (partes.length) rows.push([rotulo, partes.join(' · ')]);
+  }
+  return rows;
+}
+
+const IH_MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
 export function infohidroTooltip(p) {
+  const t = ihJson(p.telemetria) ?? {};
+  const datas = Object.values(t.leituras ?? {}).map((l) => l[1]).sort();
+  const ultima = datas.at(-1);
+  const orgao = IH_ORGAO[p.orgaoId];
+  const sensores = [...IH_SENSOR].filter(([sid]) => t.sensores?.includes(sid)).map(([, [rotulo]]) => rotulo);
+  const [ano, mes] = String(t.mes?.mes ?? '').split('-');
   return tipCard({
     icon: '📡',
     title: p.nome || `Estação ${p.codigo ?? ''}`.trim(),
-    subtitle: ['Telemetria hídrica · SIMEPAR/InfoHidro', p.municipio].filter(Boolean).join(' · '),
+    subtitle: ['Telemetria hídrica · InfoHidro', p.municipio].filter(Boolean).join(' · '),
+    badge: IH_TIPO[p.tipoId] ? { text: IH_TIPO[p.tipoId].toUpperCase(), tone: 'info' } : undefined,
     rows: [
       ['Código', p.codigo],
-      ['Tipo (id InfoHidro)', p.tipoId],
       ['Município', p.municipio],
-      ['Rio', p.rio],
-      ['Bacia', p.bacia],
+      ['Órgão', orgao],
+      ['Coleta', p.coletaId],
       ['Altitude', fmtInt(p.altitude, 'm')],
-      ['Responsável', p.responsavel],
+      ['Em operação desde', fmtDate(p.inicioOperacao)],
+      ['Instalação', p.dataInstalacao && String(p.dataInstalacao).slice(0, 10) !== p.inicioOperacao ? fmtDate(String(p.dataInstalacao).slice(0, 10)) : ''],
+      ['Sensores', sensores.join(', ')],
       ['Coordenadas', fmtCoord(p.lat, p.lon)],
     ],
-    source: 'SIMEPAR · InfoHidro · DataGeo PR',
+    sections: [
+      { title: ultima ? `Última leitura · ${ihDiaHora(ultima)}` : 'Última leitura', rows: ihLeituraRows(t.leituras) },
+      { title: t.dia ? `Ontem · ${fmtDate(t.dia.data)}` : 'Ontem', rows: ihResumoRows(t.dia?.sensores, (hora) => hora) },
+      {
+        title: mes ? `Mês · ${IH_MESES[Number(mes) - 1]}/${ano}` : 'Mês',
+        rows: ihResumoRows(t.mes?.sensores, (_, em) => (em ? ihDiaHora(em) : '')),
+      },
+    ],
+    note: ultima || !p.telemetria ? '' : 'Sem transmissão nas 3 h anteriores à coleta.',
+    source: `${orgao ?? 'SIMEPAR'} · InfoHidro · DataGeo PR`,
+    updated: ultima ? ihIso(ultima) : undefined,
+    wide: Boolean(p.telemetria),
   });
 }
 
