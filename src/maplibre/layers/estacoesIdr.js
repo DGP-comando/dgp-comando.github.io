@@ -197,6 +197,57 @@ const unidadesBase = makePointsLayer({
   labelDists: [400_000, 60_000],
 });
 
+// Marcador do escritório: disco na cor do grupo com o prédio (Material "business",
+// Apache 2.0) em branco, como o 🏢 do menu. Emoji não sai nas glyphs do MapLibre,
+// por isso a imagem em canvas, uma por grupo, criada sob demanda (sobrevive à
+// troca de estilo pelo styleimagemissing).
+const ICONE = 'dg-unidade-idr-';
+const ICONE_PX = 24;
+const ICONE_RATIO = 2;
+const PREDIO = 'M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z';
+
+function iconeUnidade(cor) {
+  const n = ICONE_PX * ICONE_RATIO;
+  const g = Object.assign(document.createElement('canvas'), { width: n, height: n }).getContext('2d');
+  g.scale(ICONE_RATIO, ICONE_RATIO);
+  g.beginPath();
+  g.arc(12, 12, 11, 0, Math.PI * 2);
+  g.fillStyle = cor;
+  g.fill();
+  g.lineWidth = 1.2;
+  g.strokeStyle = 'rgba(0,0,0,0.7)';
+  g.stroke();
+  g.translate(5.5, 5.5);
+  g.scale(13 / 24, 13 / 24);
+  g.fillStyle = '#fff';
+  g.fill(new Path2D(PREDIO));
+  return g.getImageData(0, 0, n, n);
+}
+
+const mapasComIcone = new WeakSet();
+function ligarIcones(map) {
+  if (mapasComIcone.has(map)) return;
+  mapasComIcone.add(map);
+  map.on('styleimagemissing', (e) => {
+    const cor = e.id?.startsWith(ICONE) && UNIDADE_COR[e.id.slice(ICONE.length)];
+    if (cor && !map.hasImage(e.id)) map.addImage(e.id, iconeUnidade(cor), { pixelRatio: ICONE_RATIO });
+  });
+}
+
+// Mesmo id do círculo do makePointsLayer (interactive e legenda seguem valendo).
+const iconeLayer = (circulo) => ({
+  id: circulo.id,
+  type: 'symbol',
+  source: circulo.source,
+  layout: {
+    'icon-image': ['concat', ICONE, ['get', '__grupo']],
+    // __size 9 (regional, pesquisa, sede) = 24 px de perto; UME (6) menor.
+    'icon-size': ['interpolate', ['linear'], ['zoom'], 5, ['/', ['get', '__size'], 14], 10, ['/', ['get', '__size'], 9]],
+    'icon-allow-overlap': true,
+    'symbol-sort-key': ['get', '__size'],
+  },
+});
+
 // Os pontos do makePointsLayer + a lista de servidores para o tooltip das UMEs
 // e os gerentes para o das regionais
 // (falha da lista não derruba a camada: o tooltip avisa).
@@ -226,9 +277,12 @@ export const unidadesIdrLayer = defineLayer({
         'circle-stroke-width': 2,
       },
     },
-    ...unidadesBase.layers,
+    // Rótulo sobe acima do ícone (maior que o círculo antigo).
+    ...unidadesBase.layers.map((l) => (l.type === 'circle' ? iconeLayer(l)
+      : { ...l, layout: { ...l.layout, 'text-offset': [0, -1.2] } })),
   ],
   async load(ctx) {
+    ligarIcones(ctx.map);
     const [n, dados, ger, gg, gj] = await Promise.all([
       unidadesBase.load(ctx),
       loadServidoresIdr().catch((err) => {
