@@ -447,6 +447,28 @@ test('tooltip InfoHidro: cadastro, última leitura, ontem e mês (cache do scrap
   assert.equal(row(html, 'Chuva total').value, '1,2 mm'); // 1ª ocorrência = ontem
 });
 
+test('tooltip InfoHidro restrito (Sanepar): reservatório, volumes em % e alerta', () => {
+  const base = {
+    codigo: '25534939', nome: 'Reservatório Captação Passaúna', tipo_id: 'H', orgao_id: 7, municipio_id: 4101804,
+    latitude: -25.51, longitude: -49.37, restrito: true, sensores: [18, 187],
+    parametros: { Obs: 'Fonte: Sanepar FEV/2024', COTA_ALERTA: 887.17, COTA_NIVEL_NORMAL: 888, AREA_BACIA: '--', VOLUME_UTIL: 50.13, VOLUME_TOTAL: 69.5 },
+  };
+  const tip = (nivel) => {
+    const p = props(buildInfohidro, [{ ...base, leituras: { 18: [nivel, '2026-10-12T12:00:00+0000', 0], 187: [1.425, '2026-10-12T12:00:00+0000', 0] } }]);
+    assert.equal(p.restrito, true);
+    return infohidroTooltip({ ...p, telemetria: String(p.telemetria) });
+  };
+  const html = tip(887.179);
+  assert.match(html, /acesso restrito · Araucária/);
+  assert.equal(row(html, 'Órgão').value, 'Sanepar');
+  assert.deepEqual(row(html, 'Cota de alerta'), { tone: '', value: '887,17 m · nível 0,01 m acima' });
+  assert.equal(row(html, 'Volume útil / total').value, '50,13 / 69,50 hm³');
+  assert.equal(row(html, 'Área da bacia'), null); // "--" some
+  assert.equal(row(html, 'Fonte dos parâmetros').value, 'Sanepar FEV/2024');
+  assert.equal(row(html, 'Volume útil').value, '142,5 %'); // fração da API vira %
+  assert.deepEqual(row(tip(886.5), 'Cota de alerta'), { tone: 'tt-alert', value: '887,17 m · nível 0,67 m abaixo' });
+});
+
 test('tooltip AIS: dimensões, calado, ETA e IMO zero omitido', () => {
   const p = buildMaritimo({ lineup: null, vessels: [{
     mmsi: 710000001, vessel_name: 'NAVIO', ship_type_label: 'Tanker', latitude: -25.6, longitude: -48.3, sog_knots: 0, cog_deg: 90,

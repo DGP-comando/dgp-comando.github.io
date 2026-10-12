@@ -329,10 +329,26 @@ export async function fetchActiveIncidents() {
 /** Estacoes de telemetria InfoHidro/SIMEPAR (cache do scrape-infohidro). */
 export async function fetchInfohidroStations() {
   const cached = await dgCache('infohidro_estacoes_pr', { ttlMs: DATAGEO_TTL.layer });
-  if (!cached) return [];
-  const payload = cached.data;
+  const payload = cached?.data;
   const items = Array.isArray(payload) ? payload : (payload?.items ?? []);
-  return Array.isArray(items) ? items : [];
+  const publicas = Array.isArray(items) ? items : [];
+  return [...publicas, ...(await fetchInfohidroSanepar())];
+}
+
+/**
+ * Estações Sanepar/IAT com parâmetros dos reservatórios (acesso restrito,
+ * bucket privado, gravado pelo scrape-infohidro). Sem sessão ou sem acesso:
+ * [] e a camada mostra só as públicas.
+ */
+async function fetchInfohidroSanepar() {
+  try {
+    const resp = await dgFetchData('/privado/infohidro-sanepar.json');
+    if (!resp.ok) return [];
+    const items = (await resp.json())?.items;
+    return Array.isArray(items) ? items.map((s) => ({ ...s, restrito: true })) : [];
+  } catch {
+    return [];
+  }
 }
 
 /** Ultimas noticias do PR (ticker). */

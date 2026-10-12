@@ -412,7 +412,8 @@ export function buildInfohidro(rows) {
     const lon = Number(row.longitude);
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     features.push(feature(`datageo-infohidro:${row.codigo}`, lon, lat, {
-      ...pointStyle(C.CYAN, 0.55, 4, C.BLACK, 0, 0),
+      // Sanepar/IAT (bucket privado) em azul e maior, para separar das públicas
+      ...(row.restrito ? pointStyle(C.DEEPSKYBLUE, 0.9, 6, C.WHITE, 0.8, 1) : pointStyle(C.CYAN, 0.55, 4, C.BLACK, 0, 0)),
       label: `${row.nome ?? row.codigo}`,
       codigo: row.codigo,
       tipoId: row.tipo_id,
@@ -425,10 +426,11 @@ export function buildInfohidro(rows) {
       altitude: numOrNull(row.altitude),
       inicioOperacao: row.inicio_operacao,
       dataInstalacao: row.data_instalacao,
+      restrito: Boolean(row.restrito),
       // telemetria (só PR, scrape-infohidro): JSON porque o MapLibre achata
       // propriedades aninhadas em string no hover
-      telemetria: row.leituras || row.resumo_dia || row.resumo_mes || row.sensores?.length
-        ? JSON.stringify({ sensores: row.sensores, leituras: row.leituras, dia: row.resumo_dia, mes: row.resumo_mes })
+      telemetria: row.leituras || row.resumo_dia || row.resumo_mes || row.sensores?.length || row.parametros
+        ? JSON.stringify({ sensores: row.sensores, leituras: row.leituras, dia: row.resumo_dia, mes: row.resumo_mes, par: row.parametros })
         : null,
       lat,
       lon,
@@ -896,11 +898,17 @@ export function incidentesTooltip(p) {
 // /sensor, /quality), conferidas em 2026-10-12. coletaId (T/C) não tem
 // tabela na API: vai cru.
 const IH_TIPO = { H: 'Hidrológica', M: 'Meteorológica', P: 'Pluviométrica' };
-const IH_ORGAO = { 1: 'Simepar', 4: 'Inmet' };
-// sensorId -> [rótulo, unidade, casas, chaves do resumo]; ordem = exibição
+const IH_ORGAO = { 1: 'Simepar', 4: 'Inmet', 7: 'Sanepar', 84: 'IAT' };
+// sensorId -> [rótulo, unidade, casas, chaves do resumo, fator]; ordem =
+// exibição. 187/188 vêm como fração (Iraí: 1,024 = 42,55 de 41,56 hm³).
 const IH_SENSOR = new Map([
   [18, ['Nível', 'm', 2, ['max', 'min', 'avg']]],
+  [351, ['Nível (câmera)', 'm', 2, ['max', 'min', 'avg']]],
   [33, ['Vazão', 'm³/s', 2, ['max', 'min', 'avg']]],
+  [55, ['Vazão vertida', 'm³/s', 2, ['max', 'avg']]],
+  [294, ['Volume', 'hm³', 2, ['avg']]],
+  [187, ['Volume útil', '%', 1, ['avg'], 100]],
+  [188, ['Volume total', '%', 1, ['avg'], 100]],
   [7, ['Chuva', 'mm', 1, ['sum07', 'sum']]],
   [1, ['Temperatura', '°C', 1, ['avg']]],
   [4, ['Temp. máxima', '°C', 1, ['max']]],
@@ -930,13 +938,13 @@ const ihDiaHora = (iso) => fmtDateTime(ihIso(iso)).replace(/\/\d{4}/, '');
 
 function ihLeituraRows(leituras) {
   const rows = [];
-  for (const [sid, [rotulo, unid, casas]] of IH_SENSOR) {
+  for (const [sid, [rotulo, unid, casas, , fator = 1]] of IH_SENSOR) {
     const l = leituras?.[sid];
     if (!l) continue;
     const [valor, , q] = l;
     const [qRotulo, tom] = IH_QUALIDADE[q] ?? [];
     // reprovado: o número engana, mostra só o status
-    const txt = q === 3 ? '' : fmtNum(valor, casas, unid);
+    const txt = q === 3 || valor === null ? '' : fmtNum(valor * fator, casas, unid);
     rows.push([rotulo, [txt, qRotulo].filter(Boolean).join(' · '), tom]);
   }
   return rows;
@@ -944,7 +952,7 @@ function ihLeituraRows(leituras) {
 
 function ihResumoRows(sensores, quando) {
   const rows = [];
-  for (const [sid, [rotulo, unid, casas, chaves]] of IH_SENSOR) {
+  for (const [sid, [rotulo, unid, casas, chaves, fator = 1]] of IH_SENSOR) {
     const s = sensores?.[sid];
     if (!s) continue;
     if (sid === 7) {
@@ -956,11 +964,44 @@ function ihResumoRows(sensores, quando) {
     // um valor só ("Temp. máxima 20,9 °C") dispensa o prefixo máx/mín/méd
     const partes = ks.map((k) => {
       const em = quando(s[`${k}_hora`], s[`${k}_em`]);
-      return `${ks.length > 1 ? `${IH_RESUMO[k]} ` : ''}${fmtNum(s[k], casas, unid)}${em ? ` (${em})` : ''}`;
+      return `${ks.length > 1 ? `${IH_RESUMO[k]} ` : ''}${fmtNum(s[k] * fator, casas, unid)}${em ? ` (${em})` : ''}`;
     });
     if (partes.length) rows.push([rotulo, partes.join(' · ')]);
   }
   return rows;
+}
+
+/** Parâmetros do reservatório (/hydrological, só com acesso Sanepar); "--" = sem valor. */
+function ihReservatorioRows(par, nivel) {
+  if (!par) return [];
+  const n = (k) => (Number.isFinite(Number(par[k])) && par[k] !== '' ? Number(par[k]) : null);
+  const cota = (k) => fmtNum(n(k), 2, 'm');
+  const alerta = n('COTA_ALERTA');
+  // nível abaixo da cota de alerta = reservatório em alerta de estiagem
+  const folga = Number.isFinite(nivel) && alerta !== null ? nivel - alerta : null;
+  const tomadas = ['TOMADA_DAGUA_SUPERIOR', 'TOMADA_DAGUA_INTERMEDIARIA_SUPERIOR', 'TOMADA_DAGUA_INTERMEDIARIA',
+    'TOMADA_DAGUA_INTERMEDIARIA_INFERIOR', 'TOMADA_DAGUA_INFERIOR'].map(n).filter((v) => v !== null);
+  return [
+    ['Cota de alerta', alerta === null ? '' : `${cota('COTA_ALERTA')}${folga === null ? '' : ` · nível ${fmtNum(Math.abs(folga), 2, 'm')} ${folga >= 0 ? 'acima' : 'abaixo'}`}`,
+      folga !== null && folga < 0 ? 'alert' : undefined],
+    ['Nível normal', cota('COTA_NIVEL_NORMAL')],
+    ['Cota operacional', n('COTA_MINIMA_OPERACIONAL') !== null || n('COTA_MAXIMA_OPERACIONAL') !== null
+      ? `${cota('COTA_MINIMA_OPERACIONAL') || '?'} a ${cota('COTA_MAXIMA_OPERACIONAL') || '?'}` : ''],
+    ['Cota mín. / máx.', n('COTA_MINIMA') !== null || n('COTA_MAXIMA') !== null ? `${cota('COTA_MINIMA') || '?'} / ${cota('COTA_MAXIMA') || '?'}` : ''],
+    ['Máxima maximorum', cota('COTA_MAXIMA_MAXIMORUM')],
+    ['Vertedouro', cota('COTA_VERTEDOURO')],
+    ['Coroamento', cota('COTA_COROAMENTO')],
+    ['Fundo da barragem', cota('COTA_FUNDO_BARRAGEM')],
+    ["Tomadas d'água", tomadas.map((v) => fmtNum(v, 2)).join(' · ') + (tomadas.length ? ' m' : '')],
+    ['Volume útil / total', n('VOLUME_UTIL') !== null || n('VOLUME_TOTAL') !== null
+      ? `${fmtNum(n('VOLUME_UTIL'), 2) || '?'} / ${fmtNum(n('VOLUME_TOTAL'), 2) || '?'} hm³` : ''],
+    ['Volume de alerta', fmtNum(n('VOLUME_ALERTA'), 2, 'hm³')],
+    ['Volume morto', fmtNum(n('VOLUME_MORTO'), 2, 'hm³')],
+    ['Reserva técnica', fmtNum(n('VOLUME_RESERVA_TECNICA'), 2, 'hm³')],
+    ['Área do reservatório', fmtNum(n('AREA_RESERVATORIO'), 2, 'km²')],
+    ['Área da bacia', fmtNum(n('AREA_BACIA'), 1, 'km²')],
+    ['Fonte dos parâmetros', String(par.Obs ?? '').replace(/^Fonte:\s*/, '')],
+  ];
 }
 
 const IH_MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -975,7 +1016,7 @@ export function infohidroTooltip(p) {
   return tipCard({
     icon: '📡',
     title: p.nome || `Estação ${p.codigo ?? ''}`.trim(),
-    subtitle: ['Telemetria hídrica · InfoHidro', p.municipio].filter(Boolean).join(' · '),
+    subtitle: ['Telemetria hídrica · InfoHidro', p.restrito ? 'acesso restrito' : '', p.municipio].filter(Boolean).join(' · '),
     badge: IH_TIPO[p.tipoId] ? { text: IH_TIPO[p.tipoId].toUpperCase(), tone: 'info' } : undefined,
     rows: [
       ['Código', p.codigo],
@@ -989,6 +1030,7 @@ export function infohidroTooltip(p) {
       ['Coordenadas', fmtCoord(p.lat, p.lon)],
     ],
     sections: [
+      { title: 'Reservatório', rows: ihReservatorioRows(t.par, t.leituras?.[18]?.[2] === 3 ? NaN : Number(t.leituras?.[18]?.[0] ?? NaN)) },
       { title: ultima ? `Última leitura · ${ihDiaHora(ultima)}` : 'Última leitura', rows: ihLeituraRows(t.leituras) },
       { title: t.dia ? `Ontem · ${fmtDate(t.dia.data)}` : 'Ontem', rows: ihResumoRows(t.dia?.sensores, (hora) => hora) },
       {
