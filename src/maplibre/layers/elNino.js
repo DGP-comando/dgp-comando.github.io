@@ -264,7 +264,9 @@ export const elNinoLayer = defineLayer({
       source: SRC,
       paint: {
         'fill-color': ['match', ['get', 'c'], 0, '#000', '#000'], // trocada a cada render (setPaintProperty)
-        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.85, 0.62],
+        'fill-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0.9, 0.75],
+        // Sem contorno: a borda antialiasing desenhava a grade de 0,1° por cima do campo.
+        'fill-antialias': false,
       },
     },
     {
