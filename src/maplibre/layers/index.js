@@ -30,6 +30,7 @@ import cnpjAgro from './cnpjAgro.js';
 import cnesSaude from './cnesSaude.js';
 import umidadeSolo from './umidadeSolo.js';
 import gdSolar from './gdSolar.js';
+import elNino from './elNino.js';
 
 export const LAYER_ORDER = [
   'datageo-municipios',
@@ -58,7 +59,7 @@ export const LAYER_ORDER = [
   'datageo-litologia', 'datageo-estruturas-geologicas', 'datageo-geomorfologia',
   'datageo-processos-minerarios', 'datageo-ocorrencias-minerais',
   'datageo-uso-solo',
-  'datageo-clima-historico', 'datageo-precipitacao', 'datageo-ventos',
+  'datageo-clima-historico', 'datageo-el-nino', 'datageo-precipitacao', 'datageo-ventos',
   'datageo-radios',
   'earthquakes', 'local-datacenters', 'local-dams', 'telegeography-submarine-cables', 'local-firms',
 ];
@@ -91,6 +92,7 @@ const all = [
   ...cnesSaude,
   ...umidadeSolo,
   ...gdSolar,
+  ...elNino,
 ];
 
 const rank = (id) => {

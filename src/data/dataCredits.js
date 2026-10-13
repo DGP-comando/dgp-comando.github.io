@@ -230,6 +230,15 @@ export const DATA_CREDITS = [
       '(CC BY 4.0), via <a href="https://gee-community-catalog.org/projects/br_dwgd/" target="_blank" rel="noopener">awesome-gee-community-catalog</a>',
   },
   {
+    key: 'el-nino',
+    html:
+      'Perspectiva El Niño: previsão sazonal ECMWF SEAS5 via ' +
+      '<a href="https://open-meteo.com/en/docs/seasonal-forecast-api" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0); ' +
+      '<a href="https://www.cpc.ncep.noaa.gov/products/NMME/" target="_blank" rel="noopener">NMME</a>, ONI/RONI e probabilidades do ENSO, NOAA CPC (domínio público); ' +
+      '<a href="https://www.chc.ucsb.edu/data/chirps" target="_blank" rel="noopener">CHIRPS v2</a>, Funk et al. 2015 (CC BY 4.0); ' +
+      '<a href="https://doi.org/10.24381/cds.68d2bb30" target="_blank" rel="noopener">ERA5-Land</a>, Copernicus C3S (CC BY 4.0)',
+  },
+  {
     key: 'google-news-rss',
     html:
       'Cockpit regional headlines: ' +

@@ -6,6 +6,45 @@
 
 ---
 
+## Sessão 2026-10-13: perspectiva El Niño (camada `datageo-el-nino`)
+
+Origem: o El Niño Explorer da Morfo (morfo.rest/el-nino-explorer) não tem
+licença de reuso. Montada uma camada própria só com fontes abertas, melhor
+para o PR: grade de 0,1° em vez de 0,25° e previsão calibrada na normal
+observada. Método, números e contrato em `docs/EL_NINO.md`.
+
+- `scripts/build_el_nino_historico.py` (Earth Engine, anual): CHIRPS diário e
+  ERA5-Land de 1981-82 a 2025-26; por célula e mês, normal e tercis 1991–2020,
+  r e inclinação no ONI de OND, composição dos 10 El Niños com ONI ≥ 1,0
+  (mediana e quartis), dias com ≥ 50 mm e temperatura. 1.078 KB (~280 KB gzip).
+- `scripts/build_el_nino_previsao.py` (Actions, dias 13 e 20, sem chave):
+  SEAS5 pela Open-Meteo (razão sobre a climatologia do modelo × normal CHIRPS;
+  51 membros diários → p10/p50/p90 e chance de terço chuvoso), tercis do NMME,
+  ONI/RONI e probabilidades do CPC, confiança 0–3. 461 KB, ~4 min.
+- `src/maplibre/layers/elNino.js` (token `Eb`): chips CHUVA, EXCESSO, TEMP,
+  SINAL e de mês; véu cinza onde a confiança é ≤ 1 ou o r não é significativo;
+  tooltip com previsão, faixa, NMME, leitura agronômica, histórico e ENSO.
+- `.github/workflows/atualiza-el-nino.yml`; `scripts/qa-el-nino.mjs` (11/11);
+  `elNino.test.mjs` (11/11); suíte completa 2.958/2.958.
+- Revisão de código: falha parcial de fonte agora aborta (nulos do SEAS5,
+  resposta curta, fill value do NMME, membros faltando); previsão grava o
+  `gerado` do histórico e o front recusa arquivos de gerações diferentes; véu
+  obedece ao filtro da legenda; histórico com nova tentativa no dia 20 e sem
+  derrubar a previsão.
+
+### Pegadinhas
+- **Open-Meteo Seasonal:** sem `timezone`, o eixo mensal começa no 1º dia do
+  mês corrente. Com fuso de Brasília os rótulos recuam um dia
+  (`2026-09-30` = outubro). Os membros diários começam HOJE: o mês corrente
+  sai só com a média.
+- **NMME prob:** o atributo diz `percent`, mas os valores vêm em fração (0,66).
+- ONI ≥ 1,5 em OND dá só 4 eventos desde 1981; a composição usa ≥ 1,0.
+- Outubro é misto no histórico (não serve de trava); novembro é o pico.
+- ERA5-Land não cobre o litoral: a temperatura herda os vizinhos (`focalMean`).
+- `layerState.test.mjs`: registro com 80 ids DataGeo / 96 no total.
+
+---
+
 ## Sessão 2026-10-11: estabelecimentos de saúde (CNES)
 
 - Camada `datageo-cnes-saude` (token Sa, aba Saúde e proteção social,

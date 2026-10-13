@@ -1,0 +1,76 @@
+# Perspectiva El Niño (camada datageo-el-nino, docs/EL_NINO.md).
+#
+# Previsão (build_el_nino_previsao.py): todo dia 13 e 20, depois da rodada do
+# NMME (~dia 8), do SEAS5 (~dia 5) e da discussão do ENSO do CPC (2ª quinta).
+# Só APIs abertas (Open-Meteo, NOAA CPC), sem chave. Se uma fonte falhar o
+# script sai com erro e o JSON anterior continua publicado.
+#
+# Histórico (build_el_nino_historico.py, Earth Engine): uma vez por ano, na
+# rodada de 13 de setembro, com nova tentativa no dia 20 (o CHIRPS sai com ~6 semanas e o ano-safra fecha
+# em junho), ou à mão com historico=true. Usa o mesmo secret EE_SERVICE_ACCOUNT_KEY da umidade do solo.
+name: Atualiza perspectiva El Niño
+
+on:
+  schedule:
+    - cron: '0 12 13,20 * *' # 09h de Brasília
+  workflow_dispatch:
+    inputs:
+      historico:
+        description: 'Recalcular também o sinal histórico (Earth Engine)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: atualiza-dados
+  cancel-in-progress: false
+
+jobs:
+  el-nino:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install numpy scipy earthengine-api
+
+      - name: Histórico (setembro ou manual)
+        # Falha do Earth Engine não derruba a previsão; o dia 20 tenta de novo.
+        continue-on-error: true
+        env:
+          PYTHONUTF8: '1'
+          EE_SERVICE_ACCOUNT_KEY: ${{ secrets.EE_SERVICE_ACCOUNT_KEY }}
+          MANUAL: ${{ github.event.inputs.historico }}
+        run: |
+          if [ "$MANUAL" = 'true' ] || [ "$(date -u +%m%d)" = '0913' ] || [ "$(date -u +%m%d)" = '0920' ]; then
+            python scripts/build_el_nino_historico.py
+          else
+            echo "Histórico só em setembro."
+          fi
+
+      - run: python scripts/build_el_nino_previsao.py
+        env:
+          PYTHONUTF8: '1'
+
+      - name: Commit e dispara deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add public/data/el-nino-previsao-pr.json public/data/el-nino-historico-pr.json
+          if git diff --cached --quiet; then
+            echo "Nada mudou."
+            exit 0
+          fi
+          git commit -m 'chore: atualiza perspectiva El Niño (SEAS5, NMME, ONI)'
+          git pull --rebase
+          git push
+          gh workflow run deploy-pages.yml --ref main
