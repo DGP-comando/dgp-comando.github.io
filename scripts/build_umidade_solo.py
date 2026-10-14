@@ -6,7 +6,7 @@ O produto da página NASA-USDA Global Soil Moisture
 Earth Engine (NASA_USDA/HSL/SMAP_soil_moisture vai até 2020-12-31 e o 10 km até
 2022-08-02); o sucessor indicado pelo próprio catálogo é o SMAP L4
 (NASA/SMAP/SPL4SMGP/008: 9 km, 3 em 3 horas, assimila o SMAP num modelo de
-superfície). Aqui: média das 8 imagens do último dia, reamostrada numa grade
+superfície). Aqui: média das 8 imagens do último dia completo (UTC), reamostrada numa grade
 regular lat/lon sobre o PR, fora do estado = null.
 
 Saída: public/data/umidade-solo-pr.json (dado aberto da NASA).
@@ -63,10 +63,19 @@ def main() -> None:
     else:
         ee.Initialize(project=os.environ.get('EE_PROJECT'))
     col = ee.ImageCollection(ASSET)
-    fim = ee.Date(col.sort('system:time_start', False).first().get('system:time_start'))
-    dia = col.filterDate(fim.advance(-21, 'hour'), fim.advance(1, 'minute'))
-    n = dia.size().getInfo()
-    assert n == 8, f'esperava 8 imagens no dia, veio {n}'
+    # A NASA publica o dia aos poucos (8 imagens, de 3 em 3 h): o dia UTC da
+    # imagem mais recente pode estar incompleto. Usa o último dia COMPLETO.
+    ultimo = ee.Date(col.sort('system:time_start', False).first().get('system:time_start'))
+    inicio = ee.Date(ultimo.format('YYYY-MM-dd'))
+    for _ in range(3):
+        dia = col.filterDate(inicio, inicio.advance(1, 'day'))
+        n = dia.size().getInfo()
+        if n == 8:
+            break
+        print(f'{inicio.format("YYYY-MM-dd").getInfo()}: {n} de 8 imagens, volta um dia')
+        inicio = inicio.advance(-1, 'day')
+    assert n == 8, f'nenhum dia completo nos 3 últimos, veio {n}'
+    fim = inicio
     pr = ee.FeatureCollection('FAO/GAUL/2015/level1').filter(ee.Filter.eq('ADM1_NAME', 'Parana')).geometry().buffer(5000)
     w, h, vals = grade(ee, dia.select(list(BANDAS)).mean(), pr)
     data = fim.format('YYYY-MM-dd').getInfo()
