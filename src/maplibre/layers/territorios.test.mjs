@@ -174,7 +174,7 @@ test('GeoJSONs reais: toda feição rende rótulo e tooltip sem erro', () => {
   }
 });
 
-test('CAR: célula real vira MultiLineString por classe, com todos os trechos', () => {
+test('CAR: célula real vira uma MultiLineString por imóvel, com todos os trechos e atributos', () => {
   const index = readJson('public/data/car/index.json');
   const key = Object.keys(index.cells)[0];
   const payload = readJson(`public/data/car/${key}.json`);
@@ -184,6 +184,17 @@ test('CAR: célula real vira MultiLineString por classe, com todos os trechos', 
   for (const f of features) {
     assert.ok(CAR_CLASSE_STYLES[f.properties.classe], `classe sem estilo: ${f.properties.classe}`);
     assert.equal(f.geometry.type, 'MultiLineString');
+    assert.match(f.properties.cod, /^PR-\d{7}-[0-9A-F]{32}$/);
+    assert.ok(f.properties.area > 0 && f.properties.mf > 0);
+    assert.ok(index.tipos.includes(f.properties.tipo) && f.properties.condicao);
+    assert.match(f.properties.data, /^\d{4}-\d{2}-\d{2}$/);
+  }
+  // Uma feição por imóvel e classe coerente com os módulos fiscais.
+  assert.equal(new Set(features.map((f) => f.properties.cod)).size, features.length);
+  const limites = { '0-4': [0, 4], '4-10': [4, 10], '10-20': [10, 20], '20-50': [20, 50], '>50': [50, Infinity] };
+  for (const f of features) {
+    const [lo, hi] = limites[f.properties.classe];
+    assert.ok(f.properties.mf > lo - 1e-9 && f.properties.mf <= hi + 0.01, `${f.properties.cod} ${f.properties.mf} em ${f.properties.classe}`);
   }
   // Coordenadas dentro (ou na borda generalizada) da célula.
   const [i, j] = key.split('_').map(Number);
@@ -199,9 +210,18 @@ test('CAR: tooltip pela classe, com o agregado do estado e do município sob o c
   assert.match(html, /tt-title">Imóvel rural \(CAR\)</);
   assert.match(html, /tt-badge tt-alert">Grande propriedade</);
   assert.match(html, /20 a 50 módulos fiscais/);
-  assert.match(html, /tt-sec-title">Em Abatiá<\/div>.*<dt>Imóveis na classe<\/dt><dd class="">2 de 887 \(0,2%\)/);
-  assert.match(html, /tt-sec-title">No Paraná<\/div>.*<dt>Imóveis na classe<\/dt><dd class="">4\.512 de 532\.776/);
+  assert.match(html, /tt-sec-title">Em Abatiá<\/div>.*<dt>Imóveis na classe<\/dt><dd class="">2 de 892 \(0,2%\)/);
+  assert.match(html, /tt-sec-title">No Paraná<\/div>.*<dt>Imóveis na classe<\/dt><dd class="">4\.515 de 539\.477/);
   assert.match(html, /SICAR\/SFB · DataGeo PR · atualizado/);
+  // Com o imóvel sob o cursor: atributos individuais.
+  const imovel = { cod: 'PR-4100103-ABC', area: 25.5, mf: 1.27, tipo: 'IRU', condicao: 'Aguardando análise', data: '2016-05-04' };
+  const ind = carTooltip('0-4', { stats, municipio: { ibge: '4100103', nome: 'Abatiá' }, imovel });
+  assert.match(ind, /<dt>Código<\/dt><dd class="">PR-4100103-ABC</);
+  assert.match(ind, /<dt>Área declarada<\/dt><dd class="">25,50 ha</);
+  assert.match(ind, /<dt>Módulos fiscais<\/dt><dd class="">1,27 · até 4 módulos fiscais</);
+  assert.match(ind, /<dt>Tipo<\/dt><dd class="">Imóvel rural</);
+  assert.match(ind, /<dt>Inscrito em<\/dt><dd class="">04\/05\/2016</);
+  assert.doesNotMatch(ind, /undefined|NaN/);
   // Sem agregado nem município: só a classe.
   const nu = carTooltip('0-4');
   assert.match(nu, /tt-badge tt-ok">Pequena propriedade</);

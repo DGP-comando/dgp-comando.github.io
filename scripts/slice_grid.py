@@ -31,29 +31,37 @@ def quantize(coords, escala=ESCALA):
     return dedup if len(dedup) >= 2 else None
 
 
-def encode_cell(lines, origin):
+def encode_cell(lines, origin, tags=None):
     """Delta encadeado: o 1o vertice de cada trecho e relativo ao ultimo do
     trecho anterior (o primeiro, a origem SW da celula). A ordenacao por faixa
-    de latitude aproxima trechos vizinhos e encolhe os deltas."""
-    lines = sorted(lines, key=lambda pts: (pts[0][1] // 500, pts[0][0]))
+    de latitude aproxima trechos vizinhos e encolhe os deltas.
+
+    Com `tags` (um valor por trecho), devolve tambem as etiquetas na MESMA
+    ordem dos trechos codificados."""
+    order = sorted(range(len(lines)), key=lambda n: (lines[n][0][1] // 500, lines[n][0][0]))
     out = []
     px, py = origin
-    for pts in lines:
+    for n in order:
         enc = []
-        for x, y in pts:
+        for x, y in lines[n]:
             enc += [x - px, y - py]
             px, py = x, y
         out.append(enc)
-    return out
+    return out if tags is None else (out, [tags[n] for n in order])
 
 
 def cell_key(lat, lon, cell_deg):
     return f'{math.floor(lat / cell_deg)}_{math.floor(lon / cell_deg)}'
 
 
-def write_grid(out_dir, cells, grupos_key, grupos, fonte, cell_deg, escala=ESCALA):
+def write_grid(out_dir, cells, grupos_key, grupos, fonte, cell_deg, escala=ESCALA,
+               tags=None, extras=None, index_extra=None):
     """Escreve index.json + uma celula por arquivo. `cells` e
     {key: [ [trecho_quantizado, ...] por indice de grupo ]}.
+
+    Opcionais: `tags` {key: [[etiqueta por trecho] por grupo]} vira "i" na
+    celula, alinhado a "t"; `extras` {key: {campo: valor}} entra na celula;
+    `index_extra` {campo: valor} entra no index.
 
     Retorna o dict do index escrito.
     """
@@ -66,7 +74,12 @@ def write_grid(out_dir, cells, grupos_key, grupos, fonte, cell_deg, escala=ESCAL
     for key, por_grupo in cells.items():
         i, j = (int(v) for v in key.split('_'))
         origin = (round(j * cell_deg * escala), round(i * cell_deg * escala))
-        payload = {'t': [encode_cell(lines, origin) for lines in por_grupo]}
+        if tags is None:
+            payload = {'t': [encode_cell(lines, origin) for lines in por_grupo]}
+        else:
+            pares = [encode_cell(lines, origin, tg) for lines, tg in zip(por_grupo, tags[key])]
+            payload = {'t': [t for t, _ in pares], 'i': [i for _, i in pares]}
+        payload.update((extras or {}).get(key, {}))
         path = out_dir / f'{key}.json'
         path.write_text(json.dumps(payload, separators=(',', ':')), encoding='utf-8')
         total_bytes += path.stat().st_size
@@ -78,6 +91,7 @@ def write_grid(out_dir, cells, grupos_key, grupos, fonte, cell_deg, escala=ESCAL
         'fonte': fonte,
         'trechos': sum(len(x) for v in cells.values() for x in v),
         'cells': {k: sum(len(x) for x in v) for k, v in sorted(cells.items())},
+        **(index_extra or {}),
     }
     (out_dir / 'index.json').write_text(
         json.dumps(index, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')

@@ -70,22 +70,56 @@ export function flatToCoords(flat) {
 /**
  * Payload de uma célula fatiada -> uma feição MultiLineString por grupo
  * (classe) não vazio, com `properties[groupProp]` = valor do grupo, e a
- * contagem de trechos.
+ * contagem de trechos. Se a célula traz atributos individuais (`i` alinhado a
+ * `t`, apontando para a tabela `p`, ver scripts/build_car.py), sai uma feição
+ * por imóvel, com os atributos dele (`imovelProps`).
  */
 export function cellFeatures(payload, key, index, groupsKey = 'classes', groupProp = 'classe') {
   const porGrupo = decodeCell(payload, key, index);
+  const tags = Array.isArray(payload?.i) && Array.isArray(payload?.p) ? payload.i : null;
   const features = [];
   let lines = 0;
   porGrupo.forEach((flatLines, g) => {
     lines += flatLines.length;
     if (!flatLines.length) return;
-    features.push({
-      type: 'Feature',
-      properties: { [groupProp]: index[groupsKey]?.[g] ?? null },
-      geometry: { type: 'MultiLineString', coordinates: flatLines.map(flatToCoords) },
+    const grupo = index[groupsKey]?.[g] ?? null;
+    if (!tags) {
+      features.push({
+        type: 'Feature',
+        properties: { [groupProp]: grupo },
+        geometry: { type: 'MultiLineString', coordinates: flatLines.map(flatToCoords) },
+      });
+      return;
+    }
+    const porImovel = new Map();
+    flatLines.forEach((flat, n) => {
+      const t = tags[g]?.[n];
+      if (!porImovel.has(t)) porImovel.set(t, []);
+      porImovel.get(t).push(flatToCoords(flat));
     });
+    for (const [t, coordinates] of porImovel) {
+      features.push({
+        type: 'Feature',
+        properties: { [groupProp]: grupo, ...imovelProps(payload.p[t], index) },
+        geometry: { type: 'MultiLineString', coordinates },
+      });
+    }
   });
   return { features, lines };
+}
+
+/** Linha da tabela `p` da célula do CAR -> propriedades da feição. */
+export function imovelProps(linha, index) {
+  if (!Array.isArray(linha)) return {};
+  const [cod, area, mf, tipo, condicao, data] = linha;
+  return {
+    cod: cod ?? '',
+    area: area ?? null,
+    mf: mf ?? null,
+    tipo: index?.tipos?.[tipo] ?? '',
+    condicao: index?.condicoes?.[condicao] ?? '',
+    data: data ?? '',
+  };
 }
 
 function dentroDoAnel(ring, x, y) {
@@ -112,7 +146,7 @@ export function areaAnelHa(ring) {
  * O imóvel do CAR que contém (lon, lat): o MENOR anel, entre as features de
  * divisas (MultiLineString de anéis, `cellFeatures`), que contém o ponto.
  * Imóveis do CAR se sobrepõem; o menor é o mais provável de ser o da família.
- * @returns {{ring: number[][], classe: string|null, ha: number} | null}
+ * @returns {{ring: number[][], classe: string|null, ha: number, cod?: string} | null}
  */
 export function anelQueContem(features, lon, lat) {
   let best = null;
@@ -120,7 +154,7 @@ export function anelQueContem(features, lon, lat) {
     for (const ring of f?.geometry?.coordinates ?? []) {
       if (ring.length < 4 || !dentroDoAnel(ring, lon, lat)) continue;
       const ha = areaAnelHa(ring);
-      if (!best || ha < best.ha) best = { ring, classe: f.properties?.classe ?? null, ha };
+      if (!best || ha < best.ha) best = { ring, classe: f.properties?.classe ?? null, ha, cod: f.properties?.cod || undefined };
     }
   }
   return best;

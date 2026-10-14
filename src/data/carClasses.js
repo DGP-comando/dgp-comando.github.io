@@ -8,7 +8,7 @@
 // virariam uma mancha se tivessem o mesmo peso), forte e grosso nos grandes.
 // `width` em pixels de tela.
 
-import { fmtInt, fmtNum, fmtPct, tipCard } from '../maplibre/tooltipCard.js';
+import { fmtDate, fmtInt, fmtNum, fmtPct, tipCard } from '../maplibre/tooltipCard.js';
 
 export const CAR_CLASSE_STYLES = Object.freeze({
   '0-4': Object.freeze({ css: '#fef08a', alpha: 0.45, width: 0.8 }),
@@ -42,14 +42,22 @@ const PORTE = Object.freeze({
   '>50': { text: 'Grande propriedade', tone: 'alert' },
 });
 
+// tipo_imovel do SICAR.
+const TIPO_IMOVEL = Object.freeze({
+  IRU: 'Imóvel rural',
+  AST: 'Assentamento de reforma agrária',
+  PCT: 'Povos e comunidades tradicionais',
+});
+
 /**
- * Tooltip de uma divisa do CAR. As células fatiadas só guardam a CLASSE de
- * módulos fiscais de cada trecho; o resto vem do agregado car-municipios.json
- * (`stats`), para o estado e para o município sob o cursor (`municipio`).
+ * Tooltip de uma divisa do CAR: os atributos públicos do imóvel sob o cursor
+ * (`imovel`, de imovelProps em territoriosFeatures.js) e o agregado
+ * car-municipios.json (`stats`) do município sob o cursor e do estado.
  * @param {string} classe
- * @param {{stats?: object|null, municipio?: {ibge: string, nome: string}|null}} [x]
+ * @param {{stats?: object|null, municipio?: {ibge: string, nome: string}|null,
+ *   imovel?: {cod: string, area: number, mf: number, tipo: string, condicao: string, data: string}|null}} [x]
  */
-export function carTooltip(classe, { stats = null, municipio = null } = {}) {
+export function carTooltip(classe, { stats = null, municipio = null, imovel = null } = {}) {
   const k = stats?.classes?.indexOf(classe) ?? -1;
   const porte = PORTE[classe];
   const mun = municipio && k >= 0 ? stats?.municipios?.[String(municipio.ibge)] : null;
@@ -70,7 +78,15 @@ export function carTooltip(classe, { stats = null, municipio = null } = {}) {
     title: 'Imóvel rural (CAR)',
     subtitle: `Divisa de imóvel ativo · ${CAR_CLASSE_FAIXA[classe] ?? classe}`,
     badge: porte ?? null,
-    rows: [
+    rows: imovel?.cod ? [
+      ['Código', imovel.cod],
+      ['Área declarada', fmtNum(imovel.area, 2, 'ha')],
+      ['Módulos fiscais', `${fmtNum(imovel.mf, 2)} · ${CAR_CLASSE_FAIXA[classe] ?? classe}`],
+      ['Tipo', TIPO_IMOVEL[imovel.tipo] ?? imovel.tipo],
+      ['Condição', imovel.condicao],
+      ['Situação', 'Ativo no SICAR'],
+      ['Inscrito em', fmtDate(imovel.data)],
+    ] : [
       ['Porte', CAR_CLASSE_FAIXA[classe] ?? classe],
       ['Situação', 'Ativo no SICAR'],
     ],
@@ -78,7 +94,7 @@ export function carTooltip(classe, { stats = null, municipio = null } = {}) {
       { title: municipio?.nome ? `Em ${municipio.nome}` : 'No município', rows: linhas(mun) },
       { title: 'No Paraná', rows: linhas(est) },
     ],
-    note: 'A malha fatiada guarda só a classe de cada divisa; código, área e situação do imóvel individual ficam no SICAR.',
+    note: 'Divisa generalizada (~30 m) do que foi declarado no CAR; não serve para medir nem instruir processo.',
     source: 'SICAR/SFB · DataGeo PR',
     updated: stats?.geradoEm ?? null,
   });

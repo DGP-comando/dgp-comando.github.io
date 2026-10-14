@@ -10,7 +10,7 @@
  * Requer dev server rodando.
  */
 import {
-  argValue, createReport, launchQaBrowser, openApp, setCamera, sleep, waitMapIdle,
+  argValue, createReport, hoverTooltip, interactiveFeature, launchQaBrowser, openApp, setCamera, sleep, waitMapIdle,
 } from './lib/qaBrowser.mjs';
 
 const url = argValue('--url', process.env.QA_BASE_URL || 'http://localhost:5173');
@@ -51,6 +51,15 @@ try {
     return new Set(map.queryRenderedFeatures({ layers: ['dg-car-line'] }).map((f) => f.properties?.classe)).size;
   });
   check('mais de uma classe de módulos fiscais desenhada', classes > 1, { grupos: classes });
+  // Hover: uma feição por imóvel, com os atributos públicos no tooltip.
+  const imovel = await interactiveFeature(page, LAYER_ID);
+  check('divisa sob o cursor traz o código do imóvel', /^PR-\d{7}-/.test(imovel?.props?.cod ?? ''), imovel?.props);
+  if (imovel) {
+    const tip = await hoverTooltip(page, imovel.lon, imovel.lat, /Código/);
+    check('tooltip com código, área, módulos fiscais e condição',
+      /Código/.test(tip) && /PR-\d{7}-/.test(tip) && /Área declarada/.test(tip) && /Módulos fiscais/.test(tip) && /Condição/.test(tip),
+      tip.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300));
+  }
   await sleep(2_000);
   await page.screenshot({ path: shot });
   console.log('   screenshot:', shot);

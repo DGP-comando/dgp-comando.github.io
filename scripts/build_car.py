@@ -22,9 +22,13 @@ de que porte; NAO serve para medir divisa nem para instruir processo. O CAR e
 declaratorio: o que esta ali e o que o proprietario declarou, nao cadastro
 fundiario validado.
 
-LGPD: entram apenas geometria, area, modulos fiscais e municipio. O CAR publico
-nao expoe CPF nem nome do proprietario, e `cod_imovel` NAO e copiado para a
-saida do mapa — so a contagem agregada e a divisa generalizada.
+DADO PUBLICO: o CAR e publicado pelo SFB (WFS e consulta publica) sem CPF nem
+nome do proprietario. Cada celula leva, alem das divisas, os atributos
+individuais do imovel para o tooltip: "p" = [[cod_imovel, area_ha, m_fiscal,
+tipo, condicao, data_criacao], ...] (tipo e condicao como indices de
+index.json `tipos`/`condicoes`) e "i" = [[indice em "p" por trecho] por classe],
+alinhado a "t". Um imovel cujos aneis caem em celulas diferentes se repete na
+tabela de cada uma.
 
 Uso:
   py -3 scripts/build_car.py --car /caminho/car-pr
@@ -93,8 +97,16 @@ def main() -> None:
         raise SystemExit(f'nenhum GeoJSON em {origem} — rode scripts/fetch_car.py antes')
     print(f'{len(arquivos)} municipios em {origem}')
 
-    # cells[key][k] = aneis quantizados da classe CLASSES[k]
+    # cells[key][k] = aneis quantizados da classe CLASSES[k]; tags[key][k] o
+    # indice, em props[key], do imovel de cada anel
     cells: dict[str, list[list]] = {}
+    tags: dict[str, list[list]] = {}
+    props: dict[str, list] = {}
+    prop_idx: dict[str, dict] = {}  # key -> {cod_imovel: indice em props[key]}
+    vocab = {'tipo_imovel': {}, 'condicao': {}}
+
+    def termo(campo, valor):
+        return vocab[campo].setdefault(str(valor or ''), len(vocab[campo]))
     # ficha[ibge] = {'n': [...], 'ha': [...]}
     ficha: dict[str, dict[str, list]] = {}
     imoveis = 0
@@ -118,23 +130,42 @@ def main() -> None:
             metrico = g.to_crs(31982)
             grandes = metrico.geometry.area >= MIN_AREA_M2
             geoms = metrico.geometry[grandes].simplify(SIMPLIFY_M).to_crs(4674)
-            classes = [classe_de(float(m)) for m in g['m_fiscal'].values[grandes.values]]
-            for geom, k in zip(geoms.values, classes):
+            atributos = g[grandes.values]
+            for geom, (_, row) in zip(geoms.values, atributos.iterrows()):
                 if geom is None or geom.is_empty:
                     sem_geometria += 1
                     continue
+                k = classe_de(float(row['m_fiscal']))
+                linha = [
+                    str(row['cod_imovel']),
+                    round(float(row['area']), 2),
+                    round(float(row['m_fiscal']), 2),
+                    termo('tipo_imovel', row.get('tipo_imovel')),
+                    termo('condicao', row.get('condicao')),
+                    str(row.get('dat_criacao') or '')[:10],
+                ]
                 for pts in aneis_quantizados(geom):
                     lon = pts[len(pts) // 2][0] / ESCALA
                     lat = pts[len(pts) // 2][1] / ESCALA
                     key = cell_key(lat, lon, CELL_DEG)
                     cells.setdefault(key, [[] for _ in CLASSES])[k].append(pts)
+                    idx = prop_idx.setdefault(key, {})
+                    if linha[0] not in idx:
+                        idx[linha[0]] = len(props.setdefault(key, []))
+                        props[key].append(linha)
+                    tags.setdefault(key, [[] for _ in CLASSES])[k].append(idx[linha[0]])
 
         ficha[ibge] = {'n': contagem, 'ha': [round(v, 1) for v in area_ha]}
         if n % 50 == 0 or n == len(arquivos):
             print(f'  [{n}/{len(arquivos)}] {imoveis} imoveis, '
                   f'{len(cells)} celulas, {(time.time() - t0) / 60:.1f} min', flush=True)
 
-    index = write_grid(OUT_GRADE, cells, 'classes', ROTULOS, FONTE, CELL_DEG, ESCALA)
+    index = write_grid(
+        OUT_GRADE, cells, 'classes', ROTULOS, FONTE, CELL_DEG, ESCALA,
+        tags=tags,
+        extras={key: {'p': linhas} for key, linhas in props.items()},
+        index_extra={'tipos': list(vocab['tipo_imovel']), 'condicoes': list(vocab['condicao'])},
+    )
 
     estado = {
         'n': [sum(ficha[i]['n'][k] for i in ficha) for k in range(len(CLASSES))],

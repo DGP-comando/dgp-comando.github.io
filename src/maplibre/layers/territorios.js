@@ -14,9 +14,10 @@
 // CAR: as mesmas células estáticas (public/data/car) carregadas pela vista:
 // com zoom >= teto (90 km de altura) as 9 mais próximas do centro; com um
 // município em foco, as que cruzam o bbox dele (até 24), em qualquer zoom.
-// Hover por uma linha invisível larga; o tooltip mostra a classe de módulos
-// fiscais do trecho e o agregado do CAR (car-municipios.json) do município sob
-// o cursor e do estado.
+// Uma feição por imóvel; hover por uma linha invisível larga. O tooltip mostra
+// os atributos públicos do imóvel (código, área, módulos fiscais, tipo,
+// condição, data) e o agregado do CAR (car-municipios.json) do município sob o
+// cursor e do estado.
 
 import { openFichaRegiao } from '../../datageoFicha.js';
 import { fichaRegionalIdr, TERRITORIO_SPECS } from '../../data/territoriosSpec.js';
@@ -372,7 +373,7 @@ export const carLayer = defineLayer({
   },
   onDisable: (ctx) => car.disable(ctx),
   focusOn: (bbox, ctx) => car.setFocus(bbox, ctx),
-  tooltip: (p) => (p.classe ? carTooltip(p.classe, { stats: carStatsAgg, municipio: cursor.get() }) : ''),
+  tooltip: (p) => (p.classe ? carTooltip(p.classe, { stats: carStatsAgg, municipio: cursor.get(), imovel: p.cod ? p : null }) : ''),
   rowControls: () => ({ legend: carLegenda() }),
   // Filtra a divisa e a linha de pick (senão o hover pega trecho escondido).
   legendFilter: 'classe',
