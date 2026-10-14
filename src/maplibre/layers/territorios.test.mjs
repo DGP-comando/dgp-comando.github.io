@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildTerritorioFeatures, cellFeatures, cellsInBbox, flatToCoords, wantedCells,
+  areaAnelHa, buildTerritorioFeatures, cellFeatures, cellsInBbox, flatToCoords, imovelPolygons, wantedCells,
 } from './territoriosFeatures.js';
 import {
   agregadoMunicipal, centroidOf, dataBr, fichaRegionalIdr, fmtReais, listaNomes, TERRITORIO_SPECS, tituloProprio, tituloUc,
@@ -32,7 +32,7 @@ test('camadas na ordem e com os ids/categorias do app', () => {
   for (const l of layers) {
     assert.ok(l.interactive.length > 0 && typeof l.tooltip === 'function', l.id);
   }
-  assert.deepEqual(carLayer.interactive, ['dg-car-hit']);
+  assert.deepEqual(carLayer.interactive, ['dg-car-hit', 'dg-car-area-hit']);
   const hit = carLayer.layers.find((l) => l.id === 'dg-car-hit');
   assert.ok(hit.paint['line-width'] >= 10 && hit.paint['line-opacity'] < 0.05);
   assert.ok(layers.find((l) => l.id === 'datageo-regionais-idr').click);
@@ -202,6 +202,15 @@ test('CAR: célula real vira uma MultiLineString por imóvel, com todos os trech
   assert.ok(Math.abs(lat - (i + 0.5) * index.cell_deg) < index.cell_deg);
   assert.ok(Math.abs(lon - (j + 0.5) * index.cell_deg) < index.cell_deg);
   assert.deepEqual(flatToCoords([1, 2, 3, 4]), [[1, 2], [3, 4]]);
+  // Polígonos do hover: um por imóvel, anéis fechados, do maior para o menor.
+  const polys = imovelPolygons(features);
+  assert.equal(polys.length, features.length);
+  for (const f of polys) {
+    assert.equal(f.geometry.type, 'MultiPolygon');
+    for (const [r] of f.geometry.coordinates) assert.deepEqual(r[0], r[r.length - 1]);
+  }
+  const areas = polys.map((f) => f.geometry.coordinates.reduce((a, [r]) => a + areaAnelHa(r), 0));
+  assert.ok(areas.every((v, n) => n === 0 || areas[n - 1] >= v));
 });
 
 test('CAR: tooltip pela classe, com o agregado do estado e do município sob o cursor', () => {

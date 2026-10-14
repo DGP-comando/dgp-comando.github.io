@@ -60,6 +60,42 @@ try {
       /Código/.test(tip) && /PR-\d{7}-/.test(tip) && /Área declarada/.test(tip) && /Módulos fiscais/.test(tip) && /Condição/.test(tip),
       tip.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300));
   }
+  // Hover no INTERIOR: pontos da tela sobre o fill invisível e longe da linha;
+  // nos sobrepostos, o primeiro hit é o de menor área.
+  const interior = await page.evaluate(() => {
+    const { map } = window.__godsEyeView.engine;
+    const { clientWidth: w, clientHeight: h } = map.getContainer();
+    const area = (f) => Number(f.properties.area);
+    let menorPrimeiro = 0, sobrepostos = 0, ponto = null;
+    for (let y = 0.1; y <= 0.9; y += 0.02) for (let x = 0.1; x <= 0.9; x += 0.02) {
+      const px = [w * x, h * y];
+      const box = [[px[0] - 6, px[1] - 6], [px[0] + 6, px[1] + 6]];
+      const hits = map.queryRenderedFeatures(px, { layers: ['dg-car-area-hit'] });
+      if (!hits.length) continue;
+      const perto = map.queryRenderedFeatures(box, { layers: ['dg-car-hit'] }).length > 0; // perto de divisa
+      if (!perto) ponto ??= { x: px[0], y: px[1], cod: hits[0].properties.cod };
+      if (hits.length > 1) {
+        sobrepostos += 1;
+        if (area(hits[0]) <= Math.min(...hits.map(area))) menorPrimeiro += 1;
+      }
+    }
+    return { ponto, sobrepostos, menorPrimeiro };
+  });
+  check('há ponto no interior de um imóvel, longe da divisa', Boolean(interior.ponto), interior);
+  check('sobrepostos: o menor imóvel responde primeiro', interior.sobrepostos > 0 && interior.menorPrimeiro === interior.sobrepostos, interior);
+  if (interior.ponto) {
+    const r = await page.evaluate(() => {
+      const b = window.__godsEyeView.engine.map.getContainer().getBoundingClientRect();
+      return { left: b.left, top: b.top };
+    });
+    await page.mouse.move(r.left + interior.ponto.x, r.top + interior.ponto.y);
+    await sleep(600);
+    const tip = await page.evaluate(() => {
+      const el = document.getElementById('dg-tooltip');
+      return el && !el.hidden ? el.textContent : '';
+    });
+    check('tooltip no interior traz o imóvel sob o cursor', tip.includes(interior.ponto.cod), tip.slice(0, 160));
+  }
   await sleep(2_000);
   await page.screenshot({ path: shot });
   console.log('   screenshot:', shot);

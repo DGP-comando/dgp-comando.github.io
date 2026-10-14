@@ -108,6 +108,30 @@ export function cellFeatures(payload, key, index, groupsKey = 'classes', groupPr
   return { features, lines };
 }
 
+/**
+ * Divisas por imóvel (`cellFeatures` com atributos) -> MultiPolygon de cada
+ * imóvel, um polígono por anel (os anéis não dizem qual é furo; no CAR furo é
+ * raro e o hover dentro dele ainda acerta o imóvel). Ordenadas da maior área
+ * para a menor: no fill o último desenhado fica por cima, e o hover sobre
+ * imóveis sobrepostos pega o MENOR que contém o cursor.
+ */
+export function imovelPolygons(features) {
+  const out = [];
+  for (const f of features ?? []) {
+    if (!f?.properties?.cod) continue;
+    const rings = (f.geometry?.coordinates ?? []).filter((r) => r.length >= 4);
+    if (!rings.length) continue;
+    const coordinates = rings.map((r) => {
+      const [a] = r;
+      const b = r[r.length - 1];
+      return [a[0] === b[0] && a[1] === b[1] ? r : [...r, a]];
+    });
+    const ha = rings.reduce((acc, r) => acc + areaAnelHa(r), 0);
+    out.push({ ha, feature: { type: 'Feature', properties: f.properties, geometry: { type: 'MultiPolygon', coordinates } } });
+  }
+  return out.sort((x, y) => y.ha - x.ha).map((x) => x.feature);
+}
+
 /** Linha da tabela `p` da célula do CAR -> propriedades da feição. */
 export function imovelProps(linha, index) {
   if (!Array.isArray(linha)) return {};

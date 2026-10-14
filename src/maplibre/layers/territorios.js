@@ -27,7 +27,7 @@ import { loadCadunicoRural } from '../../data/cadunicoRural.js';
 import { defineLayer, EMPTY_FC, TEXT_FONT, zoomForHeight } from '../kit.js';
 import { loadMunicipiosInfo, MUNICIPIOS_URL } from './municipios.js';
 import {
-  anelQueContem, buildTerritorioFeatures, cellFeatures, createCursorMunicipio, wantedCells,
+  anelQueContem, buildTerritorioFeatures, cellFeatures, createCursorMunicipio, imovelPolygons, wantedCells,
 } from './territoriosFeatures.js';
 
 // Contexto dos tooltips: município sob o cursor (UCs, TIs, CAR) e, nas
@@ -165,8 +165,11 @@ const CAR_MINZOOM = zoomForHeight(CAR_MAX_HEIGHT);
 const CAR_BASE = '/data/car';
 const CAR_SOURCE = 'dg-car';
 const CAR_LAYER = 'dg-car-line';
-// Divisa fina demais para o hover: linha invisível mais larga só para o pick.
+// Divisa fina demais para o hover: linha invisível mais larga só para o pick,
+// e o interior do imóvel num fill invisível (fonte própria de polígonos).
 const CAR_HIT = 'dg-car-hit';
+const CAR_AREA_SOURCE = 'dg-car-area';
+const CAR_AREA_HIT = 'dg-car-area-hit';
 const CAR_PER_VIEW = 9; // maxCellsPerView do app
 const CAR_MAX_LOADED = 24; // maxLoadedCells do app
 const CAR_CLASSES = Object.keys(CAR_CLASSE_STYLES);
@@ -223,6 +226,7 @@ function createCarLoader() {
     const features = [];
     for (const cell of cells.values()) features.push(...cell.features);
     ctxRef?.setData(CAR_SOURCE, { type: 'FeatureCollection', features });
+    ctxRef?.setData(CAR_AREA_SOURCE, { type: 'FeatureCollection', features: imovelPolygons(features) });
   };
 
   const focusActive = () => {
@@ -285,7 +289,7 @@ function createCarLoader() {
     },
     setFocus(bbox, ctx) {
       focus = bbox ?? null;
-      for (const lid of [CAR_LAYER, CAR_HIT]) {
+      for (const lid of [CAR_LAYER, CAR_HIT, CAR_AREA_HIT]) {
         if (ctx.map.getLayer(lid)) ctx.map.setLayerZoomRange(lid, focus ? 0 : CAR_MINZOOM, 24);
       }
       onMove();
@@ -340,8 +344,20 @@ export const carLayer = defineLayer({
   category: 'Agricultura familiar e CAR',
   icon: '🌱',
   source: 'SICAR/SFB',
-  sources: { [CAR_SOURCE]: { type: 'geojson', data: EMPTY_FC, tolerance: 0.2 } },
+  sources: {
+    [CAR_SOURCE]: { type: 'geojson', data: EMPTY_FC, tolerance: 0.2 },
+    [CAR_AREA_SOURCE]: { type: 'geojson', data: EMPTY_FC, tolerance: 0.2 },
+  },
   layers: [
+    {
+      id: CAR_AREA_HIT,
+      type: 'fill',
+      source: CAR_AREA_SOURCE,
+      minzoom: CAR_MINZOOM,
+      // Menor área por cima: o hover sobre imóveis sobrepostos pega o menor.
+      layout: { 'fill-sort-key': ['-', ['to-number', ['get', 'area'], 0]] },
+      paint: { 'fill-color': '#ffffff', 'fill-opacity': 0.01 },
+    },
     {
       id: CAR_LAYER,
       type: 'line',
@@ -359,7 +375,7 @@ export const carLayer = defineLayer({
       paint: { 'line-color': '#ffffff', 'line-width': 10, 'line-opacity': 0.01 },
     },
   ],
-  interactive: [CAR_HIT],
+  interactive: [CAR_HIT, CAR_AREA_HIT],
   async load() {
     carStatsAgg = await loadCarMunicipios().catch(() => null);
     const total = await car.count();
