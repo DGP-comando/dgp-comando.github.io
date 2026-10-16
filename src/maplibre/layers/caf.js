@@ -14,7 +14,7 @@
 
 import { CAF_CORES, loadCafFamilias, loadCafPj, loadCafPontos, periodo, pjsPorFamilia } from '../../data/cafFamilias.js';
 import { familiaHtml } from '../../datageoCaf.js';
-import { loadGetecFichaProdutor, prontuario } from '../../data/getecFichaProdutor.js';
+import { loadGetecAtendimentos, loadGetecFichaProdutor, prontuario } from '../../data/getecFichaProdutor.js';
 import { fontesPorFamilia, loadFontes } from '../../data/fontesProtegidas.js';
 import { openPainel } from '../../datageoFicha.js';
 import { EMPTY_FC, defineLayer, fc, fmtInt, fmtNum, tipCard } from '../kit.js';
@@ -153,12 +153,13 @@ function abrirFamilia(f, ctx) {
     meta: `CAF ${f.caf} · MDA ${periodo(dados.referencia)} · acesso restrito`,
     carregar: async () => {
       const ligado = ctx.isOn('datageo-car');
-      const [mun, imovel, pj, fontes, fichaProd] = await Promise.all([
+      const [mun, imovel, pj, fontes, fichaProd, atend] = await Promise.all([
         loadCafFamilias(f.ibge),
         ligado ? carImovelEm(f.lon, f.lat).catch(() => null) : null,
         loadCafPj(),
         loadFontes(),
         loadGetecFichaProdutor(),
+        loadGetecAtendimentos(f.ibge),
       ]);
       if (fontes && !fontesDe) {
         fontesDe = fontesPorFamilia(fontes);
@@ -171,7 +172,7 @@ function abrirFamilia(f, ctx) {
       const pjs = porFamilia?.get(f.caf) ?? [];
       return familiaHtml(fam, {
         car: { ligado, imovel }, grupos: dados.grupos, grupo: f.g, pjs, fontes: fontesDe?.get(f.caf) ?? [], tiposFonte,
-        prontuario: prontuario(fichaProd, f.caf),
+        prontuario: prontuario(fichaProd, f.caf, atend),
       });
     },
   });

@@ -19,11 +19,12 @@ Monta duas visões, já que o GETEC não tem um prontuário pronto (ver nota aba
         resumo:{nGrupos,nProdutores,comCaf,semCaf,comPonto,nMunicipios,programas:[...]}}}}
 
 NOTA sobre atendimentos datados: o GETEC web não expõe o evento de atendimento
-individual (data/tema/último atendimento) em massa — o único acesso é o popup
-lista_ateMetIndividual, travado no ano da sessão. O nº de atendimentos histórico e
-os "últimos 3 atendimentos" detalhados saem da view do banco do SISATER
-(10.15.62.197), quando a rede liberar. Aqui, 'programas' e 'tecnicos' vêm dos
-vínculos de grupo do ano; 'nVinculos' é o nº de grupos em que o produtor está.
+individual em massa. O nº histórico, os últimos atendimentos e os eventos saem do
+banco do SISATER (rede interna do IDR) por scripts/build_getec_atendimentos.py, em
+data/privado/getec-atendimentos/<ibge>.json; o front junta os dois no clique
+(getecFichaProdutor.prontuario), então 'atendimentosDatados' fica null aqui.
+'programas' e 'tecnicos' vêm dos vínculos de grupo do ano; 'nVinculos' é o nº de
+grupos em que o produtor está.
 
 Uso: py -3 scripts/build_getec_fichas.py   (depois: upload_privado.py getec-ficha)
 """
@@ -40,8 +41,8 @@ SAIDA_TEC = PRIV / "getec-ficha-tecnico.json"
 
 NOTA_PROD = (
     "programas e tecnicos vem dos vinculos de grupo do GETEC no ano; nVinculos = "
-    "nº de grupos. atendimentos datados (nº historico e ultimos atendimentos) nao "
-    "sao expostos pelo GETEC web; virao da view do banco do SISATER."
+    "nº de grupos. atendimentos datados (nº historico, ultimos atendimentos, eventos) "
+    "ficam em getec-atendimentos/<ibge>.json, do banco do SISATER."
 )
 
 

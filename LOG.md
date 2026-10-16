@@ -6,6 +6,40 @@
 
 ---
 
+## Sessão 2026-10-16: atendimentos do SISATER no card do produtor
+
+Fecha a pendência do `build_getec_fichas.py` ("atendimentos datados virão do
+banco"). Banco do SISATER na rede interna do IDR: PostgreSQL 8.3, base
+`sisater`, leitura com usuário próprio (credenciais `SISATER_DB_*` no `.env`).
+
+- `scripts/build_getec_atendimentos.py` (~1 min): `tb_saateind` (4,9 mi
+  atendimentos individuais 2008 a hoje) e `tb_saeventocli`+`tb_saevento`, por
+  família da CAF. Ligação: CPF dos membros (`caf/<ibge>.json`) = `tb_sacadcli.cpfcli`.
+  137.888 clientes casados; 91.242 famílias (89.134 com atendimento, 2.108 só
+  com evento); 15.653 das 15.663 fichas de grupo (as 10 restantes não têm
+  nenhum registro no banco). Saída `data/privado/getec-atendimentos/<ibge>.json`
+  (398 arquivos, 63 MB, maior 1,3 MB): o estado inteiro num arquivo só não serve
+  ao clique.
+- Front: `loadGetecAtendimentos(ibge)` + `prontuario(ficha, caf, atend)` e a
+  seção "Prontuário de atendimento · GETEC" com nº, período, horas, últimos 5
+  anos, 3 últimos atendimentos e eventos. Testes em `getecFichaProdutor.test.mjs`.
+- Revisão adversarial (workflow, conferência contra o banco): a mesma visita
+  lançada para dois membros aparecia duas vezes nos "últimos" (6.212 famílias).
+  Agora é deduplicada por (data, método, ação, atividade, técnico); evento por
+  (codorg, codmun, codeve); empate de data com ordem estável; gravação via
+  `.tmp` + `os.replace` e aborta sem apagar nada se nada casar.
+
+### Pegadinhas
+- PG 8.3: sem window function e sem CTE; alias de coluna exige `AS`.
+- A view `atendimento` existe mas o usuário não tem SELECT; as tabelas base sim.
+- Datas sujas: ano 25 em `tb_saateind`, ano 72025 em `tb_saevento` (psycopg2
+  quebra no `fetch`). Filtrar `between '2008-01-01' and current_date` no SQL.
+- `cpfcli` com 8 a 10 dígitos = zeros à esquerda perdidos (todos passam no dígito).
+- ~0,15% dos casamentos por CPF não batem nem por nome da família (CPF de outra
+  pessoa no cadastro do SISATER); ficou sem filtro, a conferir.
+
+---
+
 ## Sessão 2026-10-13: perspectiva El Niño (camada `datageo-el-nino`)
 
 Origem: o El Niño Explorer da Morfo (morfo.rest/el-nino-explorer) não tem

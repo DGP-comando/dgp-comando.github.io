@@ -161,17 +161,33 @@ export function carHtml(car, areaCaf) {
     '<div class="fx-dim">Divisa generalizada do SICAR; o menor imóvel que contém o ponto</div>';
 }
 
+/** Histórico de atendimentos do banco do SISATER (prontuario().atendimentosDatados). */
+function atendimentosHtml(a) {
+  const rows = [`<div>Atendimentos individuais: <b>${n(a.n ?? 0)}</b>` +
+    (a.n ? ` <span class="fx-dim">· de ${data(a.primeiro)} a ${data(a.ultimo)} · ${n(a.horas ?? 0, 1)} h</span>` : '') + '</div>'];
+  const anos = Object.entries(a.porAno ?? {}).sort(([x], [y]) => x.localeCompare(y)).slice(-5);
+  if (anos.length) rows.push(`<div class="fx-dim">${anos.map(([ano, k]) => `${esc(ano)} <b>${n(k)}</b>`).join(' · ')}</div>`);
+  if (a.ultimos?.length) {
+    rows.push(`<div class="fx-sub" style="margin-top:6px">Últimos atendimentos</div>` + a.ultimos.map((u) =>
+      `<div>${data(u.data)} · ${esc(u.metodo)}: <b>${esc(u.acao)}</b> <span class="fx-dim">· ${esc(u.programa || u.atividade)} · ${esc(u.tecnico)}</span></div>`).join(''));
+  }
+  if (a.nEventos) rows.push(`<div style="margin-top:6px">Eventos coletivos: <b>${n(a.nEventos)}</b> <span class="fx-dim">· último em ${data(a.ultimoEvento)}</span></div>`);
+  return rows.join('');
+}
+
 /**
  * Prontuário de atendimento do produtor no GETEC (getecFichaProdutor.prontuario).
  * `p` = entrada por CAF, ou null (sem vínculo no GETEC). Programas e técnicos
- * vêm dos vínculos de grupo do ano; o evento datado (nº histórico, últimos
- * atendimentos) vem da view do banco e ainda não está disponível.
+ * vêm dos vínculos de grupo do ano; `atendimentosDatados` (nº histórico,
+ * últimos atendimentos, eventos) vem do banco do SISATER, por município.
  */
 export function secaoProntuario(p) {
   if (!p) return null;
   const rows = [];
+  const at = p.atendimentosDatados;
+  if (at) rows.push(atendimentosHtml(at));
   const nv = p.nVinculos ?? 0;
-  rows.push(`<div>Vínculos de grupo: <b>${n(nv)}</b> grupo${nv === 1 ? '' : 's'} no ano</div>`);
+  rows.push(`<div${at ? ' style="margin-top:6px"' : ''}>Vínculos de grupo: <b>${n(nv)}</b> grupo${nv === 1 ? '' : 's'} no ano</div>`);
   if (p.programas?.length) {
     rows.push(`<div class="fx-sub" style="margin-top:6px">Programas</div>` +
       p.programas.map((pr) => `<div>${esc(pr)}</div>`).join(''));
@@ -184,8 +200,10 @@ export function secaoProntuario(p) {
     rows.push(`<div class="fx-sub" style="margin-top:6px">Grupos</div>` +
       p.grupos.map((g) => `<div>${esc(g.nome)} <span class="fx-dim">· ${esc(g.projeto)} · ${esc(g.tecnicoNome)}</span></div>`).join(''));
   }
-  rows.push('<div class="fx-dim" style="margin-top:6px">IDR GETEC (SISATER) · programas e técnicos dos vínculos de grupo. ' +
-    'Nº de atendimentos histórico e últimos atendimentos datados pendentes da view do banco.</div>');
+  rows.push('<div class="fx-dim" style="margin-top:6px">IDR GETEC (SISATER) · programas e técnicos dos vínculos de grupo do ano' +
+    (at ? `; atendimentos da família (membros casados por CPF, visita repetida conta uma vez), base de ${data(at.periodo?.ate)}`
+      : p.historicoIndisponivel ? '; histórico de atendimentos indisponível agora' : '; sem atendimento individual registrado') +
+    '.</div>');
   return section('Prontuário de atendimento · GETEC', rows.join(''));
 }
 

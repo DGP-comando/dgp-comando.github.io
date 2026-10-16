@@ -3,6 +3,17 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-10-16 — atendimentos do SISATER no card do produtor
+
+### Added
+
+- **Prontuário de atendimento · GETEC** (painel da família da CAF, acesso restrito):
+  agora traz o histórico do banco do SISATER: nº de atendimentos individuais
+  desde 2008, primeiro e último, horas, os cinco anos mais recentes, os três
+  últimos atendimentos (data, método, ação, programa e técnico) e o nº de
+  eventos coletivos. Soma todos os membros da família. Famílias fora dos
+  grupos do ano também ganham a seção. Sai a nota "pendentes da view do banco".
+
 ## [Unreleased] — 2026-10-05 — outorgas por atividade, licenciamento do IAT
 
 ### Added
