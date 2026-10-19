@@ -189,6 +189,16 @@ export function exclusiveSurfaceActive(documentRef = globalThis.document) {
 }
 
 /**
+ * Fecha a bandeja BUSCAR que o passo "localizacao" abriu, pelo botão de
+ * recolher da própria bandeja. Uma bandeja fixada pela pessoa fica.
+ * @param {Document} [documentRef]
+ * @returns {void}
+ */
+export function fecharBandejaBusca(documentRef = globalThis.document) {
+  documentRef?.querySelector?.('#location-bar:not(.collapsed):not(.dock-pinned) .panel-collapse-btn')?.click();
+}
+
+/**
  * Wire and reveal the tutorial.
  * @param {object} input
  * @param {object} [input.styleManager] Initialized StyleManager (share-state check).
@@ -282,6 +292,7 @@ export function initFirstRunExperience({
   const goTo = (index, { focus = true } = {}) => {
     if (closing) return;
     const nav = tourNavState(index);
+    if (FIRST_RUN_TOUR_STEPS[current]?.id === 'localizacao' && nav.index !== current) fecharBandejaBusca();
     current = nav.index;
     sections.forEach((section, i) => {
       if (section) section.hidden = i !== current;

@@ -4282,8 +4282,9 @@ export class StyleManager {
     // Toque fora do dock fecha a bandeja aberta e não fixada (o mouse já
     // fecha ao sair dela, pelo pointerleave abaixo). O cartão do tutorial e
     // da apresentação não conta como fora: os passos abrem a bandeja e o
-    // Próximo precisa do primeiro toque. O clique do mesmo toque é engolido,
-    // senão o toque no mapa que só fecha a bandeja também abriria a ficha.
+    // Próximo precisa do primeiro toque. No mapa, o clique do mesmo toque é
+    // engolido, senão o toque que só fecha a bandeja também abriria a ficha;
+    // nos botões ele segue normalmente.
     document.addEventListener('pointerdown', (event) => {
       if (!isTouchPointer(event)) return;
       if (panelEl.classList.contains('collapsed') || panelEl.classList.contains('dock-pinned')) return;
@@ -4291,7 +4292,7 @@ export class StyleManager {
       clearOpen();
       clearClose();
       this.setPanelCollapsed(panelId, true, { explicit: true });
-      swallowNextClick();
+      if (event.target.closest?.('#map, #world-overlay-root')) swallowNextClick();
     }, true);
 
     panelEl.addEventListener('pointerenter', (event) => {

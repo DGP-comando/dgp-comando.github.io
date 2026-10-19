@@ -7,7 +7,7 @@
 // Reusa o card e o CSS do tutorial (#first-run-launcher); o tutorial em si
 // não aparece nessa sessão. Não grava preferência nenhuma.
 
-import { tourNavState, TOUR_HIGHLIGHT_CLASS } from './firstRunExperience.js';
+import { fecharBandejaBusca, tourNavState, TOUR_HIGHLIGHT_CLASS } from './firstRunExperience.js';
 import { municipioByIbge } from './municipioSearch.js';
 import { closeFicha } from './datageoFicha.js';
 
@@ -270,6 +270,7 @@ export function initApresentacao(deps) {
   const goTo = (index) => {
     if (closing) return;
     const nav = tourNavState(index, passos.length);
+    if (passos[current]?.id === 'localizacao' && nav.index !== current) fecharBandejaBusca();
     current = nav.index;
     const passo = passos[current];
     sections.forEach((s, i) => { s.hidden = i !== current; });

@@ -9951,7 +9951,7 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
   --m-dock-h: 48px;
   --m-top-row: 56px;
   /* --kb-inset: altura do teclado virtual (src/keyboardInset.js). */
-  --m-dock-bottom: calc(var(--m-ticker-h) + var(--m-safe-bottom) + var(--m-gutter) + var(--kb-inset, 0px));
+  --m-dock-bottom: calc(max(var(--m-ticker-h) + var(--m-safe-bottom), var(--kb-inset, 0px)) + var(--m-gutter));
   --m-above-dock: calc(var(--m-dock-bottom) + var(--m-dock-h) + var(--m-gutter));
   /* Linha da Vigilância (36px) + folga: o que fica acima dela não a cobre. */
   --m-above-row: calc(var(--m-above-dock) + 36px + var(--m-gutter));
@@ -10072,13 +10072,26 @@ body #datageo-area-watch.open { z-index: 115; }
     flex: 1 1 0;
     min-width: 0;
   }
-  /* Bandejas empilhadas (uma fixada): espaço para o alfinete da de baixo. */
-  :root #command-dock#command-dock:not(:has(> #gev-voice-control)).dock-has-pinned-tray :is(#location-bar, #control-panel):not(.collapsed):not(.dock-pinned) .dock-popover-content {
-    bottom: calc(100% + 1.2rem + 14px + var(--dock-pinned-stack-height));
+  /* A lista de produtores (320px) abre a partir da direita do campo, que
+     agora fica no fim da bandeja: sem isso ela passava da borda. */
+  :root #command-dock#command-dock:not(:has(> #gev-voice-control)) #pessoa-search-results {
+    right: 0;
+    left: auto;
   }
   body #datageo-area-watch { right: calc(16px + var(--m-safe-right)); }
   body #datageo-ficha { right: calc(16px + var(--m-safe-right)); }
   #title-bar { left: calc(36px + var(--m-safe-left)); }
+}
+
+/* Bandejas empilhadas (uma ou duas fixadas): espaço para o alfinete da de
+   cima, que fica no canto, metade para fora. */
+@media (min-width: 901px) {
+  :root #command-dock#command-dock:not(:has(> #gev-voice-control)).dock-has-pinned-tray :is(#location-bar, #control-panel):not(.collapsed):not(.dock-pinned) .dock-popover-content {
+    bottom: calc(100% + 1.2rem + 14px + var(--dock-pinned-stack-height));
+  }
+  :root #command-dock#command-dock:not(:has(> #gev-voice-control)).dock-has-two-pinned-trays :is(#location-bar, #control-panel).dock-pinned-top.dock-pinned:not(.collapsed) .dock-popover-content {
+    bottom: calc(100% + 1.2rem + 14px + var(--dock-lower-pinned-height));
+  }
 }
 
 /* Tablet e celular deitado (721–1180 px): as ações do topo, centralizadas,
@@ -10112,21 +10125,15 @@ body #datageo-area-watch.open { z-index: 115; }
     bottom: var(--l-dock-top);
     background: rgb(3, 10, 18);
   }
-  body:has(#datageo-ficha.open) #datageo-area-watch {
-    right: calc(16px + 360px + 8px + var(--m-safe-right));
-  }
+  /* Com a ficha aberta (quase modal) a Vigilância sai: não há lugar livre
+     para ela na tela deitada. */
+  body:has(#datageo-ficha.open) #datageo-area-watch { visibility: hidden; }
   /* Acima do trilho TELA, que em tela baixa desce até a Vigilância. */
   body #datageo-area-watch { z-index: 115; }
   body #datageo-area-watch .aw-card { max-height: calc(100dvh - 190px); }
   body #dg-radio {
     bottom: var(--l-dock-top);
     max-height: calc(100dvh - var(--l-dock-top) - 60px);
-  }
-  /* ESTILOS não sobe para dentro do topo; rola por dentro. (A de BUSCAR é
-     uma linha só e não pode rolar: as sugestões saem dela para cima.) */
-  #command-dock #control-panel .dock-popover-content {
-    max-height: calc(100dvh - var(--l-dock-top) - 60px);
-    overflow-y: auto;
   }
   /* Tutorial e apresentação à direita, entre o topo e o dock, para não
      cobrir o dock nem o painel de camadas que eles destacam. */
@@ -10142,17 +10149,26 @@ body #datageo-area-watch.open { z-index: 115; }
     max-height: none;
     transform: none;
   }
+  /* Na apresentação, a ficha (à direita) é o assunto: o cartão vai para a
+     esquerda enquanto ela está aberta. */
+  body.apresentacao-mode:has(#datageo-ficha.open) #first-run-launcher:not([data-step="inicio"]),
+  body.apresentacao-mode:has(#datageo-ficha.open) #first-run-launcher:not([data-step="inicio"]).visible {
+    right: auto;
+    left: calc(8px + var(--m-safe-left));
+  }
   .tour-nav { display: flex; flex-wrap: wrap; gap: 0.5rem; }
   .tour-dots { display: none; }
   .tour-nav-buttons { flex: 1 1 100%; order: 1; }
   .tour-nav-buttons button { flex: 1; }
   .tour-skip { order: 2; }
+  .first-run-footer { display: none; }
 }
 
 /* Dedo em vez de mouse, em qualquer largura: alvos de toque mínimos. */
 @media (pointer: coarse) {
   #datageo-ficha .fx-close { min-width: 36px; min-height: 36px; }
-  #datageo-ficha .fx-watch { right: 52px; }
+  body #datageo-ficha .fx-watch { right: 52px; }
+  :root #command-dock#command-dock :is(#location-search, #pessoa-search, .pessoa-search-modo) { font-size: 16px; }
   .panel-collapse-btn { min-width: 32px; min-height: 32px; }
   .map-stack-chip { min-height: 32px; }
 }
@@ -10403,6 +10419,7 @@ body #dg-radio { overflow-y: auto; }
   :root #command-dock#command-dock :is(#location-search, #pessoa-search, .pessoa-search-modo, #search-toggle) {
     min-height: 36px;
   }
+  :root #command-dock#command-dock #search-toggle { min-width: 36px; }
   :root #command-dock#command-dock :is(#location-search, #pessoa-search, .pessoa-search-modo) { font-size: 16px; }
   #pessoa-search-results { width: 100%; }
   .location-search-results { background: rgb(6, 14, 22); }
@@ -10416,9 +10433,9 @@ body #dg-radio { overflow-y: auto; }
   body .dg-data-credits button { padding: 6px 10px; }
   /* ⓘ com alvo de 32px: o contêiner compacto cresce junto e o ícone de 24px
      fica centralizado (sem isso ele se repetia dentro do botão maior). */
-  .maplibregl-ctrl-attrib.maplibregl-compact {
+  body .maplibregl-ctrl-attrib.maplibregl-compact {
     min-height: 28px;
-    padding-right: 32px;
+    padding: 2px 32px 2px 0;
     border-radius: 16px;
   }
   .maplibregl-ctrl-attrib.maplibregl-compact .maplibregl-ctrl-attrib-button {
@@ -10492,10 +10509,13 @@ body #dg-radio { overflow-y: auto; }
     border-top: 1px solid rgba(34, 211, 238, 0.2);
   }
   body #datageo-ficha .fx-fontes { order: 3; }
-  body #dg-radio {
+  /* :root vence o 'body #dg-radio' injetado por conectividadeRadios.js. */
+  :root body #dg-radio {
     bottom: var(--m-above-row);
     max-height: calc(100dvh - var(--m-above-row) - var(--m-safe-top) - var(--m-top-row));
   }
+  /* VIGILÂNCIA aberta com a ficha aberta: o cartão aparece por cima dela. */
+  body:has(#datageo-ficha.open) #datageo-area-watch.open { z-index: 121; }
 }
 
 @media (max-width: 479px) {
@@ -10554,15 +10574,32 @@ body #dg-radio { overflow-y: auto; }
   .first-run-suppress input { width: 18px; height: 18px; }
   .tour-prefs { grid-template-columns: 1fr; }
   body.apresentacao-mode .first-run-footer { display: none; }
-  /* Quando o passo abre o que ele apresenta (painel de camadas, bandeja
-     BUSCAR), o cartão vira só cabeçalho + navegação para não esconder o que
-     abriu; no da busca ele sobe para o topo (embaixo ficaria sobre ela). Só
-     nesses passos: nos seguintes o texto volta, mesmo com o painel aberto. */
-  body:not(.apresentacao-mode):has(#data-panel:not(.collapsed)) #first-run-launcher[data-step="camadas"] .tour-steps,
-  body:not(.apresentacao-mode):has(#location-bar:not(.collapsed)) #first-run-launcher[data-step="localizacao"] .tour-steps {
-    display: none;
+  /* Apresentação no passo da busca: o cartão sobe para o topo e deixa a
+     bandeja e as sugestões à vista. */
+  body.apresentacao-mode:has(#location-bar:not(.collapsed)) #first-run-launcher:not([data-step="inicio"]) {
+    top: calc(var(--m-safe-top) + var(--m-top-row));
+    bottom: auto;
   }
-  body:not(.apresentacao-mode):has(#location-bar:not(.collapsed)) #first-run-launcher[data-step="localizacao"] {
+  /* Passo das camadas com o painel recolhido: o cartão começa abaixo dele
+     (116px), para o painel destacado ficar à vista. */
+  body:has(#data-panel.collapsed) #first-run-launcher[data-step="camadas"] {
+    top: calc(var(--m-safe-top) + var(--m-top-row) + 116px + var(--m-gutter));
+    max-height: none;
+  }
+  /* Quando o passo abre o que ele apresenta (painel de camadas no passo das
+     camadas; bandeja do dock nos outros), o cartão vira só cabeçalho +
+     navegação para não esconder o que abriu; com bandeja aberta ele sobe
+     para o topo (embaixo ficaria sobre ela). Recolhido com altura zero, não
+     com display:none, para o passo seguinte voltar a rolar do topo. */
+  body:not(.apresentacao-mode):has(#data-panel:not(.collapsed)) #first-run-launcher[data-step="camadas"] .tour-steps,
+  body:not(.apresentacao-mode):has(#command-dock > .panel-collapsible:not(.collapsed)) #first-run-launcher:not([data-step="camadas"]) .tour-steps {
+    flex: 0 0 0;
+    max-height: 0;
+    margin: 0;
+    overflow: hidden;
+    visibility: hidden;
+  }
+  body:not(.apresentacao-mode):has(#command-dock > .panel-collapsible:not(.collapsed)) #first-run-launcher:not([data-step="camadas"]) {
     top: calc(var(--m-safe-top) + var(--m-top-row));
     bottom: auto;
   }
