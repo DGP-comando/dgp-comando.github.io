@@ -286,6 +286,9 @@ export function initFirstRunExperience({
     sections.forEach((section, i) => {
       if (section) section.hidden = i !== current;
     });
+    // O passo novo começa do topo (no celular a área rola e herdaria a rolagem).
+    const stepsBox = root.querySelector('.tour-steps');
+    if (stepsBox) stepsBox.scrollTop = 0;
     const heading = sections[current]?.querySelector('h2');
     if (heading?.id) root.setAttribute('aria-labelledby', heading.id);
     root.dataset.step = FIRST_RUN_TOUR_STEPS[current].id;

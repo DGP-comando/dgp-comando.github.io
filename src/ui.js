@@ -300,6 +300,16 @@ const LEFT_STACK_OBSTACLE_SELECTOR = [
   '#param-slider-panel',
 ].join(', ');
 /**
+ * Toque (dedo) em vez de mouse ou caneta. O `click` sintetizado também é um
+ * PointerEvent com pointerType nos navegadores atuais; sem ele, não é toque.
+ * @param {Event} event - pointerdown/click.
+ * @returns {boolean}
+ */
+function isTouchPointer(event) {
+  return event?.pointerType === 'touch';
+}
+
+/**
  * Whether an element currently occupies screen space a layout must respect.
  *
  * A rect alone is not enough: `visibility: hidden` and `opacity: 0` (how the
@@ -4251,8 +4261,23 @@ export class StyleManager {
       clearClose();
       if (panelEl.classList.contains('collapsed')) {
         this.setPanelCollapsed(panelId, false, { explicit: true });
+      } else if (isTouchPointer(event) && !panelEl.classList.contains('dock-pinned')
+        && event.target.closest('.location-toolbar')) {
+        // Toque não tem pointerleave: no celular o rótulo BUSCAR também fecha.
+        this.setPanelCollapsed(panelId, true, { explicit: true });
       }
     });
+
+    // Toque fora do dock fecha a bandeja aberta e não fixada (o mouse já
+    // fecha ao sair dela, pelo pointerleave abaixo).
+    document.addEventListener('pointerdown', (event) => {
+      if (!isTouchPointer(event)) return;
+      if (panelEl.classList.contains('collapsed') || panelEl.classList.contains('dock-pinned')) return;
+      if (event.target.closest?.('#command-dock')) return;
+      clearOpen();
+      clearClose();
+      this.setPanelCollapsed(panelId, true, { explicit: true });
+    }, true);
 
     panelEl.addEventListener('pointerenter', (event) => {
       const pointerType = event.pointerType || 'mouse';

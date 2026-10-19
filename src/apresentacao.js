@@ -273,6 +273,8 @@ export function initApresentacao(deps) {
     current = nav.index;
     const passo = passos[current];
     sections.forEach((s, i) => { s.hidden = i !== current; });
+    const stepsBox = root.querySelector('.tour-steps');
+    if (stepsBox) stepsBox.scrollTop = 0;
     root.dataset.step = passo.id;
     root.setAttribute('aria-labelledby', `tour-title-${passo.id}`);
     if (counter) counter.textContent = nav.counter;

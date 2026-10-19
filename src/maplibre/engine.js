@@ -114,18 +114,25 @@ export function createEngine({
     canvasContextAttributes: preserveDrawingBuffer ? { preserveDrawingBuffer: true } : undefined,
   });
 
-  // No celular a atribuição compacta nasce aberta e cobre o dock: começa
-  // recolhida (o botão ⓘ continua abrindo). O MapLibre a abre quando chega a
-  // primeira fonte com crédito, que pode ser depois do 'load'; o 'idle'
-  // seguinte pega esse caso.
-  if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 700px)').matches) {
-    const recolherAtribuicao = () => {
-      const attrib = map.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show');
-      attrib?.classList.remove('maplibregl-compact-show');
-      attrib?.removeAttribute('open');
-    };
-    map.once('load', recolherAtribuicao);
-    map.once('idle', recolherAtribuicao);
+  // A atribuição compacta nasce aberta e, aberta, passa por baixo do dock (e
+  // no celular cobre a Vigilância): fica recolhida, com o botão ⓘ abrindo. O
+  // MapLibre a abre sozinho quando chega a primeira fonte com crédito, em
+  // qualquer momento; por isso observar a classe em vez de esperar um
+  // evento. Depois que a pessoa toca no ⓘ, ela decide.
+  if (typeof MutationObserver !== 'undefined') {
+    const attrib = map.getContainer().querySelector('.maplibregl-ctrl-attrib');
+    if (attrib) {
+      const recolher = () => {
+        if (!attrib.classList.contains('maplibregl-compact-show')) return;
+        attrib.classList.remove('maplibregl-compact-show');
+        attrib.removeAttribute('open');
+      };
+      const observer = new MutationObserver(recolher);
+      observer.observe(attrib, { attributes: true, attributeFilter: ['class'] });
+      attrib.querySelector('.maplibregl-ctrl-attrib-button')
+        ?.addEventListener('click', () => observer.disconnect(), { once: true, capture: true });
+      recolher();
+    }
   }
 
   const listeners = new Map();
