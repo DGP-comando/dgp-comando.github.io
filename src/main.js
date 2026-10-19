@@ -41,9 +41,11 @@ import { registrar } from './data/acessoLog.js';
 import { initAnalytics } from './datageoAnalytics.js';
 import { CAMADAS_PRIVADAS, definirExterno, ehExterno } from './data/acessoExterno.js';
 import { registerServiceWorker } from './pwa.js';
+import { initKeyboardInset } from './keyboardInset.js';
 
 initLogoGaze();
 registerServiceWorker();
+initKeyboardInset();
 
 /**
  * Extract a human-readable error message from any thrown value.
