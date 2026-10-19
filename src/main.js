@@ -38,8 +38,10 @@ import { initFirstRunExperience } from './firstRunExperience.js';
 import { apresentacaoPedida, initApresentacao } from './apresentacao.js';
 import { requireLogin } from './datageoLogin.js';
 import { initGeolibrePanel } from './processing/geolibrePanel.js';
+import { registerServiceWorker } from './pwa.js';
 
 initLogoGaze();
+registerServiceWorker();
 
 /**
  * Extract a human-readable error message from any thrown value.
