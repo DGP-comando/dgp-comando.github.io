@@ -114,6 +114,20 @@ export function createEngine({
     canvasContextAttributes: preserveDrawingBuffer ? { preserveDrawingBuffer: true } : undefined,
   });
 
+  // No celular a atribuição compacta nasce aberta e cobre o dock: começa
+  // recolhida (o botão ⓘ continua abrindo). O MapLibre a abre quando chega a
+  // primeira fonte com crédito, que pode ser depois do 'load'; o 'idle'
+  // seguinte pega esse caso.
+  if (typeof window !== 'undefined' && window.matchMedia?.('(max-width: 700px)').matches) {
+    const recolherAtribuicao = () => {
+      const attrib = map.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact-show');
+      attrib?.classList.remove('maplibregl-compact-show');
+      attrib?.removeAttribute('open');
+    };
+    map.once('load', recolherAtribuicao);
+    map.once('idle', recolherAtribuicao);
+  }
+
   const listeners = new Map();
   function emit(type, payload) {
     for (const fn of listeners.get(type) ?? []) {

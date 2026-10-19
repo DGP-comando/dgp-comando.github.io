@@ -9921,3 +9921,206 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
 #location-bar-divider {
   display: none !important;
 }
+
+/* =========================================================================
+   Celular (≤ 700 px) — diagramação final. Fica no fim do arquivo para vencer
+   a cascata dos passes anteriores. Três faixas, sem sobreposição:
+     topo   — logo + ações numa linha só (o subtítulo cobria os botões);
+     meio   — mapa livre, painéis abaixo da linha de ações;
+     rodapé — faixa PR AO VIVO colada embaixo, dock (BUSCAR · ESTILOS) logo
+              acima dela, e por cima do dock os controles do mapa e a
+              Vigilância. As bandejas do dock abrem na largura útil.
+   As margens somam env(safe-area-inset-*) para o PWA instalado (notch e
+   barra de gestos), que usa viewport-fit=cover.
+   O dock repete o id (#command-dock#command-dock#command-dock) porque as
+   regras de bandeja aberta acima chegam a três ids via :has().
+   ========================================================================= */
+:root {
+  --m-safe-top: env(safe-area-inset-top, 0px);
+  --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --m-safe-left: env(safe-area-inset-left, 0px);
+  --m-safe-right: env(safe-area-inset-right, 0px);
+  --m-gutter: 8px;
+  --m-ticker-h: 26px;
+  --m-dock-h: 48px;
+  --m-dock-bottom: calc(var(--m-ticker-h) + var(--m-safe-bottom) + var(--m-gutter));
+  --m-above-dock: calc(var(--m-dock-bottom) + var(--m-dock-h) + var(--m-gutter));
+}
+
+@media (max-width: 700px) {
+  /* ── Topo ── */
+  #title-bar {
+    top: calc(var(--m-safe-top) + var(--m-gutter));
+    left: calc(var(--m-safe-left) + 10px);
+  }
+  #title-bar .subtitle { display: none; }
+  #title-bar .title-glow { width: 120px; height: 56px; }
+  #title-bar h1 { gap: 8px; font-size: 14px; letter-spacing: 3px; }
+  #title-bar .title-logo { width: 36px; }
+
+  #top-center-actions {
+    top: calc(var(--m-safe-top) + var(--m-gutter));
+    right: calc(var(--m-safe-right) + var(--m-gutter));
+    left: auto;
+    gap: 6px;
+    transform: none;
+  }
+  #top-center-actions button:hover,
+  #top-center-actions button:focus-visible { transform: none; }
+
+  /* ── Painéis da esquerda: começam abaixo da linha do topo ── */
+  #left-panel-stack {
+    top: calc(var(--m-safe-top) + 56px);
+    left: calc(var(--m-safe-left) + var(--m-gutter));
+    right: calc(var(--m-safe-right) + var(--m-gutter));
+  }
+
+  /* ── Rodapé: faixa PR AO VIVO ── */
+  body #datageo-ticker {
+    height: calc(var(--m-ticker-h) + var(--m-safe-bottom));
+    padding-bottom: var(--m-safe-bottom);
+    box-sizing: border-box;
+  }
+
+  /* ── Dock: barra de largura total acima da faixa ── */
+  :root #command-dock#command-dock#command-dock {
+    right: calc(var(--m-safe-right) + var(--m-gutter));
+    bottom: var(--m-dock-bottom);
+    left: calc(var(--m-safe-left) + var(--m-gutter));
+    width: auto;
+    max-width: none;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    gap: 6px;
+    transform: none;
+    /* Sem animar o transform: ao estreitar a janela o dock vinha deslizando
+       do translateX(-50%) do desktop e passava um instante fora da tela. */
+    transition: opacity var(--transition-smooth), visibility var(--transition-smooth);
+  }
+  :root #command-dock#command-dock#command-dock > #location-bar,
+  :root #command-dock#command-dock#command-dock > #control-panel {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    height: var(--m-dock-h);
+    border-radius: var(--panel-radius);
+  }
+  :root #command-dock#command-dock#command-dock > :is(#location-bar, #control-panel):is(.collapsed, :not(.collapsed)) {
+    position: relative;
+    flex: 1 1 0;
+    width: auto;
+    border: 1px solid var(--glass-border);
+  }
+  :root #command-dock#command-dock#command-dock > :is(#location-bar, #control-panel):is(:not(.collapsed), .dock-pinned) {
+    border-color: rgba(0, 212, 255, 0.55);
+  }
+  :root #command-dock#command-dock#command-dock > #control-panel { order: 0; }
+  :root #command-dock#command-dock#command-dock > #gev-voice-control { order: 1; }
+  :root #command-dock#command-dock#command-dock > #location-bar { order: 2; }
+  :root #command-dock#command-dock#command-dock > :is(#location-bar, #control-panel) > :is(.location-inner, .panel-inner) {
+    justify-content: center;
+    min-height: 0;
+    height: 100%;
+    padding: 0 12px;
+    border-radius: inherit;
+  }
+  :root #command-dock#command-dock#command-dock #location-bar .location-mini-status,
+  :root #command-dock#command-dock#command-dock .panel-glow { display: none; }
+  :root #command-dock#command-dock#command-dock #location-bar .panel-collapse-btn { display: none; }
+  :root #command-dock#command-dock#command-dock #location-bar .location-toolbar,
+  :root #command-dock#command-dock#command-dock #control-panel .panel-header {
+    justify-content: center;
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+  }
+  :root #command-dock#command-dock#command-dock :is(.panel-title, .location-toolbar-label),
+  :root #command-dock#command-dock#command-dock #location-bar .location-toolbar-label,
+  :root #command-dock#command-dock#command-dock #control-panel .panel-title {
+    justify-content: center;
+    width: auto;
+    max-width: none;
+    overflow: visible;
+    font-size: 0.62rem;
+    letter-spacing: 0.12rem;
+    text-align: center;
+  }
+  :root #command-dock#command-dock#command-dock #control-panel .panel-title::after,
+  :root #command-dock#command-dock#command-dock #location-bar .location-toolbar-label::after { content: none; }
+
+  /* Bandejas abrem sobre o dock, na largura dele. A asa (com backdrop-filter)
+     é o bloco de referência: a de ESTILOS (à esquerda, como no desktop)
+     ancora à esquerda, a de BUSCAR à direita; -1px desconta a borda. */
+  :root #command-dock#command-dock#command-dock #location-bar .dock-popover-content,
+  :root #command-dock#command-dock#command-dock #control-panel .dock-popover-content {
+    right: auto;
+    bottom: calc(100% + var(--m-gutter));
+    left: -1px;
+    width: calc(100vw - 2 * var(--m-gutter) - var(--m-safe-left) - var(--m-safe-right));
+    max-width: none;
+  }
+  /* BUSCAR: as duas buscas (produtor e município) uma sobre a outra, cada
+     uma na largura toda. Sem overflow na bandeja: as sugestões abrem para
+     cima, para fora dela (ver .location-city-row). */
+  :root #command-dock#command-dock#command-dock .location-city-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  :root #command-dock#command-dock#command-dock .location-search-wrap {
+    flex: 0 0 auto;
+    width: 100%;
+    padding-right: 0;
+  }
+  :root #command-dock#command-dock#command-dock #location-bar .dock-popover-content {
+    right: -1px;
+    left: auto;
+  }
+  :root #command-dock#command-dock#command-dock.dock-has-pinned-tray #location-bar:not(.collapsed):not(.dock-pinned) .dock-popover-content,
+  :root #command-dock#command-dock#command-dock.dock-has-pinned-tray #control-panel:not(.collapsed):not(.dock-pinned) .dock-popover-content {
+    bottom: calc(100% + var(--m-gutter) + var(--dock-pinned-stack-height));
+  }
+  :root #command-dock#command-dock#command-dock.dock-has-two-pinned-trays #location-bar.dock-pinned-top.dock-pinned:not(.collapsed) .dock-popover-content,
+  :root #command-dock#command-dock#command-dock.dock-has-two-pinned-trays #control-panel.dock-pinned-top.dock-pinned:not(.collapsed) .dock-popover-content {
+    bottom: calc(100% + var(--m-gutter) + var(--dock-lower-pinned-height));
+  }
+
+  /* ── Acima do dock: controles do mapa (direita) e Vigilância (esquerda) ── */
+  body:has(#datageo-ticker) .maplibregl-ctrl-bottom-right,
+  body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left,
+  .maplibregl-ctrl-bottom-right,
+  .maplibregl-ctrl-bottom-left {
+    bottom: calc(var(--m-above-dock) - 10px);
+  }
+  .maplibregl-ctrl-bottom-right { right: var(--m-safe-right); }
+  .maplibregl-ctrl-bottom-left { left: var(--m-safe-left); }
+
+  body #datageo-area-watch {
+    right: auto;
+    bottom: var(--m-above-dock);
+    left: calc(var(--m-safe-left) + var(--m-gutter));
+    width: min(300px, calc(100vw - 2 * var(--m-gutter) - 120px));
+    align-items: flex-start;
+  }
+  body #datageo-area-watch.open {
+    width: calc(100vw - 2 * var(--m-gutter) - var(--m-safe-left) - var(--m-safe-right));
+  }
+  body #datageo-area-watch .aw-card { max-height: 40dvh; }
+
+  /* Ficha municipal ocupa o meio, entre o topo e o dock. */
+  #datageo-ficha {
+    top: calc(var(--m-safe-top) + 56px);
+    bottom: var(--m-above-dock);
+  }
+}
+
+/* Telas estreitas: só o logo no topo, para as sete ações caberem na linha. */
+@media (max-width: 479px) {
+  #title-bar h1 > span:not(.title-logo) { display: none; }
+}
+
+@media (max-width: 359px) {
+  #top-center-actions { gap: 4px; }
+  #top-center-actions button { width: 34px; height: 34px; }
+}
