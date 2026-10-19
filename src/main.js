@@ -39,9 +39,11 @@ import { apresentacaoPedida, initApresentacao } from './apresentacao.js';
 import { requireLogin } from './datageoLogin.js';
 import { initGeolibrePanel } from './processing/geolibrePanel.js';
 import { registerServiceWorker } from './pwa.js';
+import { initKeyboardInset } from './keyboardInset.js';
 
 initLogoGaze();
 registerServiceWorker();
+initKeyboardInset();
 
 /**
  * Extract a human-readable error message from any thrown value.

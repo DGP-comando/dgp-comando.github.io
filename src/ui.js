@@ -161,6 +161,7 @@ import {
   stampInitialShareGesture,
 } from './navigationPolicy.js';
 import { holdContinuousRender, releaseContinuousRender, governorRequestRender } from './renderGovernor.js';
+import { fitSuggestionListAbove } from './suggestionListFit.js';
 import {
   setScopeMaskEnabled,
   isScopeMaskEnabled,
@@ -307,6 +308,16 @@ const LEFT_STACK_OBSTACLE_SELECTOR = [
  */
 function isTouchPointer(event) {
   return event?.pointerType === 'touch';
+}
+
+/** Engole o próximo `click` (fase de captura) ou desiste em 600 ms. */
+function swallowNextClick() {
+  const engolir = (event) => {
+    event.stopPropagation();
+    event.preventDefault();
+  };
+  window.addEventListener('click', engolir, { capture: true, once: true });
+  window.setTimeout(() => window.removeEventListener('click', engolir, { capture: true }), 600);
 }
 
 /**
@@ -4269,14 +4280,18 @@ export class StyleManager {
     });
 
     // Toque fora do dock fecha a bandeja aberta e não fixada (o mouse já
-    // fecha ao sair dela, pelo pointerleave abaixo).
+    // fecha ao sair dela, pelo pointerleave abaixo). O cartão do tutorial e
+    // da apresentação não conta como fora: os passos abrem a bandeja e o
+    // Próximo precisa do primeiro toque. O clique do mesmo toque é engolido,
+    // senão o toque no mapa que só fecha a bandeja também abriria a ficha.
     document.addEventListener('pointerdown', (event) => {
       if (!isTouchPointer(event)) return;
       if (panelEl.classList.contains('collapsed') || panelEl.classList.contains('dock-pinned')) return;
-      if (event.target.closest?.('#command-dock')) return;
+      if (event.target.closest?.('#command-dock, #first-run-launcher')) return;
       clearOpen();
       clearClose();
       this.setPanelCollapsed(panelId, true, { explicit: true });
+      swallowNextClick();
     }, true);
 
     panelEl.addEventListener('pointerenter', (event) => {
@@ -9724,6 +9739,7 @@ export class StyleManager {
     const pastRight = rect.right - (viewportWidth - gutter);
     const shift = pastLeft > 0 ? pastLeft : (pastRight > 0 ? -pastRight : 0);
     if (shift) list.style.marginLeft = `${Math.round(shift)}px`;
+    fitSuggestionListAbove(list);
   }
 
   /**

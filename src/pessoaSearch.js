@@ -13,6 +13,7 @@ import { loadServidoresIdr } from './data/servidoresIdr.js';
 import { municipioByIbge, normalizeMunicipioQuery } from './municipioSearch.js';
 import { abrirFamiliaCaf } from './maplibre/layers/caf.js';
 import { abrirExtensionista } from './maplibre/layers/estacoesIdr.js';
+import { fitSuggestionListAbove } from './suggestionListFit.js';
 
 const LIMITE = 8;
 const MIN_CHARS = 3;
@@ -155,6 +156,7 @@ export function initPessoaSearch(deps) {
       lista.appendChild(li);
     });
     lista.hidden = false;
+    fitSuggestionListAbove(lista);
     input.setAttribute('aria-expanded', 'true');
   };
 

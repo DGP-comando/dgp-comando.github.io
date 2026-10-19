@@ -9950,10 +9950,11 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
   --m-ticker-h: 26px;
   --m-dock-h: 48px;
   --m-top-row: 56px;
-  --m-dock-bottom: calc(var(--m-ticker-h) + var(--m-safe-bottom) + var(--m-gutter));
+  /* --kb-inset: altura do teclado virtual (src/keyboardInset.js). */
+  --m-dock-bottom: calc(var(--m-ticker-h) + var(--m-safe-bottom) + var(--m-gutter) + var(--kb-inset, 0px));
   --m-above-dock: calc(var(--m-dock-bottom) + var(--m-dock-h) + var(--m-gutter));
-  /* Linha da Vigilância (28px) + folga: o que fica acima dela não a cobre. */
-  --m-above-row: calc(var(--m-above-dock) + 36px);
+  /* Linha da Vigilância (36px) + folga: o que fica acima dela não a cobre. */
+  --m-above-row: calc(var(--m-above-dock) + 36px + var(--m-gutter));
   /* Notch em paisagem: as colunas laterais do desktop andam junto. */
   --left-stack-x: calc(52px + var(--m-safe-left));
   --right-rail-x: calc(52px + var(--m-safe-right));
@@ -10001,18 +10002,27 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
 .login-hint { color: var(--text-secondary); }
 .login-actions { flex-wrap: wrap; }
 .login-actions button {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  min-width: max-content;
 }
-.login-aceite {
-  align-items: center;
-  min-height: 40px;
+.login-aceite { align-items: center; }
+.login-aceite input { flex: none; margin: 0; }
+/* O texto do termo cede altura em telas baixas para os botões caberem; o
+   logo encolhe no passo do termo e em telas deitadas. */
+.login-termo { max-height: clamp(120px, calc(100dvh - 470px), 360px); }
+.loader-content:has(.login-form-termo) .loader-logo {
+  width: 64px;
+  margin-bottom: 8px;
 }
-.login-aceite input {
-  flex: none;
-  width: 20px;
-  height: 20px;
-  margin: 0;
+@media (max-height: 500px) {
+  .loader-logo { width: 56px; margin-bottom: 8px; }
+  .loader-content h2 { margin-bottom: 6px; }
+}
+@media (max-width: 720px), (pointer: coarse) {
+  .login-aceite { min-height: 40px; }
+  .login-aceite input { width: 20px; height: 20px; }
+  /* 16px: abaixo disso o Safari do iPhone dá zoom ao focar o campo. */
+  .login-field input { font-size: 16px; }
 }
 
 /* Cadastro de usuários (admin): a largura do formulário não contava o
@@ -10057,6 +10067,15 @@ body #datageo-area-watch.open { z-index: 115; }
   :root body:has(#datageo-ticker) #command-dock {
     bottom: calc(var(--m-ticker-h) + 2vh + var(--m-safe-bottom));
   }
+  /* Na bandeja de 34rem as duas buscas dividem a largura. */
+  :root #command-dock#command-dock:not(:has(> #gev-voice-control)) .location-search-wrap {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  /* Bandejas empilhadas (uma fixada): espaço para o alfinete da de baixo. */
+  :root #command-dock#command-dock:not(:has(> #gev-voice-control)).dock-has-pinned-tray :is(#location-bar, #control-panel):not(.collapsed):not(.dock-pinned) .dock-popover-content {
+    bottom: calc(100% + 1.2rem + 14px + var(--dock-pinned-stack-height));
+  }
   body #datageo-area-watch { right: calc(16px + var(--m-safe-right)); }
   body #datageo-ficha { right: calc(16px + var(--m-safe-right)); }
   #title-bar { left: calc(36px + var(--m-safe-left)); }
@@ -10079,34 +10098,61 @@ body #datageo-area-watch.open { z-index: 115; }
   #title-bar .subtitle { font-size: 9px; letter-spacing: 3px; }
 }
 
-/* Celular deitado / tela baixa: menos altura para o cromo. */
+/* Celular deitado / tela baixa: menos altura para o cromo. O topo do dock
+   fica em --l-dock-top (faixa + 2vh + dock de 3.75rem + folga). */
 @media (min-width: 721px) and (max-height: 500px) {
+  :root { --l-dock-top: calc(var(--m-ticker-h) + 2vh + var(--m-safe-bottom) + 3.75rem + 8px); }
   #title-bar { top: 12px; }
   #title-bar .subtitle { display: none; }
   #top-center-actions { top: 12px; }
-  /* A ficha começa logo abaixo do topo e para acima do dock (centro). */
+  /* A ficha começa logo abaixo do topo, para acima do dock (centro) e é
+     opaca; a Vigilância vai para a esquerda dela enquanto ela está aberta. */
   body #datageo-ficha {
     top: 60px;
-    bottom: calc(var(--m-ticker-h) + 2vh + var(--m-safe-bottom) + 3.75rem + 8px);
+    bottom: var(--l-dock-top);
+    background: rgb(3, 10, 18);
   }
+  body:has(#datageo-ficha.open) #datageo-area-watch {
+    right: calc(16px + 360px + 8px + var(--m-safe-right));
+  }
+  /* Acima do trilho TELA, que em tela baixa desce até a Vigilância. */
+  body #datageo-area-watch { z-index: 115; }
   body #datageo-area-watch .aw-card { max-height: calc(100dvh - 190px); }
-  /* Tutorial à direita, abaixo das ações, para não cobrir o dock nem o
-     painel de camadas que ele destaca. */
+  body #dg-radio {
+    bottom: var(--l-dock-top);
+    max-height: calc(100dvh - var(--l-dock-top) - 60px);
+  }
+  /* ESTILOS não sobe para dentro do topo; rola por dentro. (A de BUSCAR é
+     uma linha só e não pode rolar: as sugestões saem dela para cima.) */
+  #command-dock #control-panel .dock-popover-content {
+    max-height: calc(100dvh - var(--l-dock-top) - 60px);
+    overflow-y: auto;
+  }
+  /* Tutorial e apresentação à direita, entre o topo e o dock, para não
+     cobrir o dock nem o painel de camadas que eles destacam. */
   #first-run-launcher,
-  #first-run-launcher.visible {
+  #first-run-launcher.visible,
+  body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]),
+  body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
     top: 60px;
     right: calc(8px + var(--m-safe-right));
-    bottom: 8px;
+    bottom: var(--l-dock-top);
     left: auto;
-    width: min(420px, 50vw);
+    width: min(max(400px, 50vw), calc(100vw - 16px));
     max-height: none;
     transform: none;
   }
+  .tour-nav { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .tour-dots { display: none; }
+  .tour-nav-buttons { flex: 1 1 100%; order: 1; }
+  .tour-nav-buttons button { flex: 1; }
+  .tour-skip { order: 2; }
 }
 
 /* Dedo em vez de mouse, em qualquer largura: alvos de toque mínimos. */
 @media (pointer: coarse) {
   #datageo-ficha .fx-close { min-width: 36px; min-height: 36px; }
+  #datageo-ficha .fx-watch { right: 52px; }
   .panel-collapse-btn { min-width: 32px; min-height: 32px; }
   .map-stack-chip { min-height: 32px; }
 }
@@ -10119,7 +10165,18 @@ body #datageo-area-watch.open { z-index: 115; }
     border-color: var(--glass-border);
     transform: none;
   }
+  /* A asa do dock tocada por último não fica "acesa" depois de fechar. */
+  #command-dock > :is(#location-bar, #control-panel).collapsed:not(.dock-pinned):hover :is(.location-toolbar-label, .panel-title) {
+    color: rgba(206, 232, 239, 0.72);
+  }
+  #command-dock > :is(#location-bar, #control-panel).collapsed:not(.dock-pinned):hover .dock-label-icon {
+    background: rgba(232, 234, 237, 0.3);
+    filter: none;
+  }
 }
+
+/* Rádio ao vivo: o conteúdo rola dentro do cartão em vez de vazar. */
+body #dg-radio { overflow-y: auto; }
 
 @media (max-width: 575px) {
   /* Créditos em tela cheia: título e ✕ abaixo da barra de status. */
@@ -10127,6 +10184,11 @@ body #datageo-area-watch.open { z-index: 115; }
     box-sizing: border-box;
     padding-top: var(--m-safe-top);
     padding-bottom: var(--m-safe-bottom);
+  }
+  body .dg-credit-lightbox-close {
+    top: calc(var(--m-safe-top) + 4px);
+    width: 40px;
+    height: 40px;
   }
 }
 
@@ -10166,7 +10228,13 @@ body #datageo-area-watch.open { z-index: 115; }
     text-align: center;
   }
   #global-loading-status { font-size: 10px; letter-spacing: 1px; }
+  #global-loading-label { white-space: nowrap; }
+  #global-loading-detail { max-width: 40vw; }
   #toast { padding: 10px 16px; letter-spacing: 1px; }
+  /* Os dois ao mesmo tempo: o toast sobe acima do aviso. */
+  body:has(#global-loading-status:not([hidden])) #toast {
+    bottom: calc(var(--m-above-row) + 28px + 36px);
+  }
 
   /* ── Painel de camadas ── */
   #left-panel-stack {
@@ -10189,6 +10257,16 @@ body #datageo-area-watch.open { z-index: 115; }
     color: var(--text-secondary);
   }
   .data-panel-views button { width: 36px; height: 32px; }
+  #data-panel .panel-title {
+    font-size: 10px;
+    color: var(--text-secondary);
+  }
+  .data-toggle-chip {
+    min-height: 28px;
+    padding: 4px 9px;
+    font-size: 10px;
+  }
+  .data-toggle-legend-item { min-height: 28px; }
   .data-toggle-group-header { min-height: 36px; }
   #proc-panel > summary { padding-block: 10px; }
   /* PROCESSAMENTO aberto rola sozinho em vez de empurrar a lista para fora. */
@@ -10232,7 +10310,7 @@ body #datageo-area-watch.open { z-index: 115; }
     height: var(--m-dock-h);
     border: 1px solid var(--glass-border);
     border-radius: var(--panel-radius);
-    background: rgba(9, 18, 27, 0.92);
+    background: rgb(9, 18, 27);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
@@ -10289,10 +10367,14 @@ body #datageo-area-watch.open { z-index: 115; }
   :root #command-dock#command-dock.dock-has-two-pinned-trays :is(#location-bar, #control-panel).dock-pinned-top.dock-pinned:not(.collapsed) .dock-popover-content {
     bottom: calc(100% + var(--m-gutter) + 12px + var(--dock-lower-pinned-height));
   }
-  /* Alfinete dentro da bandeja (com right:-1rem ele saía pela borda). */
+  /* Fixar bandeja não faz sentido numa tela deste tamanho (uma fixada
+     esconderia a Vigilância e empilharia a outra por cima): o alfinete só
+     aparece para soltar uma que já veio fixada do desktop, na borda de cima
+     da bandeja e dentro da tela. */
+  :root #command-dock#command-dock > :not(.dock-pinned) .dock-pin-btn { display: none; }
   :root #command-dock#command-dock .dock-pin-btn {
-    top: 6px;
-    right: 6px;
+    top: -16px;
+    right: 8px;
   }
   /* Estilos visuais rolam na horizontal: a borda direita esmaece para
      mostrar que há mais. */
@@ -10300,7 +10382,10 @@ body #datageo-area-watch.open { z-index: 115; }
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
   }
-  .map-stack-chip { min-height: 36px; }
+  .map-stack-chip {
+    min-height: 36px;
+    align-items: center;
+  }
 
   /* BUSCAR: as duas buscas (produtor e município) uma sobre a outra, cada
      uma na largura toda. As sugestões abrem para cima, para fora da bandeja. */
@@ -10320,7 +10405,7 @@ body #datageo-area-watch.open { z-index: 115; }
   }
   :root #command-dock#command-dock :is(#location-search, #pessoa-search, .pessoa-search-modo) { font-size: 16px; }
   #pessoa-search-results { width: 100%; }
-  .location-search-results { max-height: min(244px, 38dvh); }
+  .location-search-results { background: rgb(6, 14, 22); }
   .location-search-option { min-height: 36px; }
 
   /* ── Acima do dock: controles do mapa (direita) e Vigilância (esquerda) ── */
@@ -10328,11 +10413,26 @@ body #datageo-area-watch.open { z-index: 115; }
   body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
     bottom: calc(var(--m-above-dock) - 10px);
   }
-  .dg-data-credits button { padding: 6px 10px; }
+  body .dg-data-credits button { padding: 6px 10px; }
+  /* ⓘ com alvo de 32px: o contêiner compacto cresce junto e o ícone de 24px
+     fica centralizado (sem isso ele se repetia dentro do botão maior). */
+  .maplibregl-ctrl-attrib.maplibregl-compact {
+    min-height: 28px;
+    padding-right: 32px;
+    border-radius: 16px;
+  }
   .maplibregl-ctrl-attrib.maplibregl-compact .maplibregl-ctrl-attrib-button {
     width: 32px;
     height: 32px;
+    border-radius: 16px;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 24px 24px;
   }
+  /* Crédito aberto ocupa a linha da Vigilância: ela sai enquanto isso. */
+  body:has(.maplibregl-ctrl-attrib.maplibregl-compact-show) #datageo-area-watch { visibility: hidden; }
+  /* "Data attribution" fica por baixo do painel aberto ou da ficha: sai. */
+  body:has(#data-panel:not(.collapsed), #datageo-ficha.open) .dg-data-credits { visibility: hidden; }
   body #datageo-area-watch {
     right: auto;
     bottom: var(--m-above-dock);
@@ -10367,11 +10467,31 @@ body #datageo-area-watch.open { z-index: 115; }
     left: calc(var(--m-safe-left) + var(--m-gutter));
     background: rgb(3, 10, 18);
   }
+  body #datageo-ficha {
+    width: auto;
+    max-width: none;
+  }
+  /* VIGIAR sai do canto (cobria o nome) e vai para uma linha abaixo do
+     cabeçalho; o cabeçalho só reserva o ✕. */
+  body #datageo-ficha .fx-header {
+    order: 0;
+    padding-right: 48px;
+    border-bottom: 0;
+  }
   body #datageo-ficha .fx-watch {
+    position: static;
+    order: 1;
+    align-self: flex-start;
     min-height: 32px;
+    margin: 0 14px 10px;
     padding: 6px 12px;
     font-size: 11px;
   }
+  body #datageo-ficha .fx-body {
+    order: 2;
+    border-top: 1px solid rgba(34, 211, 238, 0.2);
+  }
+  body #datageo-ficha .fx-fontes { order: 3; }
   body #dg-radio {
     bottom: var(--m-above-row);
     max-height: calc(100dvh - var(--m-above-row) - var(--m-safe-top) - var(--m-top-row));
@@ -10385,12 +10505,29 @@ body #datageo-area-watch.open { z-index: 115; }
 
 @media (max-width: 359px) {
   #top-center-actions { gap: 4px; }
-  #top-center-actions button { width: 34px; height: 34px; }
-  /* Linhas de camada: o botão DESLIGADA não pode empurrar o nome para fora. */
+  #top-center-actions button { width: 32px; height: 32px; }
+  /* Linhas de camada: o botão DESLIGADA não pode empurrar o nome para fora;
+     palavra longa quebra com hífen (lang=pt-BR), não no meio. */
   .data-toggle-left { flex: 1 1 auto; min-width: 0; }
-  .data-name { overflow-wrap: anywhere; }
+  .data-name { overflow-wrap: break-word; hyphens: auto; }
   .data-count { min-width: 0; }
   .data-toggle-btn { min-width: 72px; padding: 3px 6px; letter-spacing: 1px; }
+  .data-panel-views button { width: 32px; }
+  #data-panel-search { letter-spacing: 0; }
+}
+
+/* Tela de capa de dobrável (~280px): o logo sai e as ações ocupam a linha. */
+@media (max-width: 299px) {
+  #title-bar { display: none; }
+  #top-center-actions {
+    left: calc(var(--m-safe-left) + var(--m-gutter));
+    justify-content: space-between;
+  }
+  :root #command-dock#command-dock :is(.panel-title, .location-toolbar-label) {
+    gap: 0.3rem;
+    font-size: 0.55rem;
+    letter-spacing: 0.06rem;
+  }
 }
 
 /* ── Tutorial e apresentação no celular ── */
@@ -10399,10 +10536,6 @@ body #datageo-area-watch.open { z-index: 115; }
   body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]) {
     bottom: var(--m-above-row);
     max-height: calc(100dvh - var(--m-above-row) - var(--m-safe-top) - var(--m-top-row));
-  }
-  /* No passo das camadas o cartão para abaixo do painel que ele destaca. */
-  #first-run-launcher[data-step="camadas"] {
-    max-height: calc(100dvh - var(--m-above-row) - var(--m-safe-top) - var(--m-top-row) - 128px);
   }
   /* Navegação em duas linhas: Voltar/Próximo na largura toda, "Pular" embaixo
      (lado a lado, os botões saíam do cartão). O contador do cabeçalho já diz
@@ -10421,13 +10554,15 @@ body #datageo-area-watch.open { z-index: 115; }
   .first-run-suppress input { width: 18px; height: 18px; }
   .tour-prefs { grid-template-columns: 1fr; }
   body.apresentacao-mode .first-run-footer { display: none; }
-  /* Quando um passo abre o painel de camadas ou uma bandeja do dock, o
-     cartão vira só cabeçalho + navegação para não esconder o que abriu; com
-     bandeja aberta ele sobe para o topo (embaixo ficaria sobre ela). */
-  body:not(.apresentacao-mode):has(#data-panel:not(.collapsed), #command-dock > .panel-collapsible:not(.collapsed)) #first-run-launcher .tour-steps {
+  /* Quando o passo abre o que ele apresenta (painel de camadas, bandeja
+     BUSCAR), o cartão vira só cabeçalho + navegação para não esconder o que
+     abriu; no da busca ele sobe para o topo (embaixo ficaria sobre ela). Só
+     nesses passos: nos seguintes o texto volta, mesmo com o painel aberto. */
+  body:not(.apresentacao-mode):has(#data-panel:not(.collapsed)) #first-run-launcher[data-step="camadas"] .tour-steps,
+  body:not(.apresentacao-mode):has(#location-bar:not(.collapsed)) #first-run-launcher[data-step="localizacao"] .tour-steps {
     display: none;
   }
-  body:not(.apresentacao-mode):has(#command-dock > .panel-collapsible:not(.collapsed)) #first-run-launcher {
+  body:not(.apresentacao-mode):has(#location-bar:not(.collapsed)) #first-run-launcher[data-step="localizacao"] {
     top: calc(var(--m-safe-top) + var(--m-top-row));
     bottom: auto;
   }
