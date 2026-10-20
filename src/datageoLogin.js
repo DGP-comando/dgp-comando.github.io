@@ -273,8 +273,12 @@ function initConta(user, via) {
     ev.preventDefault();
     const matricula = form.matricula.value.trim();
     const nome = form.nome.value.trim();
-    if (!/^\d{3,10}$/.test(matricula)) return mostrar('Matrícula deve ter de 3 a 10 dígitos.');
+    const porEmail = acao === 'revogar' && emailValido(matricula);
+    if (!porEmail && !/^\d{3,10}$/.test(matricula)) {
+      return mostrar(acao === 'revogar' ? 'Informe a matrícula ou o e-mail.' : 'Matrícula deve ter de 3 a 10 dígitos.');
+    }
     if (acao === 'criar' && nome.length < 3) return mostrar('Informe o nome completo.');
+    if (acao === 'revogar' && !confirm(`Revogar o acesso de ${matricula} ao DataGeo?`)) return mostrar('');
     for (const b of form.querySelectorAll('button')) b.disabled = true;
     mostrar('Enviando...');
     try {
@@ -285,9 +289,12 @@ function initConta(user, via) {
       });
       const body = await resp.json().catch(() => ({}));
       if (!resp.ok) return mostrar(body.error || `Erro ${resp.status}`);
-      mostrar(acao === 'criar'
-        ? `Matrícula ${matricula} cadastrada. Senha inicial: a matrícula invertida.`
-        : `Senha da matrícula ${matricula} voltou para a inicial.`, true);
+      registrar(`usuario_${acao}`, matricula, body.nome ? { nome: body.nome } : null);
+      mostrar({
+        criar: `Matrícula ${matricula} cadastrada. Senha inicial: a matrícula invertida.`,
+        resetar: `Senha da matrícula ${matricula} voltou para a inicial.`,
+        revogar: `Acesso de ${body.nome || matricula} revogado. A sessão aberta cai em até 1 hora.`,
+      }[acao], true);
       form.reset();
     } catch (e) {
       console.error('[usuarios]', e);

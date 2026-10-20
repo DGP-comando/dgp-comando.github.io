@@ -9757,6 +9757,10 @@ body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
 .login-ok {
   color: #4ade80;
 }
+.login-actions button.login-perigo {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #f87171;
+}
 .login-actions {
   display: flex;
   gap: 8px;

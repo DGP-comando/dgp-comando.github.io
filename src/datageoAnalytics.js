@@ -28,6 +28,9 @@ export const EVENTOS = Object.freeze({
   busca_pessoa: 'Busca de pessoa',
   dado_privado: 'Arquivo restrito',
   exportacao: 'Exportação',
+  usuario_criar: 'Admin: cadastrou usuário',
+  usuario_resetar: 'Admin: resetou senha',
+  usuario_revogar: 'Admin: revogou acesso',
 });
 const SENSIVEIS = new Set(['busca_pessoa', 'registro_aberto', 'exportacao']);
 
