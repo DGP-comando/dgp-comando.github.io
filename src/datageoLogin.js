@@ -18,8 +18,8 @@ import {
   temAcesso,
 } from './data/datageoAuth.js';
 import {
-  TERMO_BUCKET, TERMO_TEXTO, TERMO_TITULO, TERMO_VERSAO, caminhoRegistro, cpfValido, emailReal, emailValido,
-  mascaraCpf, montaRegistro, termoAssinado,
+  TERMO_BUCKET, caminhoRegistro, cpfValido, emailReal, emailValido, mascaraCpf, montaRegistro, termoAssinado,
+  termoDe,
 } from './data/termoLgpd.js';
 import { ativarLog, descarregarLog, registrar } from './data/acessoLog.js';
 import { pedirSolicitacao } from './datageoSolicitacao.js';
@@ -163,13 +163,14 @@ async function gravaRegistro(user, registro, agora) {
 async function pedirTermo(form, user) {
   form.replaceChildren();
   form.classList.add('login-form-termo');
-  const h = Object.assign(document.createElement('p'), { className: 'login-title', textContent: TERMO_TITULO });
+  const termo = termoDe(user); // externo assina o termo de uso (citar a fonte); servidor, o de LGPD
+  const h = Object.assign(document.createElement('p'), { className: 'login-title', textContent: termo.titulo });
   const texto = document.createElement('div');
   texto.className = 'login-termo';
   texto.tabIndex = 0;
-  texto.setAttribute('aria-label', TERMO_TITULO);
+  texto.setAttribute('aria-label', termo.titulo);
   const lista = document.createElement('ol');
-  for (const par of TERMO_TEXTO) lista.append(Object.assign(document.createElement('li'), { textContent: par }));
+  for (const par of termo.texto) lista.append(Object.assign(document.createElement('li'), { textContent: par }));
   texto.append(lista);
   const cpf = campo('CPF', { name: 'cpf', inputMode: 'numeric', autocomplete: 'off', maxLength: 14, placeholder: '000.000.000-00' });
   cpf.input.addEventListener('input', () => { cpf.input.value = mascaraCpf(cpf.input.value); });
@@ -180,7 +181,7 @@ async function pedirTermo(form, user) {
   aceite.append(check, document.createTextNode(' Li o termo e me comprometo a cumpri-lo.'));
   const nota = Object.assign(document.createElement('p'), {
     className: 'login-hint',
-    textContent: `Versão ${TERMO_VERSAO}. A data e a hora da assinatura ficam registradas com o seu CPF e e-mail.`,
+    textContent: `Versão ${termo.versao}. A data e a hora da assinatura ficam registradas com o seu CPF e e-mail.`,
   });
   const erro = Object.assign(document.createElement('p'), { className: 'login-error' });
   erro.setAttribute('role', 'alert');
@@ -211,7 +212,7 @@ async function pedirTermo(form, user) {
         const registro = await montaRegistro(user, { cpf: cpf.input.value, email: email.input.value }, agora, navigator.userAgent);
         await gravaRegistro(user, registro, agora);
         const { data, error } = await getAuth().updateUser({
-          data: { lgpd_termo: { versao: TERMO_VERSAO, em: agora.toISOString() } },
+          data: { lgpd_termo: { versao: termo.versao, em: agora.toISOString() } },
         });
         if (error) throw error;
         form.classList.remove('login-form-termo');

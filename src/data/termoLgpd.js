@@ -40,6 +40,32 @@ export const TERMO_TEXTO = Object.freeze([
     + 'plataforma tem acesso a ele.',
 ]);
 
+// Usuário externo (app_metadata.datageo_externo, src/data/acessoExterno.js) assina
+// este outro termo: ele só acessa dado público (migrations 051 e 053 do c2), então
+// a obrigação é citar a fonte. Versão própria: mudar de perfil pede nova assinatura.
+export const TERMO_EXTERNO_VERSAO = 'externo-2026-10-20';
+export const TERMO_EXTERNO_TITULO = 'Termo de uso para usuário externo';
+
+export const TERMO_EXTERNO_TEXTO = Object.freeze([
+  'Declaro que acesso a plataforma DataGeo Paraná por credencial pessoal e intransferível, concedida como '
+    + 'usuário externo a partir da solicitação feita em nome da entidade que informei.',
+  'Estou ciente de que, como usuário externo, tenho acesso apenas a dados públicos: camadas de fontes abertas e '
+    + 'indicadores agregados, sem dados pessoais.',
+  'Ao usar, reproduzir ou divulgar mapas, dados ou indicadores obtidos na plataforma, em qualquer meio '
+    + '(relatórios, apresentações, publicações, sites e redes sociais), citarei a fonte: "DataGeo Paraná" e a '
+    + 'fonte original indicada em cada camada.',
+  'Estou ciente de que, para fins de segurança e auditoria (arts. 37 e 46 da LGPD), a plataforma registra o meu '
+    + 'uso, com data e hora: entradas e saídas, camadas e fichas consultadas e exportações. O registro é guardado '
+    + 'por 12 meses e só a administração da plataforma tem acesso a ele.',
+  'Autorizo o registro do meu CPF, e-mail e da data e hora desta assinatura, com a finalidade exclusiva de '
+    + 'comprovar a ciência deste termo. Esse registro fica em área restrita, sem acesso dos demais usuários.',
+]);
+
+/** Termo que vale para o usuário: o de externo ou o de servidor (LGPD). */
+export const termoDe = (user) => (user?.app_metadata?.datageo_externo === true
+  ? { versao: TERMO_EXTERNO_VERSAO, titulo: TERMO_EXTERNO_TITULO, texto: TERMO_EXTERNO_TEXTO }
+  : { versao: TERMO_VERSAO, titulo: TERMO_TITULO, texto: TERMO_TEXTO });
+
 export const soDigitos = (v) => String(v ?? '').replace(/\D/g, '');
 
 /** CPF com dígitos verificadores corretos (mod 11); rejeita sequências repetidas. */
@@ -66,8 +92,8 @@ export const emailValido = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v 
 /** E-mail de verdade do usuário para pré-preencher (o SISATER usa um sintético). */
 export const emailReal = (user) => (user?.email && !user.email.endsWith('@sisater.local') ? user.email : '');
 
-/** Já assinou a versão atual? (flag no user_metadata; a prova é o arquivo no bucket) */
-export const termoAssinado = (user) => user?.user_metadata?.lgpd_termo?.versao === TERMO_VERSAO;
+/** Já assinou a versão atual do termo do seu perfil? (flag no user_metadata; a prova é o arquivo no bucket) */
+export const termoAssinado = (user) => user?.user_metadata?.lgpd_termo?.versao === termoDe(user).versao;
 
 /** SHA-256 hex do texto do termo (Web Crypto: navegador e node). */
 export async function hashTermo(texto = TERMO_TEXTO.join('\n')) {
@@ -80,13 +106,13 @@ const horaLocal = (agora) => agora.toLocaleString('pt-BR', { timeZone: FUSO });
 
 /** Caminho do registro no bucket: pasta do usuário (exigência da policy), versão e instante UTC. */
 export const caminhoRegistro = (user, agora) =>
-  `${user.id}/${TERMO_VERSAO}_${agora.toISOString().replace(/[:.]/g, '-')}.json`;
+  `${user.id}/${termoDe(user).versao}_${agora.toISOString().replace(/[:.]/g, '-')}.json`;
 
 /** Registro autoexplicativo da assinatura (texto completo junto: não depende do repo). */
 export async function montaRegistro(user, { cpf, email }, agora = new Date(), userAgent = '') {
-  const texto = TERMO_TEXTO.join('\n');
+  const termo = termoDe(user);
   return {
-    termo: { titulo: TERMO_TITULO, versao: TERMO_VERSAO, sha256: await hashTermo(texto), texto: TERMO_TEXTO },
+    termo: { titulo: termo.titulo, versao: termo.versao, sha256: await hashTermo(termo.texto.join('\n')), texto: termo.texto },
     usuario: {
       id: user.id,
       matricula: user.user_metadata?.matricula ?? null,

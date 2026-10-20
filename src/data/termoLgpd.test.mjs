@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  TERMO_TEXTO, TERMO_VERSAO, caminhoRegistro, cpfValido, emailReal, emailValido, hashTermo, mascaraCpf,
-  montaRegistro, termoAssinado,
+  TERMO_EXTERNO_TEXTO, TERMO_EXTERNO_VERSAO, TERMO_TEXTO, TERMO_VERSAO, caminhoRegistro, cpfValido, emailReal,
+  emailValido, hashTermo, mascaraCpf, montaRegistro, termoAssinado, termoDe,
 } from './termoLgpd.js';
 
 test('CPF: dígitos verificadores, máscara e sequências repetidas', () => {
@@ -49,4 +49,32 @@ test('texto do termo: SEAGRI, prefeituras, sem travessão e sem atribuir a plata
   assert.match(t, /Lei nº 13\.709\/2018/);
   assert.ok(!t.includes('—'), 'sem travessão');
   assert.ok(!/plataforma do IDR|IDR-Paraná/.test(t), 'DataGeo não é plataforma do IDR');
+});
+
+test('externo assina o termo de uso; servidor, o de LGPD; trocar de perfil pede nova assinatura', async () => {
+  const servidor = { id: 's1', email: '1@sisater.local', app_metadata: { datageo: true }, user_metadata: { lgpd_termo: { versao: TERMO_VERSAO } } };
+  const externo = { id: 'e1', email: 'a@b.com', app_metadata: { datageo: true, datageo_externo: true }, user_metadata: { nome: 'Conceição' } };
+  assert.equal(termoDe(servidor).versao, TERMO_VERSAO);
+  assert.equal(termoDe(externo).versao, TERMO_EXTERNO_VERSAO);
+  assert.equal(termoAssinado(servidor), true);
+  assert.equal(termoAssinado(externo), false);
+  // assinou como servidor e virou externo: assina de novo
+  assert.equal(termoAssinado({ ...servidor, app_metadata: { datageo: true, datageo_externo: true } }), false);
+  assert.equal(termoAssinado({ ...externo, user_metadata: { lgpd_termo: { versao: TERMO_EXTERNO_VERSAO } } }), true);
+  const agora = new Date('2026-10-20T15:00:00Z');
+  assert.match(caminhoRegistro(externo, agora), new RegExp(`^e1/${TERMO_EXTERNO_VERSAO}_`));
+  const r = await montaRegistro(externo, { cpf: '529.982.247-25', email: 'a@b.com' }, agora);
+  assert.equal(r.termo.versao, TERMO_EXTERNO_VERSAO);
+  assert.deepEqual(r.termo.texto, [...TERMO_EXTERNO_TEXTO]);
+  assert.equal(r.termo.sha256, await hashTermo(TERMO_EXTERNO_TEXTO.join('\n')));
+  assert.equal(r.usuario.nome, 'Conceição');
+});
+
+test('texto do termo externo: dado público, citar a fonte, sem travessão e sem atribuir ao IDR', () => {
+  const t = TERMO_EXTERNO_TEXTO.join(' ');
+  assert.match(t, /apenas a dados públicos/);
+  assert.match(t, /citarei a fonte: "DataGeo Paraná"/);
+  assert.match(t, /12 meses/);
+  assert.ok(!t.includes('—'), 'sem travessão');
+  assert.ok(!/plataforma do IDR|IDR-Paraná|SEAGRI/.test(t), 'sem vínculo institucional');
 });
