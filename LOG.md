@@ -6,6 +6,64 @@
 
 ---
 
+## Sessão 2026-10-20: log de acesso, painel de acessos, usuário externo e solicitação de acesso
+
+Painel "Acessos ao DataGeo" (botão `#analytics-btn`, só `datageo_admin`) e tudo
+o que gira em torno dos usuários. Banco no c2-parana, migrations 048 a 053
+(PRs #4 a #9, já aplicadas); a Edge Function `datageo-usuarios` foi
+republicada a cada etapa.
+
+- **Log de acesso** (`src/data/acessoLog.js`, migrations 048/049).
+  - Gravado em `datageo_acesso_log`. O usuário só insere a própria linha; `user_id` e `criado_em` vêm do servidor.
+  - O envio sai em lote (15 s, 20 eventos ou aba escondida). Falha transitória devolve o lote à fila; o envio de saída usa keepalive em pedaços.
+  - O banco recusa mais de 300 eventos por minuto por usuário. Retenção de 12 meses via pg_cron.
+  - Eventos registrados:
+    - sessão, saída e heartbeat de 5 min;
+    - camada ligada ou desligada (só por intenção do usuário, restauração não conta);
+    - ficha municipal e regional, cadastro aberto (`openPainel`);
+    - busca de pessoa (termo em claro, decisão do usuário), arquivo restrito e exportação;
+    - ações do admin.
+- **Painel** (`src/datageoAnalytics.js`), lido pelas RPCs `datageo_acesso_resumo` e `datageo_acesso_eventos`.
+  - Aba Visão geral: KPIs (DAU/WAU/MAU, sessões, mediana, nunca entraram, acesso a dado pessoal), usuários por dia, camadas, lotação (matrícula = id do SisPont), municípios, heatmap dia × hora e retenção semanal.
+  - Aba Usuários: botões Revogar/Reativar e checkbox Externo em cada linha. Filtros: ativos, inativos, nunca entraram, externos, revogados.
+  - Aba Solicitações: pedidos de externos, com Aprovar e Recusar.
+  - Aba Log completo: filtros e CSV paginado em blocos de 1000.
+  - Matrícula derivada do e-mail `<matricula>@sisater.local` (`datageo_matricula`), porque o `user_metadata` é editável pelo próprio usuário.
+- **Revogar e reativar** (ações da `datageo-usuarios`, migration 050). O resumo lista revogados (chave `datageo` presente e `false`). Revogados em 2026-10-20: edtadeu1@gmail.com, 1697 e teste@teste.com.
+- **Usuário externo** (`app_metadata.datageo_externo`, `src/data/acessoExterno.js`, migrations 051/053).
+  - O bucket `datageo-privado` é negado na policy.
+  - As 22 camadas de `CAMADAS_PRIVADAS` não são registradas, a busca de pessoas some e o `dgFetchData` devolve 403 para `/privado/` sem fazer requisição.
+  - A 053 restringe o `data_cache` às 3 chaves que o front lê. Fecha também 8 tabelas que o DataGeo não usa e as escritas em incidentes (`datageo_interno()`).
+- **Solicitar acesso** (`src/datageoSolicitacao.js`, migration 052).
+  - É só para externos; servidor entra com matrícula e senha provisória.
+  - Campos: entidade, nome, endereço, CPF, telefone, e-mail e finalidade, mais aceite LGPD.
+  - INSERT anônimo só nessas colunas, uma pendente por e-mail (409), 30 pedidos por hora. Recusadas são apagadas em 90 dias.
+  - Aprovar cria a conta com login = e-mail e mostra a senha temporária uma única vez (não há envio de e-mail).
+- **Termos**:
+  - O termo LGPD do servidor foi para a versão 2026-10-20, que informa o registro de uso (todos assinam de novo).
+  - O externo assina o "Termo de uso para usuário externo" (`externo-2026-10-20`): só dado público, e a obrigação é citar a fonte. `termoDe(user)` escolhe; mudar de perfil pede nova assinatura.
+
+### Pegadinhas
+- plpgsql: variável com o mesmo nome de coluna de CTE (`ini`) dá 42702 só na
+  primeira chamada; o `create function` passa. Prefixo `v_` nas variáveis.
+- O MCP do Supabase não faz `set role authenticated` nem tem execute nas RPCs.
+  Teste de RLS: curl com a anon key e `set_config('request.jwt.claims', ...)`
+  avaliando a expressão das policies.
+- Editar um módulo com o Vite rodando faz o app importá-lo com `?t=`. Um
+  `import('/src/...')` do QA pega outra instância. Reiniciar o dev server
+  antes do QA; `TaskStop` deixa o node vivo na porta 5173 (matar pelo PID).
+- Git Bash no Windows estraga acento em argumento de `curl -d`: mandar JSON por
+  arquivo UTF-8 (`--data-binary @arquivo`).
+- `#usuarios-dialog` também usa `.login-form`; seletor de QA do gate precisa de
+  `#loading-screen`.
+- Camada nova que leia `/privado/` entra em `CAMADAS_PRIVADAS`. Chave nova de
+  `dgCache` que o externo precise ler entra na allowlist da 053. Nos dois casos,
+  se esquecer, a camada chega vazia para o externo, sem vazar dado.
+- Ficou uma solicitação de teste pendente ("QA Teste Ação",
+  qa-solicitacao@exemplo.invalid): recusar pela aba, não aprovar.
+
+---
+
 ## Sessão 2026-10-16: atendimentos do SISATER no card do produtor
 
 Fecha a pendência do `build_getec_fichas.py` ("atendimentos datados virão do
