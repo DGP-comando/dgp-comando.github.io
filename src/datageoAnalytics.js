@@ -32,6 +32,7 @@ export const EVENTOS = Object.freeze({
   usuario_criar: 'Admin: cadastrou usuário',
   usuario_resetar: 'Admin: resetou senha',
   usuario_revogar: 'Admin: revogou acesso',
+  usuario_reativar: 'Admin: reativou acesso',
 });
 const SENSIVEIS = new Set(['busca_pessoa', 'registro_aberto', 'exportacao']);
 
@@ -59,10 +60,10 @@ export function comLotacao(usuarios, servidores) {
   });
 }
 
-/** Ativos x liberados por lotação, ordenado por ativos. */
+/** Ativos x liberados por lotação (revogados fora), ordenado por ativos. */
 export function agregaLotacao(usuarios) {
   const mapa = new Map();
-  for (const u of usuarios) {
+  for (const u of usuarios.filter(ativo)) {
     const a = mapa.get(u.lotacao) ?? { lotacao: u.lotacao, liberados: 0, ativos: 0, acoes: 0 };
     mapa.set(u.lotacao, {
       ...a, liberados: a.liberados + 1, ativos: a.ativos + (u.acoes > 0 ? 1 : 0), acoes: a.acoes + u.acoes,
@@ -71,12 +72,17 @@ export function agregaLotacao(usuarios) {
   return [...mapa.values()].filter((l) => l.ativos > 0).sort((a, b) => b.ativos - a.ativos || b.acoes - a.acoes);
 }
 
-/** Filtro da aba Usuários: texto (nome/matrícula/lotação) + situação. */
+/** Liberado agora? (resumo antigo, sem o campo, só trazia liberados) */
+export const ativo = (u) => u.ativo !== false;
+
+/** Filtro da aba Usuários: texto (nome/matrícula/lotação) + situação; revogados só em 'revogados'. */
 export function filtraUsuarios(usuarios, { busca = '', situacao = 'todos', agora = Date.now() } = {}) {
   const q = busca.trim().toLowerCase();
   const ultimo = (u) => Date.parse(u.ultimo_evento ?? u.ultimo_login ?? '') || 0;
   return usuarios.filter((u) => {
     if (q && !`${u.nome} ${u.matricula} ${u.lotacao}`.toLowerCase().includes(q)) return false;
+    if (situacao === 'revogados') return !ativo(u);
+    if (!ativo(u)) return false;
     if (situacao === 'ativos') return u.acoes > 0;
     if (situacao === 'inativos') return Boolean(u.ultimo_login) && agora - ultimo(u) > 30 * DIA_MS;
     if (situacao === 'nunca') return !u.ultimo_login;
@@ -292,6 +298,7 @@ function criarPainel(nomeCamada, euId) {
       <select class="an-situacao" aria-label="Situação">
         <option value="todos">Todos os liberados</option><option value="ativos">Ativos no período</option>
         <option value="inativos">Sem uso há mais de 30 dias</option><option value="nunca">Nunca entraram</option>
+        <option value="revogados">Acesso revogado</option>
       </select>
       <span class="an-contagem"></span>
       <span class="an-status" role="status"></span>
@@ -315,8 +322,8 @@ function criarPainel(nomeCamada, euId) {
     renderUsuarios();
   });
   secao('usuarios').querySelector('tbody').addEventListener('click', (e) => {
-    const rev = e.target.closest('[data-revogar]');
-    if (rev) return void revogar(rev);
+    const btn = e.target.closest('[data-acesso]');
+    if (btn) return void alterarAcesso(btn);
     const tr = e.target.closest('tr[data-id]');
     if (!tr) return;
     Object.assign(filtroLog, { usuario: { id: tr.dataset.id, nome: tr.dataset.nome }, pagina: 0, corte: Date.now() + 1000 });
@@ -332,28 +339,36 @@ function criarPainel(nomeCamada, euId) {
         <td>${u.ultimo_evento ? fmtDataHora(u.ultimo_evento) : u.ultimo_login ? `login ${fmtDataHora(u.ultimo_login)}` : 'nunca'}</td>
         <td>${u.dias_ativos}</td><td>${u.sessoes}</td><td>${u.minutos ? fmtMin(u.minutos) : '—'}</td><td>${fmtInt(u.acoes)}</td>
         <td>${esc((u.camadas ?? []).map(nomeCamada).join(', '))}</td>
-        <td>${u.id === euId ? '' : `<button class="an-revogar" data-revogar="${esc(u.id)}" title="Revogar o acesso ao DataGeo">Revogar</button>`}</td>
+        <td>${u.id === euId ? '' : ativo(u)
+          ? `<button class="an-acesso an-revogar" data-acesso="${esc(u.id)}" title="Revogar o acesso ao DataGeo">Revogar</button>`
+          : `<button class="an-acesso an-reativar" data-acesso="${esc(u.id)}" title="Revogado em ${fmtDataHora(u.revogado_em)}">Reativar</button>`}</td>
       </tr>`).join('');
   }
 
-  // Revogar pela lista: a Edge Function acha o usuário pelo e-mail do login.
-  async function revogar(btn) {
-    const u = usuarios.find((x) => x.id === btn.dataset.revogar);
+  // Revogar/reativar pela lista: a Edge Function acha o usuário pelo e-mail do login.
+  async function alterarAcesso(btn) {
+    const u = usuarios.find((x) => x.id === btn.dataset.acesso);
+    if (!u) return;
+    const acao = ativo(u) ? 'revogar' : 'reativar';
     const status = secao('usuarios').querySelector('.an-status');
-    if (!u || !confirm(`Revogar o acesso de ${u.nome} (${u.matricula || u.email}) ao DataGeo?`)) return;
+    const verbo = acao === 'revogar' ? 'Revogar' : 'Reativar';
+    if (!confirm(`${verbo} o acesso de ${u.nome} (${u.matricula || u.email}) ao DataGeo?`)) return;
     btn.disabled = true;
-    status.textContent = 'Revogando…';
+    status.textContent = acao === 'revogar' ? 'Revogando…' : 'Reativando…';
     try {
-      const { ok, status: http, body } = await adminUsuarios({ acao: 'revogar', matricula: u.email });
+      const { ok, status: http, body } = await adminUsuarios({ acao, matricula: u.email });
       if (!ok) {
         status.textContent = body.error || `Erro ${http}`;
         btn.disabled = false;
         return;
       }
-      registrar('usuario_revogar', u.email, { nome: u.nome });
-      usuarios = usuarios.filter((x) => x.id !== u.id);
+      registrar(`usuario_${acao}`, u.email, { nome: u.nome });
+      const agora = new Date().toISOString();
+      usuarios = usuarios.map((x) => (x.id === u.id ? { ...x, ativo: acao === 'reativar', revogado_em: acao === 'revogar' ? agora : null } : x));
       renderUsuarios();
-      status.textContent = `Acesso de ${u.nome} revogado. A sessão aberta cai em até 1 hora.`;
+      status.textContent = acao === 'revogar'
+        ? `Acesso de ${u.nome} revogado. A sessão aberta cai em até 1 hora. Para desfazer: filtro "Acesso revogado".`
+        : `Acesso de ${u.nome} reativado. Vale no próximo login (ou em até 1 hora).`;
     } catch (err) {
       console.error('[analytics] revogar', err);
       status.textContent = 'Falha de conexão. Tente de novo.';

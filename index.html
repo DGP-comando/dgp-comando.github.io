@@ -73,14 +73,13 @@
   <dialog id="usuarios-dialog" aria-labelledby="usuarios-titulo">
     <form class="login-form" method="dialog" novalidate>
       <p id="usuarios-titulo" class="login-title">Usuários do DataGeo</p>
-      <label class="login-field"><span>Matrícula (ou e-mail, para revogar)</span><input name="matricula" autocomplete="off" required></label>
+      <label class="login-field"><span>Matrícula</span><input name="matricula" inputmode="numeric" autocomplete="off" required></label>
       <label class="login-field"><span>Nome completo (só para cadastrar)</span><input name="nome" autocomplete="off"></label>
-      <p class="login-hint">Senha inicial: a matrícula invertida. A pessoa troca no primeiro acesso. Revogar corta o acesso em até 1 hora; resetar a senha devolve.</p>
+      <p class="login-hint">Senha inicial: a matrícula invertida. A pessoa troca no primeiro acesso. Revogar e reativar acesso: painel de acessos, aba Usuários.</p>
       <p class="login-error" role="status"></p>
       <div class="login-actions">
         <button type="submit" value="criar">Cadastrar</button>
         <button type="submit" value="resetar">Resetar senha</button>
-        <button type="submit" value="revogar" class="login-perigo">Revogar acesso</button>
         <button type="submit" value="fechar" formnovalidate>Fechar</button>
       </div>
     </form>

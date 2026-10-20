@@ -9733,7 +9733,9 @@ body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
 .an-filtros label { color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
 .an-contagem { color: var(--text-dim); }
 .an-status { color: var(--text-secondary); }
-#analytics-dialog .an-revogar { white-space: nowrap; overflow-wrap: normal; padding: 2px 8px; font-size: 11px; border-color: rgba(248, 113, 113, 0.5); color: #f87171; }
+#analytics-dialog .an-acesso { white-space: nowrap; overflow-wrap: normal; padding: 2px 8px; font-size: 11px; }
+#analytics-dialog .an-revogar { border-color: rgba(248, 113, 113, 0.5); color: #f87171; }
+#analytics-dialog .an-reativar { border-color: var(--accent); color: var(--accent); }
 #analytics-dialog .an-chip { border-color: var(--accent); color: var(--accent); }
 .an-rolagem { overflow: auto; }
 .an-tabela { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
@@ -9758,10 +9760,6 @@ body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
 }
 .login-ok {
   color: #4ade80;
-}
-.login-actions button.login-perigo {
-  border-color: rgba(248, 113, 113, 0.5);
-  color: #f87171;
 }
 .login-actions {
   display: flex;
