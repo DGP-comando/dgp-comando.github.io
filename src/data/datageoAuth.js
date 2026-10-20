@@ -55,6 +55,16 @@ export function senhaGravada(user, senha) {
 export const temAcesso = (user) => user?.app_metadata?.datageo === true;
 export const precisaTrocarSenha = (user) => user?.user_metadata?.must_change_password === true;
 
+/** Edge Function datageo-usuarios do c2 (so admin): criar, resetar, revogar. */
+export async function adminUsuarios(corpo) {
+  const resp = await fetch(`${SUPABASE_URL}/functions/v1/datageo-usuarios`, {
+    method: 'POST',
+    headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(corpo),
+  });
+  return { ok: resp.ok, status: resp.status, body: await resp.json().catch(() => ({})) };
+}
+
 /** Headers PostgREST/Storage com o JWT do usuario (getSession renova se expirou). */
 export async function authHeaders() {
   const { data } = await getAuth().getSession();

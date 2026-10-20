@@ -9,6 +9,7 @@
 import {
   SENHA_MIN,
   SUPABASE_URL,
+  adminUsuarios,
   authHeaders,
   credenciais,
   getAuth,
@@ -282,13 +283,8 @@ function initConta(user, via) {
     for (const b of form.querySelectorAll('button')) b.disabled = true;
     mostrar('Enviando...');
     try {
-      const resp = await fetch(`${SUPABASE_URL}/functions/v1/datageo-usuarios`, {
-        method: 'POST',
-        headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ acao, matricula, nome }),
-      });
-      const body = await resp.json().catch(() => ({}));
-      if (!resp.ok) return mostrar(body.error || `Erro ${resp.status}`);
+      const { ok, status, body } = await adminUsuarios({ acao, matricula, nome });
+      if (!ok) return mostrar(body.error || `Erro ${status}`);
       registrar(`usuario_${acao}`, matricula, body.nome ? { nome: body.nome } : null);
       mostrar({
         criar: `Matrícula ${matricula} cadastrada. Senha inicial: a matrícula invertida.`,

@@ -6,7 +6,8 @@
 // com servidores-idr.json para a lotação. Gráficos em HTML/SVG puro: base
 // cinza e uma cor de destaque (--accent).
 
-import { SUPABASE_URL, authHeaders, getAuth } from './data/datageoAuth.js';
+import { SUPABASE_URL, adminUsuarios, authHeaders, getAuth } from './data/datageoAuth.js';
+import { registrar } from './data/acessoLog.js';
 import { loadServidoresIdr } from './data/servidoresIdr.js';
 import { downloadText, toCsv } from './data/areaExport.js';
 import { escapeHtml as esc } from './data/vesselTooltip.js';
@@ -175,17 +176,18 @@ export function initAnalytics({ nomeCamada = (id) => id } = {}) {
   const btn = document.getElementById('analytics-btn');
   if (!btn) return;
   void getAuth().getSession().then(({ data }) => {
-    if (data.session?.user?.app_metadata?.datageo_admin !== true) return;
+    const eu = data.session?.user;
+    if (eu?.app_metadata?.datageo_admin !== true) return;
     btn.hidden = false;
     let painel = null;
     btn.addEventListener('click', () => {
-      painel ??= criarPainel(nomeCamada);
+      painel ??= criarPainel(nomeCamada, eu.id);
       painel.abrir();
     });
   });
 }
 
-function criarPainel(nomeCamada) {
+function criarPainel(nomeCamada, euId) {
   const dlg = document.createElement('dialog');
   dlg.id = 'analytics-dialog';
   dlg.setAttribute('aria-labelledby', 'an-titulo');
@@ -292,9 +294,10 @@ function criarPainel(nomeCamada) {
         <option value="inativos">Sem uso há mais de 30 dias</option><option value="nunca">Nunca entraram</option>
       </select>
       <span class="an-contagem"></span>
+      <span class="an-status" role="status"></span>
     </div>
     <div class="an-rolagem"><table class="an-tabela">
-      <thead><tr>${colunasUsuarios.map(([c, l]) => `<th><button data-ordem="${c}">${l}</button></th>`).join('')}<th>Camadas favoritas</th></tr></thead>
+      <thead><tr>${colunasUsuarios.map(([c, l]) => `<th><button data-ordem="${c}">${l}</button></th>`).join('')}<th>Camadas favoritas</th><th>Acesso</th></tr></thead>
       <tbody></tbody></table></div>`;
   secao('usuarios').querySelector('.an-busca-usuario').addEventListener('input', (e) => {
     estadoUsuarios.busca = e.target.value;
@@ -312,6 +315,8 @@ function criarPainel(nomeCamada) {
     renderUsuarios();
   });
   secao('usuarios').querySelector('tbody').addEventListener('click', (e) => {
+    const rev = e.target.closest('[data-revogar]');
+    if (rev) return void revogar(rev);
     const tr = e.target.closest('tr[data-id]');
     if (!tr) return;
     Object.assign(filtroLog, { usuario: { id: tr.dataset.id, nome: tr.dataset.nome }, pagina: 0, corte: Date.now() + 1000 });
@@ -327,7 +332,33 @@ function criarPainel(nomeCamada) {
         <td>${u.ultimo_evento ? fmtDataHora(u.ultimo_evento) : u.ultimo_login ? `login ${fmtDataHora(u.ultimo_login)}` : 'nunca'}</td>
         <td>${u.dias_ativos}</td><td>${u.sessoes}</td><td>${u.minutos ? fmtMin(u.minutos) : '—'}</td><td>${fmtInt(u.acoes)}</td>
         <td>${esc((u.camadas ?? []).map(nomeCamada).join(', '))}</td>
+        <td>${u.id === euId ? '' : `<button class="an-revogar" data-revogar="${esc(u.id)}" title="Revogar o acesso ao DataGeo">Revogar</button>`}</td>
       </tr>`).join('');
+  }
+
+  // Revogar pela lista: a Edge Function acha o usuário pelo e-mail do login.
+  async function revogar(btn) {
+    const u = usuarios.find((x) => x.id === btn.dataset.revogar);
+    const status = secao('usuarios').querySelector('.an-status');
+    if (!u || !confirm(`Revogar o acesso de ${u.nome} (${u.matricula || u.email}) ao DataGeo?`)) return;
+    btn.disabled = true;
+    status.textContent = 'Revogando…';
+    try {
+      const { ok, status: http, body } = await adminUsuarios({ acao: 'revogar', matricula: u.email });
+      if (!ok) {
+        status.textContent = body.error || `Erro ${http}`;
+        btn.disabled = false;
+        return;
+      }
+      registrar('usuario_revogar', u.email, { nome: u.nome });
+      usuarios = usuarios.filter((x) => x.id !== u.id);
+      renderUsuarios();
+      status.textContent = `Acesso de ${u.nome} revogado. A sessão aberta cai em até 1 hora.`;
+    } catch (err) {
+      console.error('[analytics] revogar', err);
+      status.textContent = 'Falha de conexão. Tente de novo.';
+      btn.disabled = false;
+    }
   }
 
   // ------------------------------------------------------------ log
