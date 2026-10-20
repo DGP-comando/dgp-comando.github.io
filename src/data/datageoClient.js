@@ -19,6 +19,7 @@ import {
 import { createPool } from './fetchPool.js';
 import { SUPABASE_URL, authHeaders } from './datageoAuth.js';
 import { registrar } from './acessoLog.js';
+import { semPrivado } from './acessoExterno.js';
 
 const PRIVADO = '/privado/';
 const _privadosLogados = new Set(); // log de acesso: um evento por arquivo por sessão
@@ -31,6 +32,8 @@ const _privadosLogados = new Set(); // log de acesso: um evento por arquivo por 
 export async function dgFetchData(url) {
   if (!url.startsWith(PRIVADO)) return fetch(url);
   const nome = url.slice(PRIVADO.length);
+  // Usuário externo: o bucket nega (migration 051); nem tenta.
+  if (semPrivado()) return new Response(null, { status: 403, statusText: 'Forbidden' });
   if (!_privadosLogados.has(nome) && registrar('dado_privado', nome)) _privadosLogados.add(nome);
   return fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/datageo-privado/${nome}`, {
     headers: await authHeaders(),

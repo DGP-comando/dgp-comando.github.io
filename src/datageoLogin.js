@@ -227,7 +227,7 @@ export async function requireLogin() {
       status.hidden = false;
     }
     initConta(user, 'sessao_salva');
-    return;
+    return user;
   }
 
   status.hidden = true;
@@ -245,6 +245,7 @@ export async function requireLogin() {
   form.remove();
   status.hidden = false;
   initConta(user, 'login');
+  return user;
 }
 
 /** Log de acesso, botao Sair e, para admin (app_metadata.datageo_admin), o cadastro de usuarios. */

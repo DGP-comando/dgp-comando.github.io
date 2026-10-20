@@ -33,6 +33,7 @@ export const EVENTOS = Object.freeze({
   usuario_resetar: 'Admin: resetou senha',
   usuario_revogar: 'Admin: revogou acesso',
   usuario_reativar: 'Admin: reativou acesso',
+  usuario_externo: 'Admin: mudou perfil externo',
 });
 const SENSIVEIS = new Set(['busca_pessoa', 'registro_aberto', 'exportacao']);
 
@@ -86,6 +87,7 @@ export function filtraUsuarios(usuarios, { busca = '', situacao = 'todos', agora
     if (situacao === 'ativos') return u.acoes > 0;
     if (situacao === 'inativos') return Boolean(u.ultimo_login) && agora - ultimo(u) > 30 * DIA_MS;
     if (situacao === 'nunca') return !u.ultimo_login;
+    if (situacao === 'externos') return u.externo === true;
     return true;
   });
 }
@@ -298,13 +300,14 @@ function criarPainel(nomeCamada, euId) {
       <select class="an-situacao" aria-label="Situação">
         <option value="todos">Todos os liberados</option><option value="ativos">Ativos no período</option>
         <option value="inativos">Sem uso há mais de 30 dias</option><option value="nunca">Nunca entraram</option>
-        <option value="revogados">Acesso revogado</option>
+        <option value="externos">Usuários externos</option><option value="revogados">Acesso revogado</option>
       </select>
       <span class="an-contagem"></span>
       <span class="an-status" role="status"></span>
     </div>
     <div class="an-rolagem"><table class="an-tabela">
-      <thead><tr>${colunasUsuarios.map(([c, l]) => `<th><button data-ordem="${c}">${l}</button></th>`).join('')}<th>Camadas favoritas</th><th>Acesso</th></tr></thead>
+      <thead><tr>${colunasUsuarios.map(([c, l]) => `<th><button data-ordem="${c}">${l}</button></th>`).join('')}<th>Camadas favoritas</th>
+        <th title="Externo: não vê as camadas do bucket privado (CAF, CadÚnico, ADAPAR, programas IDR...)">Externo</th><th>Acesso</th></tr></thead>
       <tbody></tbody></table></div>`;
   secao('usuarios').querySelector('.an-busca-usuario').addEventListener('input', (e) => {
     estadoUsuarios.busca = e.target.value;
@@ -322,6 +325,7 @@ function criarPainel(nomeCamada, euId) {
     renderUsuarios();
   });
   secao('usuarios').querySelector('tbody').addEventListener('click', (e) => {
+    if (e.target.closest('[data-externo]')) return; // checkbox: tratado no change
     const btn = e.target.closest('[data-acesso]');
     if (btn) return void alterarAcesso(btn);
     const tr = e.target.closest('tr[data-id]');
@@ -339,10 +343,46 @@ function criarPainel(nomeCamada, euId) {
         <td>${u.ultimo_evento ? fmtDataHora(u.ultimo_evento) : u.ultimo_login ? `login ${fmtDataHora(u.ultimo_login)}` : 'nunca'}</td>
         <td>${u.dias_ativos}</td><td>${u.sessoes}</td><td>${u.minutos ? fmtMin(u.minutos) : '—'}</td><td>${fmtInt(u.acoes)}</td>
         <td>${esc((u.camadas ?? []).map(nomeCamada).join(', '))}</td>
+        <td><input type="checkbox" class="an-externo" data-externo="${esc(u.id)}" aria-label="Usuário externo: ${esc(u.nome)}"
+          ${u.externo ? 'checked' : ''} ${u.id === euId || !ativo(u) ? 'disabled' : ''}></td>
         <td>${u.id === euId ? '' : ativo(u)
           ? `<button class="an-acesso an-revogar" data-acesso="${esc(u.id)}" title="Revogar o acesso ao DataGeo">Revogar</button>`
           : `<button class="an-acesso an-reativar" data-acesso="${esc(u.id)}" title="Revogado em ${fmtDataHora(u.revogado_em)}">Reativar</button>`}</td>
       </tr>`).join('');
+  }
+
+  secao('usuarios').querySelector('tbody').addEventListener('change', (e) => {
+    const cb = e.target.closest('[data-externo]');
+    if (cb) void marcarExterno(cb);
+  });
+
+  // Perfil externo: sem as camadas do bucket privado (policy da migration 051).
+  async function marcarExterno(cb) {
+    const u = usuarios.find((x) => x.id === cb.dataset.externo);
+    if (!u) return;
+    const externo = cb.checked;
+    const status = secao('usuarios').querySelector('.an-status');
+    cb.disabled = true;
+    status.textContent = 'Salvando…';
+    try {
+      const { ok, status: http, body } = await adminUsuarios({ acao: 'externo', matricula: u.email, externo });
+      if (!ok) {
+        cb.checked = !externo;
+        status.textContent = body.error || `Erro ${http}`;
+        return;
+      }
+      registrar('usuario_externo', u.email, { nome: u.nome, externo });
+      usuarios = usuarios.map((x) => (x.id === u.id ? { ...x, externo } : x));
+      status.textContent = externo
+        ? `${u.nome} agora é externo: sem as camadas do bucket privado a partir do próximo login (ou em até 1 hora).`
+        : `${u.nome} voltou a ver todas as camadas a partir do próximo login (ou em até 1 hora).`;
+    } catch (err) {
+      console.error('[analytics] externo', err);
+      cb.checked = !externo;
+      status.textContent = 'Falha de conexão. Tente de novo.';
+    } finally {
+      cb.disabled = false;
+    }
   }
 
   // Revogar/reativar pela lista: a Edge Function acha o usuário pelo e-mail do login.

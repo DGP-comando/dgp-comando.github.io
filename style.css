@@ -9733,6 +9733,8 @@ body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
 .an-filtros label { color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
 .an-contagem { color: var(--text-dim); }
 .an-status { color: var(--text-secondary); }
+#analytics-dialog .an-externo { padding: 0; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+#analytics-dialog .an-externo:disabled { cursor: default; opacity: 0.35; }
 #analytics-dialog .an-acesso { white-space: nowrap; overflow-wrap: normal; padding: 2px 8px; font-size: 11px; }
 #analytics-dialog .an-revogar { border-color: rgba(248, 113, 113, 0.5); color: #f87171; }
 #analytics-dialog .an-reativar { border-color: var(--accent); color: var(--accent); }

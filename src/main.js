@@ -39,6 +39,7 @@ import { apresentacaoPedida, initApresentacao } from './apresentacao.js';
 import { requireLogin } from './datageoLogin.js';
 import { registrar } from './data/acessoLog.js';
 import { initAnalytics } from './datageoAnalytics.js';
+import { CAMADAS_PRIVADAS, definirExterno, ehExterno } from './data/acessoExterno.js';
 import { initGeolibrePanel } from './processing/geolibrePanel.js';
 import { registerServiceWorker } from './pwa.js';
 
@@ -78,7 +79,9 @@ function describeError(error) {
  * `engine` ocupa o lugar do antigo `viewer` para todos os módulos: interface
  * (ui.js), link compartilhável, HUD, overlays e camadas.
  */
-async function init() {
+async function init(user = null) {
+  const externo = ehExterno(user);
+  definirExterno(externo);
   const loadingScreen = document.getElementById('loading-screen');
   const loaderStatus = loadingScreen.querySelector('.loader-status');
 
@@ -146,8 +149,10 @@ async function init() {
       'military-installations',
       'military-awareness',
     ]);
+    // Usuário externo não vê as camadas do bucket privado (src/data/acessoExterno.js).
     const layerAvailableInBuild = (id) =>
-      import.meta.env.DEV || !PROXY_DEPENDENT_LAYER_IDS.has(id);
+      !(externo && CAMADAS_PRIVADAS.has(id))
+      && (import.meta.env.DEV || !PROXY_DEPENDENT_LAYER_IDS.has(id));
 
     // Ordem de registro = ordem do painel Data Layers: as camadas DataGeo
     // (o produto) vem PRIMEIRO; as do GEV original viram contexto no fim.
@@ -157,7 +162,7 @@ async function init() {
     layerHost.onPanelRefresh = () => dataManager._refreshTogglePanel();
     const maplibreModules = new Map(MAPLIBRE_LAYERS.map((def) => [def.id, toManagerModule(def, layerHost)]));
     for (const def of MAPLIBRE_LAYERS) {
-      if (def.id.startsWith('datageo-')) dataManager.register(maplibreModules.get(def.id));
+      if (def.id.startsWith('datageo-') && layerAvailableInBuild(def.id)) dataManager.register(maplibreModules.get(def.id));
     }
     if (layerAvailableInBuild('flights')) dataManager.register(flightsLayer);
     if (layerAvailableInBuild('military')) dataManager.register(militaryFlightsLayer);
@@ -195,7 +200,9 @@ async function init() {
       },
     });
     window.__dgpAreaWatch = areaWatch;
-    initPessoaSearch({ dataManager, layerHost });
+    // A busca de pessoas lê CAF e servidores do bucket privado: externo não tem.
+    if (externo) document.querySelector('.pessoa-search-wrap')?.style.setProperty('display', 'none');
+    else initPessoaSearch({ dataManager, layerHost });
     // Log de acesso: camada ligada/desligada por intenção explícita (a
     // restauração do estado salvo na URL não conta como uso).
     dataManager.subscribe((c) => {

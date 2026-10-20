@@ -11,7 +11,7 @@ const USR = comLotacao([
   { id: 'a', nome: 'Ana Conceição', matricula: '772708', acoes: 40, ultimo_login: '2026-10-20T10:00:00Z', ultimo_evento: '2026-10-20T11:00:00Z' },
   { id: 'b', nome: 'Bruno', matricula: '111', acoes: 0, ultimo_login: '2026-08-01T10:00:00Z', ultimo_evento: null },
   { id: 'c', nome: 'Célia', matricula: '999', acoes: 5, ultimo_login: '2026-10-19T10:00:00Z', ultimo_evento: '2026-10-19T10:00:00Z' },
-  { id: 'd', nome: 'Davi', matricula: '112', acoes: 0, ultimo_login: null, ultimo_evento: null },
+  { id: 'd', nome: 'Davi', matricula: '112', acoes: 0, ultimo_login: null, ultimo_evento: null, externo: true },
   { id: 'e', nome: 'Edu', matricula: '113', acoes: 0, ultimo_login: '2026-08-01T10:00:00Z', ultimo_evento: null, ativo: false },
 ], SERV);
 
@@ -35,6 +35,7 @@ test('filtro de usuários: texto com acento, ativos, inativos > 30 dias e nunca 
   assert.deepEqual(ids({ situacao: 'nunca' }), ['d']);
   assert.equal(ids({}).length, 4); // revogado fora de "todos os liberados"
   assert.deepEqual(ids({ situacao: 'revogados' }), ['e']);
+  assert.deepEqual(ids({ situacao: 'externos' }), ['d']);
   assert.deepEqual(ids({ situacao: 'revogados', busca: 'ana' }), []);
 });
 
