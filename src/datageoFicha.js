@@ -31,6 +31,7 @@ import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
 import { getAspectosFisicos } from './data/aspectosFisicos.js';
 import { getOttobacias } from './data/ottobacias.js';
+import { registrar } from './data/acessoLog.js';
 
 const esc = (t) =>
   String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -944,6 +945,7 @@ async function renderSecoes(panel, seq, carregar) {
 }
 
 export async function openFicha({ ibge, nome, info }) {
+  registrar('ficha_municipio', ibge, { nome });
   const panel = ensurePanel();
   const seq = ++_requestSeq;
   panel.classList.add('open');
@@ -1016,6 +1018,7 @@ async function infoAgregada(ibges) {
  * Supabase sao por municipio e ficam de fora.
  */
 export async function openFichaRegiao({ nome, meta, ibges }) {
+  registrar('ficha_regiao', nome, { meta });
   const panel = ensurePanel();
   const seq = ++_requestSeq;
   panel.classList.add('open');
@@ -1052,6 +1055,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
  * `carregar()` devolve o HTML do corpo.
  */
 export async function openPainel({ nome, meta, carregar, aoMontar = null }) {
+  registrar('registro_aberto', meta, { nome }); // cadastro individual (CAF, CAF PJ...): trilha de auditoria
   const panel = ensurePanel();
   const seq = ++_requestSeq;
   panel.classList.add('open');

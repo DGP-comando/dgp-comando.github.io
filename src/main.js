@@ -37,6 +37,8 @@ import { installScopeMask } from './scopeMask.js';
 import { initFirstRunExperience } from './firstRunExperience.js';
 import { apresentacaoPedida, initApresentacao } from './apresentacao.js';
 import { requireLogin } from './datageoLogin.js';
+import { registrar } from './data/acessoLog.js';
+import { initAnalytics } from './datageoAnalytics.js';
 import { initGeolibrePanel } from './processing/geolibrePanel.js';
 import { registerServiceWorker } from './pwa.js';
 
@@ -194,6 +196,14 @@ async function init() {
     });
     window.__dgpAreaWatch = areaWatch;
     initPessoaSearch({ dataManager, layerHost });
+    // Log de acesso: camada ligada/desligada por intenção explícita (a
+    // restauração do estado salvo na URL não conta como uso).
+    dataManager.subscribe((c) => {
+      if (c?.type === 'visibility' && ['user', 'voice', 'tool'].includes(c.origin)) {
+        registrar(c.enabled ? 'camada_on' : 'camada_off', c.layerId, { origem: c.origin });
+      }
+    });
+    initAnalytics({ nomeCamada: (id) => dataManager.layers?.get(id)?.module?.name || id });
     initDatageoShortcuts({
       actions: {
         resetCamera: () => flyToParana(engine),

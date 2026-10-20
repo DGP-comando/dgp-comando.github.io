@@ -9,7 +9,7 @@
 //
 // Texto mudou? Suba TERMO_VERSAO: todos assinam de novo no próximo acesso.
 
-export const TERMO_VERSAO = '2026-10-07';
+export const TERMO_VERSAO = '2026-10-20';
 export const TERMO_BUCKET = 'datageo-termos';
 export const TERMO_TITULO = 'Termo de responsabilidade e confidencialidade (LGPD)';
 
@@ -34,6 +34,10 @@ export const TERMO_TEXTO = Object.freeze([
   'Autorizo o registro do meu CPF, e-mail, matrícula e da data e hora desta assinatura, com a finalidade '
     + 'exclusiva de comprovar a ciência e a aceitação deste termo. Esse registro fica em área restrita, sem '
     + 'acesso dos demais usuários.',
+  'Estou ciente de que, para fins de segurança e auditoria (arts. 37 e 46 da LGPD), a plataforma registra o '
+    + 'meu uso, com data e hora: entradas e saídas, camadas e fichas consultadas, buscas por pessoa (com o termo '
+    + 'pesquisado), cadastros abertos e exportações. O registro é guardado por 12 meses e só a administração da '
+    + 'plataforma tem acesso a ele.',
 ]);
 
 export const soDigitos = (v) => String(v ?? '').replace(/\D/g, '');

@@ -18,8 +18,10 @@ import {
 } from './weatherGridStore.js';
 import { createPool } from './fetchPool.js';
 import { SUPABASE_URL, authHeaders } from './datageoAuth.js';
+import { registrar } from './acessoLog.js';
 
 const PRIVADO = '/privado/';
+const _privadosLogados = new Set(); // log de acesso: um evento por arquivo por sessão
 
 /**
  * fetch de arquivo estatico. `/privado/<arquivo>` sai do bucket privado
@@ -29,6 +31,7 @@ const PRIVADO = '/privado/';
 export async function dgFetchData(url) {
   if (!url.startsWith(PRIVADO)) return fetch(url);
   const nome = url.slice(PRIVADO.length);
+  if (!_privadosLogados.has(nome) && registrar('dado_privado', nome)) _privadosLogados.add(nome);
   return fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/datageo-privado/${nome}`, {
     headers: await authHeaders(),
   });

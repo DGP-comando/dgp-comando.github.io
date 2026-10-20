@@ -9,6 +9,7 @@
 // helper de DOM. Dados públicos operacionais, sem dado pessoal (LGPD).
 
 import { belongsToMunicipio, foldName } from './areaWatch.js';
+import { registrar } from './acessoLog.js';
 
 export const UTF8_BOM = '﻿';
 
@@ -151,6 +152,7 @@ export function exportFilename({ nome, ibge, ext = 'csv', now = new Date() } = {
 /** Dispara o download de um texto (Blob + <a download>). Retorna false se não houver DOM. */
 export function downloadText(filename, text, mime = 'text/plain;charset=utf-8', doc = globalThis.document) {
   if (!doc?.createElement || typeof Blob === 'undefined' || !globalThis.URL?.createObjectURL) return false;
+  registrar('exportacao', filename, { bytes: text.length });
   const url = URL.createObjectURL(new Blob([text], { type: mime }));
   const anchor = doc.createElement('a');
   anchor.href = url;

@@ -20,6 +20,7 @@ import {
   TERMO_BUCKET, TERMO_TEXTO, TERMO_TITULO, TERMO_VERSAO, caminhoRegistro, cpfValido, emailReal, emailValido,
   mascaraCpf, montaRegistro, termoAssinado,
 } from './data/termoLgpd.js';
+import { ativarLog, descarregarLog, registrar } from './data/acessoLog.js';
 
 const MSG_SEM_ACESSO = 'Seu usuário não tem acesso ao DataGeo. Procure o administrador.';
 
@@ -224,7 +225,7 @@ export async function requireLogin() {
       form.remove();
       status.hidden = false;
     }
-    initConta(user);
+    initConta(user, 'sessao_salva');
     return;
   }
 
@@ -242,12 +243,15 @@ export async function requireLogin() {
   if (!termoAssinado(user)) user = await pedirTermo(form, user);
   form.remove();
   status.hidden = false;
-  initConta(user);
+  initConta(user, 'login');
 }
 
-/** Botao Sair e, para admin (app_metadata.datageo_admin), o cadastro de usuarios. */
-function initConta(user) {
+/** Log de acesso, botao Sair e, para admin (app_metadata.datageo_admin), o cadastro de usuarios. */
+function initConta(user, via) {
+  ativarLog(via);
   document.getElementById('logout-btn')?.addEventListener('click', async () => {
+    registrar('logout');
+    await descarregarLog();
     await getAuth().signOut({ scope: 'local' });
     location.reload();
   });

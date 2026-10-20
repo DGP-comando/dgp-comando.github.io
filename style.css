@@ -9654,6 +9654,102 @@ body.apresentacao-mode #first-run-launcher:not([data-step="inicio"]).visible {
 #usuarios-dialog::backdrop {
   background: rgba(0, 0, 0, 0.6);
 }
+/* Painel de acessos do DataGeo (src/datageoAnalytics.js, só admin).
+   Base cinza e uma cor de destaque (--accent) para a mensagem principal. */
+#analytics-dialog {
+  width: min(1180px, calc(100vw - 32px));
+  height: min(860px, calc(100vh - 32px));
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--panel-radius);
+  background: var(--bg-dark);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+#analytics-dialog[open] { display: flex; flex-direction: column; }
+#analytics-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+#analytics-dialog button,
+#analytics-dialog select,
+#analytics-dialog input {
+  font: inherit;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 5px 9px;
+}
+#analytics-dialog button:not(:disabled) { cursor: pointer; }
+#analytics-dialog button:disabled { opacity: 0.4; }
+.an-topo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.an-topo h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.an-topo label { color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
+.an-abas { display: flex; gap: 4px; }
+.an-abas [aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+#analytics-dialog .an-fechar { margin-left: auto; border: 0; background: none; display: flex; }
+.an-corpo { flex: 1; overflow: auto; padding: 16px 18px; }
+.an-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.an-kpi {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 12px; border: 1px solid var(--glass-border); border-radius: 10px;
+}
+.an-kpi-valor { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.an-kpi-rotulo { color: var(--text-secondary); }
+.an-kpi small, .an-rodape, .an-barra-valor small { color: var(--text-dim); font-size: 11px; }
+.an-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+.an-card { border: 1px solid var(--glass-border); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.an-card.an-largo { grid-column: 1 / -1; }
+.an-card h3 { margin: 0 0 10px; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; color: var(--text-secondary); }
+.an-vazio { color: var(--text-dim); }
+.an-barras { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.an-barras li { display: grid; grid-template-columns: minmax(0, 42%) 1fr auto; gap: 8px; align-items: center; }
+.an-barra-rotulo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-barra-trilho { height: 10px; }
+.an-barra { display: block; height: 100%; min-width: 2px; border-radius: 2px; background: rgba(232, 234, 237, 0.28); }
+.an-destaque .an-barra { background: var(--accent); }
+.an-barra-valor { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.an-linha { width: 100%; height: auto; max-height: 200px; }
+.an-eixo { stroke: var(--glass-border-hover); }
+.an-tick { fill: var(--text-dim); font-size: 10px; }
+.an-serie { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.an-ponto { fill: var(--accent); }
+.an-anot { fill: var(--text-primary); font-size: 11px; }
+.an-heat { border-collapse: separate; border-spacing: 2px; width: 100%; table-layout: fixed; }
+.an-heat th { color: var(--text-dim); font-weight: 400; font-size: 10px; }
+.an-heat tbody th { width: 34px; text-align: left; }
+.an-heat td { height: 16px; border-radius: 2px; background: rgba(0, 212, 255, calc(0.06 + var(--a) * 0.94)); }
+.an-filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.an-filtros input[type="search"] { min-width: 240px; flex: 1; }
+.an-filtros label { color: var(--text-secondary); display: flex; gap: 6px; align-items: center; }
+.an-contagem { color: var(--text-dim); }
+#analytics-dialog .an-chip { border-color: var(--accent); color: var(--accent); }
+.an-rolagem { overflow: auto; }
+.an-tabela { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.an-tabela th, .an-tabela td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--glass-border); vertical-align: top; }
+.an-tabela th { position: sticky; top: 0; background: var(--bg-dark); color: var(--text-secondary); font-weight: 500; }
+#analytics-dialog .an-tabela th button { border: 0; background: none; padding: 0; color: inherit; }
+.an-tabela tbody tr[data-id] { cursor: pointer; }
+.an-tabela tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
+.an-tabela td:last-child { max-width: 360px; overflow-wrap: anywhere; color: var(--text-secondary); }
+.an-sensivel td:nth-child(4) { color: var(--accent); }
+.an-compacta td, .an-compacta th { padding: 4px 6px; }
+.an-paginacao { display: flex; gap: 12px; align-items: center; justify-content: flex-end; padding-top: 10px; color: var(--text-secondary); }
+.an-rodape { margin-top: 14px; }
+@media (max-width: 620px) {
+  #analytics-dialog { width: calc(100vw - 16px); height: calc(100vh - 16px); }
+  .an-grade { grid-template-columns: 1fr; }
+  .an-filtros input[type="search"] { min-width: 0; }
+}
 .login-hint {
   font-size: 11px;
   color: var(--text-dim);
