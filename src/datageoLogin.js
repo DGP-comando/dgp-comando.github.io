@@ -22,6 +22,7 @@ import {
   mascaraCpf, montaRegistro, termoAssinado,
 } from './data/termoLgpd.js';
 import { ativarLog, descarregarLog, registrar } from './data/acessoLog.js';
+import { pedirSolicitacao } from './datageoSolicitacao.js';
 
 const MSG_SEM_ACESSO = 'Seu usuário não tem acesso ao DataGeo. Procure o administrador.';
 
@@ -81,20 +82,36 @@ function passo(form, { titulo, campos, botao, validar, enviar, aviso = '' }) {
   });
 }
 
-async function pedirLogin(form, aviso) {
+/** Login (servidor: matrícula; externo: e-mail), com "Solicitar acesso" só para externos (src/datageoSolicitacao.js). */
+function pedirLogin(form, aviso) {
+  return new Promise((resolve) => {
+    const mostrarLogin = () => {
+      void passoLogin(form, aviso).then(resolve);
+      aviso = '';
+      const pedir = Object.assign(document.createElement('button'), {
+        type: 'button', className: 'login-secundario', textContent: 'Solicitar acesso (usuários externos)',
+      });
+      pedir.addEventListener('click', () => pedirSolicitacao(form, { voltar: mostrarLogin }));
+      form.append(pedir);
+    };
+    mostrarLogin();
+  });
+}
+
+async function passoLogin(form, aviso) {
   return passo(form, {
     aviso,
     titulo: 'Acesso restrito',
     botao: 'Entrar',
     campos: [
-      { label: 'Matrícula', attrs: { name: 'username', autocomplete: 'username', inputMode: 'text' } },
+      { label: 'Matrícula ou e-mail', attrs: { name: 'username', autocomplete: 'username', inputMode: 'text' } },
       { label: 'Senha', attrs: { type: 'password', name: 'password', autocomplete: 'current-password' } },
     ],
-    validar: ([login, senha]) => (!login.trim() || !senha ? 'Informe matrícula e senha.' : null),
+    validar: ([login, senha]) => (!login.trim() || !senha ? 'Informe matrícula (ou e-mail) e senha.' : null),
     enviar: async ([login, senha]) => {
       const { data, error } = await getAuth().signInWithPassword(credenciais(login, senha));
       if (error) {
-        return { erro: error.status === 400 ? 'Matrícula ou senha incorretas.' : error.message };
+        return { erro: error.status === 400 ? 'Login ou senha incorretos.' : error.message };
       }
       return data.user;
     },

@@ -34,6 +34,8 @@ export const EVENTOS = Object.freeze({
   usuario_revogar: 'Admin: revogou acesso',
   usuario_reativar: 'Admin: reativou acesso',
   usuario_externo: 'Admin: mudou perfil externo',
+  solicitacao_aprovar: 'Admin: aprovou solicitação',
+  solicitacao_recusar: 'Admin: recusou solicitação',
 });
 const SENSIVEIS = new Set(['busca_pessoa', 'registro_aberto', 'exportacao']);
 
@@ -101,6 +103,18 @@ export function ordena(lista, chave, desc) {
     return desc ? -r : r;
   });
 }
+
+/** Texto da decisão de aprovação para o admin repassar ao solicitante. */
+export function mensagemAprovacao(sol, r) {
+  if (r.conta_existente) {
+    return `${sol.nome}: a conta já existia e foi liberada como usuário externo. Login: ${r.login}, com a senha que a pessoa já usa.`;
+  }
+  return `${sol.nome}: conta externa criada. Login: ${r.login} · senha temporária: ${r.senha_temporaria}. `
+    + 'Repasse ao solicitante (a pessoa troca no primeiro acesso); esta senha não aparece de novo.';
+}
+
+export const fmtCpf = (c) => (c ? String(c).replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4') : '');
+export const fmtTel = (t) => (t ? String(t).replace(/^(\d{2})(\d{4,5})(\d{4})$/, '($1) $2-$3') : '');
 
 // ------------------------------------------------------------------- RPC
 
@@ -180,6 +194,19 @@ const kpi = (rotulo, valor, nota = '') =>
 
 // ------------------------------------------------------------------- painel
 
+/** Contador de pedidos pendentes no botão do painel (data-pendentes + CSS). */
+async function contarPendentes(btn) {
+  try {
+    const { ok, body } = await adminUsuarios({ acao: 'solicitacoes', status: 'pendente' });
+    const n = ok ? body.solicitacoes?.length ?? 0 : 0;
+    if (n) btn.dataset.pendentes = n > 99 ? '99+' : String(n);
+    else delete btn.dataset.pendentes;
+    btn.title = n ? `Acessos ao DataGeo · ${n} solicitação(ões) pendente(s)` : 'Acessos ao DataGeo';
+  } catch (err) {
+    console.warn('[analytics] pendentes', err);
+  }
+}
+
 export function initAnalytics({ nomeCamada = (id) => id } = {}) {
   const btn = document.getElementById('analytics-btn');
   if (!btn) return;
@@ -187,6 +214,7 @@ export function initAnalytics({ nomeCamada = (id) => id } = {}) {
     const eu = data.session?.user;
     if (eu?.app_metadata?.datageo_admin !== true) return;
     btn.hidden = false;
+    void contarPendentes(btn);
     let painel = null;
     btn.addEventListener('click', () => {
       painel ??= criarPainel(nomeCamada, eu.id);
@@ -208,12 +236,14 @@ function criarPainel(nomeCamada, euId) {
       <nav class="an-abas" role="tablist">
         <button role="tab" data-aba="geral" aria-selected="true">Visão geral</button>
         <button role="tab" data-aba="usuarios" aria-selected="false">Usuários</button>
+        <button role="tab" data-aba="solicitacoes" aria-selected="false">Solicitações <span class="an-badge" hidden></span></button>
         <button role="tab" data-aba="log" aria-selected="false">Log completo</button>
       </nav>
       <button class="an-fechar" aria-label="Fechar"><span class="material-symbols-outlined">close</span></button>
     </header>
     <section class="an-corpo" data-aba="geral"></section>
     <section class="an-corpo" data-aba="usuarios" hidden></section>
+    <section class="an-corpo" data-aba="solicitacoes" hidden></section>
     <section class="an-corpo" data-aba="log" hidden></section>`;
   document.body.append(dlg);
   const secao = (aba) => dlg.querySelector(`section[data-aba="${aba}"]`);
@@ -228,6 +258,7 @@ function criarPainel(nomeCamada, euId) {
     for (const b of dlg.querySelectorAll('[data-aba][role="tab"]')) b.setAttribute('aria-selected', String(b.dataset.aba === aba));
     for (const s of dlg.querySelectorAll('section[data-aba]')) s.hidden = s.dataset.aba !== aba;
     if (aba === 'log') recarregar();
+    if (aba === 'solicitacoes') void carregarSolicitacoes();
   };
   dlg.querySelector('.an-abas').addEventListener('click', (e) => {
     const aba = e.target.closest('[data-aba]')?.dataset.aba;
@@ -516,10 +547,96 @@ function criarPainel(nomeCamada, euId) {
     }
   }
 
+  // ------------------------------------------------------------ solicitações
+  const sol = secao('solicitacoes');
+  sol.innerHTML = `
+    <div class="an-filtros">
+      <select class="an-sol-status" aria-label="Situação do pedido">
+        <option value="pendente">Pendentes</option><option value="aprovada">Aprovadas</option><option value="recusada">Recusadas</option>
+      </select>
+      <span class="an-contagem"></span>
+    </div>
+    <p class="an-status an-sol-msg" role="status"></p>
+    <div class="an-rolagem"><table class="an-tabela an-sol">
+      <thead><tr><th>Pedido em</th><th>Entidade</th><th>Nome</th><th>CPF</th><th>E-mail</th>
+        <th>Telefone</th><th>Endereço</th><th>Finalidade</th><th></th></tr></thead>
+      <tbody></tbody></table></div>`;
+  let solicitacoes = [];
+  const badge = dlg.querySelector('.an-badge');
+  const atualizarBadge = () => {
+    badge.hidden = !solicitacoes.length;
+    badge.textContent = String(solicitacoes.length);
+  };
+  sol.querySelector('.an-sol-status').addEventListener('change', () => void carregarSolicitacoes());
+  sol.querySelector('tbody').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-decidir]');
+    if (b) void decidir(b);
+  });
+
+  async function carregarSolicitacoes() {
+    const status = sol.querySelector('.an-sol-status').value;
+    const corpo = sol.querySelector('tbody');
+    corpo.innerHTML = '<tr><td colspan="9" class="an-vazio">Carregando…</td></tr>';
+    const { ok, status: http, body } = await adminUsuarios({ acao: 'solicitacoes', status })
+      .catch((err) => ({ ok: false, status: 0, body: { error: err.message } }));
+    if (!ok) {
+      corpo.innerHTML = `<tr><td colspan="9" class="an-vazio">Falha ao carregar: ${esc(body.error || `Erro ${http}`)}</td></tr>`;
+      return;
+    }
+    solicitacoes = body.solicitacoes ?? [];
+    if (status === 'pendente') atualizarBadge();
+    renderSolicitacoes(status);
+  }
+
+  function renderSolicitacoes(status) {
+    sol.querySelector('.an-contagem').textContent = `${fmtInt(solicitacoes.length)} ${solicitacoes.length === 1 ? 'pedido' : 'pedidos'}`;
+    sol.querySelector('tbody').innerHTML = solicitacoes.length ? solicitacoes.map((s) => `
+      <tr>
+        <td>${fmtDataHora(s.criado_em)}</td>
+        <td>${esc(s.entidade)}</td><td>${esc(s.nome)}</td><td>${esc(fmtCpf(s.cpf))}</td><td>${esc(s.email)}</td>
+        <td>${esc(fmtTel(s.telefone))}</td><td>${esc(s.endereco)}</td>
+        <td class="an-finalidade">${esc(s.finalidade)}</td>
+        <td>${status === 'pendente'
+          ? `<span class="an-decisao"><button class="an-acesso an-reativar" data-decidir="aprovar" data-id="${esc(s.id)}">Aprovar</button>
+             <button class="an-acesso an-revogar" data-decidir="recusar" data-id="${esc(s.id)}">Recusar</button></span>`
+          : esc(s.decidido_em ? `${status} em ${fmtDataHora(s.decidido_em)}` : status)}</td>
+      </tr>`).join('') : '<tr><td colspan="9" class="an-vazio">Nenhum pedido nesta situação.</td></tr>';
+  }
+
+  async function decidir(b) {
+    const s = solicitacoes.find((x) => String(x.id) === b.dataset.id);
+    const acao = b.dataset.decidir;
+    if (!s) return;
+    if (!confirm(acao === 'aprovar' ? `Aprovar o acesso de ${s.nome} (${s.entidade}) como usuário externo?` : `Recusar o pedido de ${s.nome}?`)) return;
+    const msg = sol.querySelector('.an-sol-msg');
+    const botoes = [...b.parentElement.querySelectorAll('button')];
+    for (const x of botoes) x.disabled = true;
+    msg.textContent = acao === 'aprovar' ? 'Aprovando…' : 'Recusando…';
+    try {
+      const { ok, status: http, body } = await adminUsuarios({ acao, id: s.id });
+      if (!ok) {
+        msg.textContent = body.error || `Erro ${http}`;
+        for (const x of botoes) x.disabled = false;
+        return;
+      }
+      registrar(`solicitacao_${acao}`, s.email, { nome: s.nome, entidade: s.entidade });
+      msg.textContent = acao === 'aprovar' ? mensagemAprovacao(s, body) : `Pedido de ${s.nome} recusado.`;
+      solicitacoes = solicitacoes.filter((x) => x.id !== s.id);
+      atualizarBadge();
+      renderSolicitacoes('pendente');
+      if (acao === 'aprovar') void carregarResumo(); // a conta nova entra na aba Usuários
+    } catch (err) {
+      console.error('[analytics] solicitacao', err);
+      msg.textContent = 'Falha de conexão. Tente de novo.';
+      for (const x of botoes) x.disabled = false;
+    }
+  }
+
   return {
     abrir() {
       dlg.showModal();
       void carregarResumo();
+      void carregarSolicitacoes();
     },
   };
 }
