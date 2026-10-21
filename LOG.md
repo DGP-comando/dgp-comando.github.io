@@ -6,6 +6,43 @@
 
 ---
 
+## Sessão 2026-10-21: Disk IO do c2-parana e alertas sem fan-out
+
+E-mail da Supabase: "c2-parana is running out of Disk IO Budget" (compute Micro,
+224 MB de shared_buffers). Correção no c2-parana, PR #10, já em produção.
+
+- **Causa.**
+  - `etl-alerts` e `etl-correlations` gravavam uma notificação por linha de `profiles`. Desde 2026-09-23 o Auth do c2 guarda os ~1.143 usuários do DataGeo, então cada disparo de regra virava 1.000 linhas (limite do PostgREST).
+  - `notifications` chegou a 436 mil linhas e 235 MB. 99% eram de usuários do DataGeo, e só 54 linhas tinham sido lidas.
+  - O cooldown por `sent_at` fazia seq scan numa tabela maior que o cache.
+  - Nenhum push ou e-mail saía de fato; o estrago era só IO.
+- **Decisão.** O C2 será descontinuado. Nenhum usuário recebe mais alertas, e fica só o que o DataGeo usa:
+  - `incidents` (`fetchActiveIncidents` e a ficha do município);
+  - `situational_reports.active_alerts_count` (briefing).
+- **Correção.**
+  - Cada disparo grava um registro com `user_id null`, como no `etl-cemaden`. Esse registro segue servindo de cooldown, de contagem do `etl-situational` e de base para a criação de incidentes.
+  - Saem as leituras de `profiles` e `notification_preferences`.
+  - O `active_alerts_count` do briefing cai de milhares para dezenas, que é o número real de disparos.
+- **Verificação.**
+  - `deno check` passou; deploy das duas funções.
+  - O `etl-alerts` das 09:30 UTC gravou 1 linha, onde antes seriam 2.000. O `etl-correlations` das 09:45 UTC não gravou nenhuma linha por usuário.
+  - Os 3 incidentes ativos foram mantidos.
+- **Limpeza.**
+  - 435.062 linhas por usuário apagadas em lotes de 50 mil, preservando as referenciadas por `incidents.source_notification_id`.
+  - Depois, `VACUUM FULL`: a tabela foi de 235 MB para 584 kB (1.271 linhas).
+
+### Pegadinhas
+- Nunca refazer fan-out por `profiles` no c2. Todos os perfis são `viewer` e
+  quase todos são do DataGeo. O `etl-escalation` mira `commander`/`operator`,
+  papéis que ninguém tem.
+- DELETE sozinho não encolhe a tabela; o seq scan continua lendo as páginas
+  vazias. Para devolver espaço é preciso `VACUUM FULL`, que é rápido quando
+  sobram poucas linhas.
+- O `etl-aviacao` a cada minuto continua sendo o maior gerador de WAL
+  (~17 GB desde março). Se o aviso de IO voltar, é o próximo alvo.
+
+---
+
 ## Sessão 2026-10-20: log de acesso, painel de acessos, usuário externo e solicitação de acesso
 
 Painel "Acessos ao DataGeo" (botão `#analytics-btn`, só `datageo_admin`) e tudo
