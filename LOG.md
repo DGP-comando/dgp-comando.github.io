@@ -6,13 +6,13 @@
 
 ---
 
-## Sessão 2026-10-23: explorações pecuárias da ADAPAR por atividade e URs do GETEC
+## Sessão 2026-10-23: explorações pecuárias da ADAPAR, URs do GETEC e enrich de imóvel (fase 0)
 
 Pedido: classificação por atividade nas propriedades com exploração pecuária
 da ADAPAR, como nas outorgas, com totais nas fichas de município e de
 regional. Depois, a Declaração de Exploração 2024 com bubalinos e a fusão
 dos pontos repetidos; por fim, as URs do GETEC ligadas à CAF. Commits
-`7b458f7`, `db43e31`, `654c175` e o das URs; deploy no Pages concluído.
+`7b458f7`, `db43e31`, `654c175` `8595c0d` (URs), mais a fase 0 do enrich de imóvel; deploy no Pages concluído.
 
 - **Fonte da atividade.**
   - O export atual (`explorações+ativas.csv`, out/2026) não traz espécie nem tipo de exploração.
@@ -84,6 +84,13 @@ dos pontos repetidos; por fim, as URs do GETEC ligadas à CAF. Commits
   - Camada `datageo-urs-getec` (token `Pf`, no fim do registro; `layerState.test` agora conta 81), `CAMADAS_PRIVADAS`, seção da ficha (`getUrsGetec`), QA `qa-programas-idr.mjs` 27/27.
   - Legenda por projeto (pedido seguinte): `GETEC_FAMILIAS` com os 31 projetos do catálogo do GETEC (select 511 de `rel_cad_ur`), um tom por projeto dentro da cor da família (`tom()`), 32 cores distintas; `makePointsLayer({legendaSoComDados})` esconde os projetos sem UR.
   - Relatório quantitativo (estado, regional, projeto e regional × projeto, só agregados) em `URs_GETEC_2026.html` na área de trabalho; script fora do repo.
+
+- **Enrich de imóvel, fase 0** (último pedido; estudo "Mireye para o PR").
+  - Estudo: os imóveis ativos do CAR (539.477) fazem o papel das parcels; as camadas viram campos; a `public-api` do c2 já tem chave `dgp_live_`, cota, `api_usage` e Stripe. Fases: 0 enrich local, 1 lote GeoParquet dos 539 mil, 2 search/enrich/compare na API, 3 MCP remoto. Motor fora do Supabase do c2 (Micro, Disk IO no limite): DuckDB + GeoParquet. API pública só com dado público (nada do bucket privado).
+  - `scripts/enrich_imovel.py`: código do CAR ou lon/lat vira 81 campos, cada um com rótulo, unidade e fonte (catálogo em `meta.catalogo`, avisos em `meta.avisos`), no envelope `{success, data, error, meta}`. CLI, `--servir PORTA` (`/v1/enrich?car=` ou `?lon=&lat=`, `/v1/fields`) e `--avaliar N`.
+  - Campos: imóvel do CAR; município, regional IDR e módulo fiscal; declividade e uso do solo lidos dos PNG de 30 m (bbox de `aspectos-fisicos-pr.json`, mercator); sobreposição com UC federal/estadual, TI, quilombola, assentamento, faxinal; distâncias (rodovias, ferrovia, LT, armazém CONAB, CEASA, subestação) em UTM 22S; cobertura celular; ottobacia; pivôs a 5 km; clima BR-DWGD; preço da terra SIPT por classe (A-I a C-VIII, do `precos-de-terras`); VBP e população.
+  - O CAR vem das fatias do mapa (`public/data/car`, delta encadeado por grupo, ~5 m): o acervo bruto do `fetch_car.py` não está no disco. Fontes ao vivo (outorgas, licenças) ficam para a fase 1.
+  - Avaliação (200 imóveis sorteados, semente 7): área da geometria / declarada com mediana 0,995 e 96% entre 0,9 e 1,1. Uma falha, corrigida: nó do clima fora da máscara na divisa (Pérola d'Oeste) passou a usar o vizinho com dado. Casos-ouro: REBIO das Perobas (47,9% de sobreposição) e Curitiba (CEASA Curitiba). Uma chamada leva ~5 s a frio; a avaliação inteira, ~3 min.
 
 ### Pegadinhas
 - Os selects de extensionista do GETEC vêm em UTF-8 no meio de páginas
