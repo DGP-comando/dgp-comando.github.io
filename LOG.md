@@ -41,7 +41,7 @@ regional. Commit `7b458f7`, deploy no Pages concluído.
   - `qa-defesa-agropecuaria.mjs`: 34/34, com chip, legenda, cor, tooltip, ficha de Palotina (944 propriedades) e ficha regional (1.432).
 
 - **Declaração de Exploração 2024** (pedido seguinte na mesma sessão).
-  - Fonte: `H:\IDR-PARANA\GEOPROCESSAMENTOdapar`, com aves, bovinos, bubalinos e suínos. Também está em `pecuária.gpkg`.
+  - Fonte: `H:\IDR-PARANA\GEOPROCESSAMENTO\adapar`, com aves, bovinos, bubalinos e suínos. Também está em `pecuária.gpkg`.
   - Traz só cabeças, sem finalidade nem porte. Entra abaixo do detalhe de 2022, com três classes novas: bubalinocultura (148), bovinos com finalidade não informada (27,9 mil) e aves ou suínos com porte não informado (3,5 mil).
   - "Sem espécie" caiu de 103,7 mil para 73,8 mil.
   - 86 linhas desalinhadas (nome de produtor numa coluna de cabeças) ficam de fora; dessas linhas nada é lido.
