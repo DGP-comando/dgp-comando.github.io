@@ -28,6 +28,8 @@ import { getOutorgasMunicipios } from './maplibre/layers/outorgas.js';
 import { getLicencasMunicipios } from './maplibre/layers/licenciamento.js';
 import { getCaf, periodo } from './data/cafFamilias.js';
 import { getExploracoesMunicipios } from './maplibre/layers/defesaAgropecuaria.js';
+import { getUrsGetec } from './data/programasIdr.js';
+import { GETEC_LEGENDA, getecGrupo } from './data/programasIdrEstilos.js';
 import { ATIVIDADES_CORES, ATIVIDADES_CURTO, EXPLORACOES_CORES } from './data/defesaAgropecuariaEstilos.js';
 import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
@@ -327,6 +329,20 @@ const SECTIONS = [
   /** CAF do MDA (bucket privado): contagem, série, renda e perfil. Município e regional. */
   function caf({ caf }) {
     return secaoCaf(caf);
+  },
+
+  /** Unidades de Referência cadastradas no GETEC (bucket privado), por projeto. Município e regional. */
+  function ursGetec({ urs }) {
+    if (!urs) return null;
+    const titulo = 'Unidades de Referência · GETEC';
+    if (!urs.total) return section(titulo, '<div>Nenhuma UR cadastrada no GETEC</div>');
+    const cor = (proj) => GETEC_LEGENDA.find((g) => g.grupo === getecGrupo(proj)).color;
+    const linhas = urs.projetos.map(([proj, n]) => ({ label: proj, curto: proj.replace(/^Grãos: /, 'Grãos '), color: cor(proj), n }));
+    return section(titulo,
+      `<div>URs cadastradas: <b>${fmtN(urs.total)}</b> · ${fmtN(urs.comPonto)} com ponto da propriedade</div>` +
+      `<div class="fx-sub">Por projeto</div>${barrasClasse(linhas)}` +
+      '<div class="fx-dim">IDR-Paraná · GETEC (SISATER), cadastro do ano · ponto pela família na CAF ou pela ADAPAR; ' +
+      'sem ponto, no centro do município · pontos na camada URs do GETEC</div>');
   },
 
   /** Propriedades com exploração pecuária ativa (ADAPAR, bucket privado), por atividade e DAP/CAF. */
@@ -979,7 +995,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -997,8 +1013,9 @@ export async function openFicha({ ibge, nome, info }) {
       getAspectosFisicos([ibge]),
       getOttobacias([ibge]),
       getExploracoesMunicipios([ibge]),
+      getUrsGetec([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs };
   });
 }
 
@@ -1050,7 +1067,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -1066,8 +1083,9 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getAspectosFisicos(ibges),
       getOttobacias(ibges),
       getExploracoesMunicipios(ibges),
+      getUrsGetec(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs };
   });
 }
 

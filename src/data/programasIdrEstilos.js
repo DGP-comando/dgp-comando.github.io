@@ -29,6 +29,7 @@ export const UR_CONTORNO = Object.freeze({
   cafe: { color: '#fde68a', width: 2.5 },
   piscicultura: { color: '#1e3a8a', width: 2.5 },
   pecuaria: { color: '#000000', width: 2.5 },
+  getec: { color: '#facc15', width: 1.5 },
 });
 
 function ponto(p, grupo, color, label) {
@@ -130,4 +131,40 @@ export const cafeTooltip = urTooltip({ icon: '☕', programa: 'Café', source: '
 export const pisciculturaTooltip = urTooltip({
   icon: '🐟', programa: 'Piscicultura', source: 'IDR-Paraná · Programa Estadual de Piscicultura',
 });
+// ------------------------------------------------------ URs do GETEC
+
+/**
+ * URs cadastradas no GETEC (scripts/build_getec_urs.py), todos os projetos:
+ * cor pela família do projeto (regex sobre o nome do projeto do GETEC, em
+ * ordem; o resto cai em "outros").
+ */
+export const GETEC_LEGENDA = Object.freeze([
+  { grupo: 'leite', label: 'Pecuária de leite', color: '#e2e8f0', re: /Leite/ },
+  { grupo: 'corte', label: 'Pecuária de corte e outras criações', color: '#dc2626', re: /Corte|Caprinos|Outras cria/ },
+  { grupo: 'graos', label: 'Grãos', color: '#facc15', re: /Grãos/ },
+  { grupo: 'hortifruti', label: 'Olericultura e fruticultura', color: '#22c55e', re: /Olericultura|Fruticultura|Condimentares/ },
+  { grupo: 'lavouras', label: 'Café, mandioca e outras lavouras', color: '#a16207',
+    re: /Café|Mandioca|Erva|Palmáceas|Sericicultura|Cultivo Florestal|Outras exploraç/ },
+  { grupo: 'agroind', label: 'Agroindústria e turismo rural', color: '#f472b6', re: /Agroindústria|Turismo/ },
+  { grupo: 'aguas', label: 'Piscicultura, pesca e abelhas', color: '#0ea5e9', re: /Piscicultura|Pesca|Maricultura|abelhas/ },
+  { grupo: 'ambiente', label: 'Recursos naturais e agroecologia', color: '#14b8a6', re: /Recursos Naturais|Agroecologia/ },
+  { grupo: 'social', label: 'Promoção social e organização', color: '#a78bfa', re: /^/ },
+]);
+
+export const getecGrupo = (projeto) => GETEC_LEGENDA.find((g) => g.re.test(projeto ?? '')).grupo;
+export const getecEstilo = (p) => {
+  const g = getecGrupo(p.Projeto);
+  return ponto(p, g, GETEC_LEGENDA.find((x) => x.grupo === g).color, p.Produtor);
+};
+
+export const getecTooltip = urTooltip({
+  icon: '📋',
+  programa: 'UR do GETEC',
+  campos: [
+    ['Projeto', 'Projeto'], ['Ano', 'Ano'], ['Extensionista', 'Extensionista'], ['Também em', 'Também em'],
+    ['Origem do ponto', 'Origem do ponto'],
+  ],
+  source: 'IDR-Paraná · GETEC (SISATER), cadastro de Unidades de Referência',
+});
+
 export const pecuariaTooltip = urTooltip({ icon: '🐂', programa: 'Pecuária de Corte', source: 'IDR-Paraná · Pecuária de Corte' });

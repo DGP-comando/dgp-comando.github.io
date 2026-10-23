@@ -46,7 +46,7 @@ export const LAYER_ORDER = [
   'datageo-ferrovias', 'datageo-rodovias', 'datageo-estradas', 'datageo-estradas-conveniadas',
   'datageo-transmissao', 'datageo-distribuicao', 'datageo-copel-transformadores', 'datageo-copel-postes',
   'datageo-subestacoes', 'datageo-geracao', 'datageo-gd-solar',
-  'datageo-agroindustrias-idr', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
+  'datageo-agroindustrias-idr', 'datageo-urs-getec', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
   'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas',
   // Grupo Defesa Agropecuária: escritórios da ADAPAR primeiro, cadastros depois.
   'datageo-adapar-unidades', 'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',

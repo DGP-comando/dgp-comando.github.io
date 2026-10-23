@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
 import {
-  CAFE_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, UR_LABEL_DIST,
-  cafeEstilo, coordenadaConferida, graosEstilo, graosGrupo, graosTooltip, pecuariaEstilo, pecuariaTooltip,
+  CAFE_LEGENDA, GETEC_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, UR_LABEL_DIST,
+  cafeEstilo, coordenadaConferida, getecEstilo, getecGrupo, getecTooltip, graosEstilo, graosGrupo, graosTooltip, pecuariaEstilo, pecuariaTooltip,
   pisciculturaEstilo,
 } from './programasIdrEstilos.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
@@ -20,11 +20,13 @@ const PONTOS = [
   ['urs-cafe-pr.geojson', cafeEstilo, CAFE_LEGENDA, 60],
   ['urs-piscicultura-pr.geojson', pisciculturaEstilo, PISCICULTURA_LEGENDA, 20],
   ['urs-pecuaria-corte-pr.geojson', pecuariaEstilo, PECUARIA_LEGENDA, 60],
+  ['getec-urs-pr.geojson', getecEstilo, GETEC_LEGENDA, 550],
 ];
+const PLANILHAS = PONTOS.slice(0, 4);
 
 test('camadas: categoria Programas IDR, arquivos do bucket privado e token no share link', () => {
   assert.deepEqual(layers.map((l) => l.id), [
-    'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura', 'datageo-urs-pecuaria-corte',
+    'datageo-urs-getec', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura', 'datageo-urs-pecuaria-corte',
   ]);
   for (const l of layers) {
     assert.equal(l.category, PROGRAMAS_IDR);
@@ -97,8 +99,8 @@ test('grupo Programas IDR: ícone próprio por camada e contorno próprio por pr
   assert.equal(new Set(icons).size, icons.length, `ícones repetidos: ${icons.join(' ')}`);
   const contornos = layers.flatMap((l) => l.layers.filter((s) => s.type === 'circle'))
     .map((s) => `${s.paint['circle-stroke-color']}/${s.paint['circle-stroke-width']}`);
-  assert.equal(contornos.length, 4);
-  assert.equal(new Set(contornos).size, 4, contornos.join(' '));
+  assert.equal(contornos.length, 5);
+  assert.equal(new Set(contornos).size, 5, contornos.join(' '));
 });
 
 test('tooltip do município: URs por programa, sem o desligado', async () => {
@@ -120,12 +122,49 @@ test('tooltip do município: URs por programa, sem o desligado', async () => {
   assert.doesNotMatch(municipioTooltipHtml('Curitiba', null, null, false, null, undefined), /URs dos programas/);
 });
 
-test('dado real: soma das URs por município bate com os pontos ativos', { skip: !PONTOS.every(([a]) => existsSync(PRIV(a))) }, async () => {
+test('dado real: soma das URs por município bate com os pontos ativos', { skip: !PLANILHAS.every(([a]) => existsSync(PRIV(a))) }, async () => {
   const { ursPorMunicipio } = await import('./programasIdr.js');
-  const colecoes = PONTOS.map(([a]) => ({ features: real(a) }));
+  const colecoes = PLANILHAS.map(([a]) => ({ features: real(a) }));
   const ativos = colecoes.flatMap((c) => c.features)
     .filter((f) => f.properties.ibge && !/desligad/i.test(f.properties['Observação'] ?? '')).length;
   const por = ursPorMunicipio(colecoes);
   assert.equal(Object.values(por).reduce((a, m) => a + m.total, 0), ativos);
   assert.ok(ativos >= 340, `só ${ativos} URs ativas`);
+});
+
+test('URs do GETEC: família do projeto, tooltip e resumo da ficha', async () => {
+  assert.equal(getecGrupo('Pecuária de Leite'), 'leite');
+  assert.equal(getecGrupo('Grãos: Feijão/Milho e Cereais de Inverno'), 'graos');
+  assert.equal(getecGrupo('Caprinos e Ovinos'), 'corte');
+  assert.equal(getecGrupo('Criação de abelhas'), 'aguas');
+  assert.equal(getecGrupo('Promoção Social e Cidadania'), 'social');
+  assert.equal(getecGrupo(undefined), 'social');
+  const p = {
+    Produtor: 'José da Silva', Projeto: 'Café', Ano: '2026', 'Município': 'Ivaiporã', ibge: '4111209',
+    Extensionista: 'Fulano', 'Também em': 'Programa Café', 'Origem do ponto': 'família na CAF (nome no município)',
+    'Checagem da coordenada': 'no município declarado',
+  };
+  assert.equal(getecEstilo(p).alpha, 0.95);
+  const centro = { ...p, 'Checagem da coordenada': 'sem ponto na CAF nem na ADAPAR: ponto no centro do município' };
+  assert.equal(getecEstilo(centro).alpha, 0.35);
+  const html = getecTooltip(p);
+  for (const t of ['José da Silva', 'Café', 'Fulano', 'Programa Café', 'família na CAF']) assert.ok(html.includes(t), t);
+  assert.match(getecTooltip(centro), /Coordenada a conferir/);
+
+  const { resumoUrsGetec } = await import('./programasIdr.js');
+  const fc = { features: [p, { ...p, Projeto: 'Olericultura' }, centro, { ...p, ibge: '4100103' }].map((x) => ({ properties: x })) };
+  assert.deepEqual(resumoUrsGetec(fc, ['4111209']), { total: 3, comPonto: 2, projetos: [['Café', 2], ['Olericultura', 1]] });
+  assert.equal(resumoUrsGetec(fc, ['9999999']).total, 0);
+  assert.equal(resumoUrsGetec(null, ['4111209']), null);
+});
+
+test('dado real getec-urs: sem CPF nem número da CAF, origem e checagem em toda UR', { skip: !existsSync(PRIV('getec-urs-pr.geojson')) }, () => {
+  const feats = real('getec-urs-pr.geojson');
+  for (const { properties: p } of feats) {
+    assert.ok(p.Produtor && p.Projeto && p.ibge && p['Origem do ponto'] && p['Checagem da coordenada'], JSON.stringify(p));
+    assert.equal(p.CAF, undefined);
+    for (const v of Object.values(p)) assert.doesNotMatch(String(v), /\d{3}\.?\d{3}\.?\d{3}-?\d{2}/, 'CPF');
+  }
+  const comPonto = feats.filter((f) => !/centro do município/.test(f.properties['Checagem da coordenada'])).length;
+  assert.ok(comPonto / feats.length > 0.65, `só ${comPonto} de ${feats.length} com ponto`);
 });

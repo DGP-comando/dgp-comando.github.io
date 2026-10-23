@@ -27,6 +27,7 @@ export const CAMADAS_PRIVADAS = new Set([
   'datageo-estacoes-idr',
   'datageo-unidades-idr',
   'datageo-fontes-protegidas',
+  'datageo-urs-getec',
   'datageo-urs-graos',
   'datageo-urs-cafe',
   'datageo-urs-piscicultura',

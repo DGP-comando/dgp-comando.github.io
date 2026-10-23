@@ -387,6 +387,8 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-gd-solar', token: 'Ga', disposition: 'enabled-only' }),
   // 'Eb' = perspectiva El Niño (ao lado do clima histórico, 'E').
   Object.freeze({ id: 'datageo-el-nino', token: 'Eb', disposition: 'enabled-only' }),
+  // 'Pf' = URs do GETEC (prefixo 'P' de Programas IDR; 'Pe' segue reservado).
+  Object.freeze({ id: 'datageo-urs-getec', token: 'Pf', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));

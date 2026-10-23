@@ -46,3 +46,34 @@ export function loadUrsMunicipios() {
   });
   return p;
 }
+
+// ------------------------------------------------------ URs do GETEC (ficha)
+
+/**
+ * URs do GETEC nos municípios: {total, comPonto, projetos: [[projeto, n]]}
+ * (projetos do maior para o menor), conta pelo município da UR. null sem dado.
+ */
+export function resumoUrsGetec(fc, ibges) {
+  if (!fc) return null;
+  const alvo = new Set((ibges ?? []).map(String));
+  const projetos = {};
+  let total = 0;
+  let comPonto = 0;
+  for (const { properties: p } of fc.features ?? []) {
+    if (!alvo.has(String(p.ibge))) continue;
+    total += 1;
+    if (!/centro do município/.test(p['Checagem da coordenada'] ?? '')) comPonto += 1;
+    projetos[p.Projeto] = (projetos[p.Projeto] ?? 0) + 1;
+  }
+  return { total, comPonto, projetos: Object.entries(projetos).sort((a, b) => b[1] - a[1]) };
+}
+
+let pGetec = null;
+/** Resumo das URs do GETEC (bucket privado); null sem sessão liberada. Nunca lança. */
+export function getUrsGetec(ibges) {
+  pGetec ??= json('/privado/getec-urs-pr.geojson').then((d) => {
+    if (!d) pGetec = null;
+    return d;
+  });
+  return pGetec.then((d) => resumoUrsGetec(d, ibges));
+}

@@ -3,6 +3,21 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-10-23 — URs do GETEC
+
+### Added
+
+- **URs do GETEC (todos os projetos)** (grupo IDR-Paraná, acesso restrito):
+  as 639 Unidades de Referência cadastradas no GETEC em 2026, de 24 projetos
+  e 23 regionais, com cor por família de projeto. O ponto vem da família na
+  CAF (nome do produtor no município, exato ou aproximado) ou das explorações
+  pecuárias da ADAPAR; sem nenhum dos dois, a UR fica no centro do município,
+  esmaecida (73% têm ponto). O tooltip traz projeto, extensionista, origem do
+  ponto e se a UR também está numa planilha de programa ou no diagnóstico de
+  agroindústrias. Token `Pf` no link compartilhado.
+- **Ficha municipal e regional**: seção "Unidades de Referência · GETEC" com o
+  total e as barras por projeto.
+
 ## [Unreleased] — 2026-10-23 — explorações pecuárias da ADAPAR por atividade
 
 ### Added

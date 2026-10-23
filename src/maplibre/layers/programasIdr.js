@@ -2,7 +2,9 @@
 //
 // Grupo PROGRAMAS IDR: Unidades de Referência dos programas do IDR-Paraná
 // (Grãos/UIRTs, Café, Piscicultura, Pecuária de Corte), uma camada de pontos
-// por programa (makePointsLayer de energiaLogistica.js).
+// por programa (makePointsLayer de energiaLogistica.js), mais as URs de todos
+// os projetos cadastradas no GETEC (ponto da família na CAF, da ADAPAR ou o
+// centro do município).
 // As Agroindústrias (cadastro IDR) e as Rotas turísticas, que também são
 // programas do IDR, ficam em energiaLogistica.js com a mesma categoria.
 //
@@ -10,8 +12,8 @@
 // carregam. Estilos e tooltips: src/data/programasIdrEstilos.js.
 
 import {
-  CAFE_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, UR_CONTORNO, UR_LABEL_DIST,
-  cafeEstilo, cafeTooltip, graosEstilo, graosTooltip, pecuariaEstilo, pecuariaTooltip,
+  CAFE_LEGENDA, GETEC_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, UR_CONTORNO, UR_LABEL_DIST,
+  cafeEstilo, cafeTooltip, getecEstilo, getecTooltip, graosEstilo, graosTooltip, pecuariaEstilo, pecuariaTooltip,
   pisciculturaEstilo, pisciculturaTooltip,
 } from '../../data/programasIdrEstilos.js';
 import { makePointsLayer } from './energiaLogistica.js';
@@ -68,4 +70,16 @@ export const ursPecuariaLayer = urs({
   stroke: UR_CONTORNO.pecuaria,
 });
 
-export default [ursGraosLayer, ursCafeLayer, ursPisciculturaLayer, ursPecuariaLayer];
+export const ursGetecLayer = urs({
+  id: 'datageo-urs-getec',
+  name: 'URs do GETEC (todos os projetos)',
+  icon: '📋',
+  source: 'IDR-Paraná · GETEC (SISATER)',
+  url: '/privado/getec-urs-pr.geojson',
+  estilo: getecEstilo,
+  tooltip: getecTooltip,
+  legend: GETEC_LEGENDA.map(({ grupo, label, color }) => ({ grupo, label, color })),
+  stroke: UR_CONTORNO.getec,
+});
+
+export default [ursGetecLayer, ursGraosLayer, ursCafeLayer, ursPisciculturaLayer, ursPecuariaLayer];

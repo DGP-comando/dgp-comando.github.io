@@ -6,13 +6,13 @@
 
 ---
 
-## Sessão 2026-10-23: explorações pecuárias da ADAPAR por atividade
+## Sessão 2026-10-23: explorações pecuárias da ADAPAR por atividade e URs do GETEC
 
 Pedido: classificação por atividade nas propriedades com exploração pecuária
 da ADAPAR, como nas outorgas, com totais nas fichas de município e de
 regional. Depois, a Declaração de Exploração 2024 com bubalinos e a fusão
-dos pontos repetidos. Commits `7b458f7`, `db43e31` e `654c175`; deploy no
-Pages concluído.
+dos pontos repetidos; por fim, as URs do GETEC ligadas à CAF. Commits
+`7b458f7`, `db43e31`, `654c175` e o das URs; deploy no Pages concluído.
 
 - **Fonte da atividade.**
   - O export atual (`explorações+ativas.csv`, out/2026) não traz espécie nem tipo de exploração.
@@ -67,7 +67,26 @@ Pages concluído.
   - O arquivo ganhou o campo `n_propriedades`; o tooltip mostra "N propriedades do mesmo produtor neste ponto" com a lista.
   - Verificação: os mesmos 16 testes (um deles garante que não há ponto repetido com os mesmos produtores), `npm test`, build e QA 34/34.
 
+- **URs do GETEC** (quarto pedido da sessão; UR = Unidade de Referência).
+  - O que dá para consultar no GETEC:
+    - Com login, menu "Unidade de referência": `lista/lista_ur4.php?id=<codext>&nivel=1` (ano, projeto, produtor, município) e os relatórios em PDF `relatorios/rel_ur_{est,reg,mun,ext}.php` e `rel_sustenta_*` (Marco Zero de sustentabilidade), filtros Ano/CodReg/CodAdi/CodMun/CodExt/CodPro.
+    - Sem login, nada específico de UR.
+    - Não há coordenada nem histórico (2025 vazio).
+  - Lista completa: `lista_ur4` de 847 extensionistas (selects de `cad_ur3` e `rel_cad_ur`) dá 639 URs (635 de 2026, 4 de 2027). Bate com o nominal `rel_ur_reg` em Ivaiporã, Toledo, Paranavaí e Ponta Grossa; o resumo do `rel_ur_est` (760) não fecha.
+  - Ligação (`scripts/build_getec_urs.py`), em ordem:
+    1. nome igual a um membro da família da CAF no município (344, mais 13 sem ponto);
+    2. nome aproximado (52): 1º e último nomes e todos os nomes da UR no da CAF, aceitando inicial e um erro de digitação. Só 1º+último trazia erros ("Paulo Henrique da Silva" → PAULO ANTONIO);
+    3. nome único no estado em outro município (15);
+    4. produtor da ADAPAR no município (57);
+    5. centro do município, em anel (171, que incluem 14 homônimos).
+  - 73% com ponto. 43 pontos da CAF caem fora do município da UR e saem esmaecidos.
+  - Comparação com as camadas atuais (planilhas dos programas): quase não se repetem. Grãos 48 de 199, Café 2 de 62, Pecuária de corte 6 de 68; piscicultura sem nome. No diagnóstico de agroindústrias, 10 das 33 URs de Agroindústria. Onde há par, os pontos conferem (mediana de 0,1 a 0,9 km). As camadas atuais ficam; "Também em" marca 57 URs.
+  - Camada `datageo-urs-getec` (token `Pf`, no fim do registro; `layerState.test` agora conta 81), `CAMADAS_PRIVADAS`, seção da ficha (`getUrsGetec`), QA `qa-programas-idr.mjs` 27/27.
+  - Relatório quantitativo (estado, regional, projeto e regional × projeto, só agregados) em `URs_GETEC_2026.html` na área de trabalho; script fora do repo.
+
 ### Pegadinhas
+- Os selects de extensionista do GETEC vêm em UTF-8 no meio de páginas
+  latin1: ler a página como latin1 quebra "João" (o teste de mojibake pegou).
 - O `LAT_DEC`/`LONG_DEC` do `SUINOS(CORR).csv` vem arredondado e só encontra 8%
   das propriedades. Usar grau, minuto e segundo (`SUINOS(3).csv`).
 - Cerca de 29% "sem espécie": propriedade nova, coordenada alterada ou só
