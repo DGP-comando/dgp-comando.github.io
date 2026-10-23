@@ -11,7 +11,7 @@
 Pedido: classificação por atividade nas propriedades com exploração pecuária
 da ADAPAR, como nas outorgas, com totais nas fichas de município e de
 regional. Depois, a Declaração de Exploração 2024 com bubalinos e a fusão
-dos pontos repetidos. Commits `7b458f7`, `db43e31` e o da fusão; deploy no
+dos pontos repetidos. Commits `7b458f7`, `db43e31` e `654c175`; deploy no
 Pages concluído.
 
 - **Fonte da atividade.**
@@ -62,7 +62,7 @@ Pages concluído.
     - município: o mais frequente;
     - nomes e produtores: todos;
     - área: a maior de cada nome (sem acento nem caixa), somada entre nomes diferentes.
-  - Pontos sem produtor vinculado na mesma coordenada também se fundem entre si.
+  - Pontos sem produtor vinculado na mesma coordenada também se fundem entre si ("nenhum produtor" conta como produtores iguais). Fica em aberto: se o usuário preferir separados, é uma linha na chave de `mesma` em `build_exploracoes`.
   - Resultado: 256.551 → 254.732 pontos (1.762 coordenadas). Em Palotina, 944 → 935.
   - O arquivo ganhou o campo `n_propriedades`; o tooltip mostra "N propriedades do mesmo produtor neste ponto" com a lista.
   - Verificação: os mesmos 16 testes (um deles garante que não há ponto repetido com os mesmos produtores), `npm test`, build e QA 34/34.
