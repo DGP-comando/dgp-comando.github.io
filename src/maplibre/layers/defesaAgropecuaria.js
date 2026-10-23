@@ -3,7 +3,7 @@
 // Grupo DEFESA AGROPECUÁRIA: cadastros da ADAPAR.
 //   - Propriedades com exploração pecuária ativa: um ponto por propriedade
 //     (~257 mil), cor pela DAP/CAF informada no cadastro ou, no chip
-//     Atividade, pela atividade (espécies da ADAPAR de 2022); ponto VAZADO =
+//     Atividade, pela atividade (espécies da ADAPAR de 2022 e 2024); ponto VAZADO =
 //     coordenada fora do município declarado. O arquivo sobe gzipado
 //     (22 MB -> 6 MB) e é descomprimido aqui.
 //   - Estabelecimentos registrados (produtos veterinários, animais vivos,
@@ -43,8 +43,8 @@ export function resumoExploracoes(d, ibges) {
     m?.g.forEach((n, i) => { g[i] += n; });
     m?.a.forEach((n, i) => { a[i] += n; });
   }
-  const { referencia, referencia_atividade: referenciaAtividade, grupos, atividades } = d;
-  return { total: g.reduce((x, y) => x + y, 0), g, a, referencia, referenciaAtividade, grupos, atividades };
+  const { referencia, fonte_atividade: fonteAtividade, grupos, atividades } = d;
+  return { total: g.reduce((x, y) => x + y, 0), g, a, referencia, fonteAtividade, grupos, atividades };
 }
 
 /** Propriedades com exploração pecuária dos municípios (ficha); null sem sessão liberada. */

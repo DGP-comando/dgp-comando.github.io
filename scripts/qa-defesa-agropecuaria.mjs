@@ -189,7 +189,7 @@ try {
   const fm = await secaoAdp();
   check(`ficha municipal: ${nMun} propriedades por atividade e DAP/CAF`,
     (fm ?? '').includes(`ativa: ${nMun.toLocaleString('pt-BR')}`) && /Por atividade/.test(fm ?? '') && /Por DAP\/CAF/.test(fm ?? '')
-      && /espécies cadastradas em mar\/22/.test(fm ?? ''), fm?.slice(0, 500));
+      && /Declaração de Exploração 2024/.test(fm ?? '') && /Bubalinos|Bovinos s\/ finalidade/.test(fm ?? ''), fm?.slice(0, 500));
   const ibges = ['4117909', '4106407'];
   const nReg = dados.p.filter((p) => ibges.includes(dados.municipios[p[2]][0])).length;
   await page.evaluate(async (l) => {

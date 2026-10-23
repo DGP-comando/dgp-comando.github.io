@@ -340,9 +340,9 @@ const SECTIONS = [
       `<div>Propriedades com exploração pecuária ativa: <b>${fmtN(adp.total)}</b></div>` +
       `<div class="fx-sub">Por atividade</div>${barrasClasse(linhas(adp.atividades, ATIVIDADES_CURTO, ATIVIDADES_CORES, adp.a))}` +
       `<div class="fx-sub">Por DAP/CAF no cadastro</div>${barrasClasse(linhas(adp.grupos, adp.grupos, EXPLORACOES_CORES, adp.g))}` +
-      `<div class="fx-dim">ADAPAR · cadastro de ${esc(periodo(adp.referencia))}, propriedades com coordenada; atividade pelas espécies ` +
-      `cadastradas em ${esc(periodo(adp.referenciaAtividade))} na mesma coordenada (sem espécie: propriedade nova, ` +
-      'coordenada alterada ou só outras espécies) · pontos na camada Propriedades com exploração pecuária</div>');
+      `<div class="fx-dim">ADAPAR · cadastro de ${esc(periodo(adp.referencia))}, propriedades com coordenada; atividade pelos ` +
+      `${esc(adp.fonteAtividade)} na mesma coordenada (sem espécie: propriedade nova, coordenada alterada ou só ovinos, ` +
+      'caprinos ou equinos, fora desses cadastros) · pontos na camada Propriedades com exploração pecuária</div>');
   },
 
   /**

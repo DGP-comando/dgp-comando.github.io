@@ -221,11 +221,13 @@ export const industriaTooltip = estabelecimentoTooltip({
 export const EXPLORACOES_CORES = Object.freeze(['#facc15', '#fb923c', '#94a3b8']);
 
 /** Cor de cada atividade, na ordem de `atividades` do build (a última é "sem espécie"). */
-export const ATIVIDADES_CORES = Object.freeze(['#f472b6', '#f97316', '#60a5fa', '#a78bfa', '#b45309', '#4ade80', '#64748b']);
+export const ATIVIDADES_CORES = Object.freeze([
+  '#f472b6', '#f97316', '#60a5fa', '#a78bfa', '#b45309', '#14b8a6', '#d6b48a', '#4ade80', '#bef264', '#64748b',
+]);
 /** Rótulo curto de cada atividade (barras da ficha). */
 export const ATIVIDADES_CURTO = Object.freeze([
-  'Suínos comercial', 'Aves comercial', 'Bovinos de leite', 'Bov. corte e leite', 'Bovinos de corte', 'Subsistência',
-  'Sem espécie (2022)',
+  'Suínos comercial', 'Aves comercial', 'Bovinos de leite', 'Bov. corte e leite', 'Bovinos de corte', 'Bubalinos',
+  'Bovinos s/ finalidade', 'Subsistência', 'Aves/suínos s/ porte', 'Sem espécie',
 ]);
 
 /** Tooltip de uma linha de adapar-exploracoes (`campos` do build) com os metadados do arquivo. */
@@ -240,9 +242,10 @@ export function exploracaoTooltip(linha, dados) {
       [n > 1 ? `Produtores (${n})` : 'Produtor', produtores || 'sem produtor vinculado'],
       ['Área', ha ? fmtNum(ha, 1, 'ha') : ''],
       ['DAP/CAF no cadastro', dados.grupos?.[g]],
-      ['Atividade', a == null ? '' : `${dados.atividades?.[a]} (espécies ADAPAR ${periodo(dados.referencia_atividade)})`],
+      ['Atividade', dados.atividades?.[a] ?? ''],
       fora ? ['Localização', 'fora do município declarado', 'warn'] : null,
     ],
-    source: `ADAPAR · propriedades com exploração pecuária, ${periodo(dados.referencia)}`,
+    source: `ADAPAR · propriedades com exploração pecuária, ${periodo(dados.referencia)}`
+      + (dados.fonte_atividade ? `; atividade: ${dados.fonte_atividade}` : ''),
   });
 }

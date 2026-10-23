@@ -36,14 +36,21 @@ sem_documento() tira. Saída só em data/privado/
   adapar-<cadastro>-pr.geojson       um ponto por estabelecimento
 
 Atividade pecuária da propriedade: o export de explorações não traz espécie,
-então vem dos cadastros de espécie da ADAPAR de mar/2022 (AVES, BOVINOS e
-SUINOS, sem nome nem CPF; 2º argumento, padrão H:/IDR-PARANA/SEAB/FONTES_BENNO)
-pela coordenada exata GGMMSSs (~93% dos registros casam com uma propriedade
-de hoje). Com várias espécies vale a primeira de ATIVIDADES (suíno comercial
-antes de ave comercial, leite antes de corte, subsistência por último).
+então vem de dois cadastros de espécie da ADAPAR, pela coordenada exata
+GGMMSSs (sem nome nem CPF; ~93% dos registros casam com uma propriedade de hoje):
+  - mar/2022 (AVES, BOVINOS e SUINOS; 2º argumento, padrão
+    H:/IDR-PARANA/SEAB/FONTES_BENNO): traz finalidade dos bovinos e porte
+    (comercial ou subsistência) de aves e suínos;
+  - Declaração de Exploração 2024 (aves, bovinos, bubalinos e suínos; 3º
+    argumento, padrão H:/IDR-PARANA/GEOPROCESSAMENTO/adapar): só cabeças, então
+    dá as classes "sem finalidade/porte informado" e a de bubalinos. Linha
+    desalinhada (nome de produtor em coluna de cabeças) fica de fora.
+Com várias espécies vale a primeira de ATIVIDADES: o detalhe de 2022 vence o
+de 2024 (bubalinos, a mais rara, antes do bovino sem finalidade), que vence a
+subsistência e a falta de espécie.
 
 Uso:
-  py -3 scripts/build_adapar.py [pasta] [pasta das espécies de 2022]
+  py -3 scripts/build_adapar.py [pasta] [espécies de 2022] [declaração de 2024]
   SUPABASE_SERVICE_ROLE_KEY=... py -3 scripts/upload_privado.py adapar-
 """
 
@@ -66,16 +73,21 @@ SRC = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.home() / 'Downloads' / 'a
 EXPLORACOES = 'explora*ativas*.csv'
 GRUPOS_DAP = ['DAP/CAF ativa', 'DAP/CAF inativa', 'Sem DAP/CAF informada']
 ESPECIES_SRC = Path(sys.argv[2]) if len(sys.argv) > 2 else Path('H:/IDR-PARANA/SEAB/FONTES_BENNO')
-ESPECIES_REF = '2022-03'
+DECLARACAO_SRC = Path(sys.argv[3]) if len(sys.argv) > 3 else Path('H:/IDR-PARANA/GEOPROCESSAMENTO/adapar')
+FONTE_ATIVIDADE = 'cadastros de espécie da ADAPAR de mar/2022 e Declaração de Exploração 2024'
 ATIVIDADES = ['Suinocultura comercial', 'Avicultura comercial', 'Bovinocultura de leite', 'Bovinos de corte e leite',
-              'Bovinocultura de corte', 'Aves ou suínos de subsistência', 'Sem espécie no cadastro de 2022']
+              'Bovinocultura de corte', 'Bubalinocultura', 'Bovinos, finalidade não informada',
+              'Aves ou suínos de subsistência', 'Aves ou suínos, porte não informado', 'Sem espécie nos cadastros']
 SEM_ESPECIE = len(ATIVIDADES) - 1
-# arquivo -> (coluna, valor -> índice em ATIVIDADES; valor fora do mapa = subsistência)
+SUBSISTENCIA = 7
+# arquivo de 2022 -> (coluna, valor -> índice em ATIVIDADES; valor fora do mapa = subsistência)
 ESPECIES = {
     'SUINOS(3).csv': ('SUI_AREA_ATUAÇÃO', {'Produção': 0, 'Reprodução': 0}),
-    'AVES(3).csv': ('AVE_CLASSIFICAÇÃO_PRODUÇÃO', {'Não se Aplica': 5}),
+    'AVES(3).csv': ('AVE_CLASSIFICAÇÃO_PRODUÇÃO', {'Não se Aplica': SUBSISTENCIA}),
     'BOVINOS(corr).csv': ('BOV_FIN_PRINC', {'Leite': 2, 'Corte e Leite': 3, 'Corte': 4}),
 }
+# espécie da Declaração de Exploração 2024 -> índice em ATIVIDADES
+DECLARACAO = {'bubalinos': 5, 'bovinos': 6, 'aves': 8, 'suinos': 8}
 MAX_NOMES = 6
 AREA_MAX_HA = 100_000  # acima disso é erro de digitação (há 9,5 trilhões de ha no cadastro)
 APROXIMADO = 'sem coordenada no cadastro: ponto aproximado, no centro do município'
@@ -122,8 +134,8 @@ def atividade_especie(arq: str, v: str) -> int:
     col, mapa = ESPECIES[arq]
     v = (v or '').strip()
     if arq.startswith('AVES'):  # qualquer classificação comercial (Corte, Postura, Matrizeira...)
-        return mapa.get(v, 1) if v else 5
-    return mapa.get(v, 5)
+        return mapa.get(v, 1) if v else SUBSISTENCIA
+    return mapa.get(v, SUBSISTENCIA)
 
 
 def especies() -> dict[tuple[int, int], int]:
@@ -142,7 +154,44 @@ def especies() -> dict[tuple[int, int], int]:
             a = atividade_especie(arq, r[col])
             ativ[k] = min(a, ativ.get(k, SEM_ESPECIE))
         print(f'  {arq}: {len(linhas)} registros, {ruins} sem coordenada')
+    for esp, a in DECLARACAO.items():
+        n, ruins = 0, 0
+        for k in declaracao(esp):
+            if k is None:
+                ruins += 1
+                continue
+            n += 1
+            ativ[k] = min(a, ativ.get(k, SEM_ESPECIE))
+        print(f'  declaração 2024 {esp}: {n} registros, {ruins} sem coordenada ou desalinhados')
     return ativ
+
+
+def gms_decimal(v: str) -> int:
+    """'-25.8558611' -> 2551211 (GGMMSSs): a declaração de 2024 traz o decimal da mesma coordenada."""
+    x = abs(float(v))
+    g = int(x)
+    m = int((x - g) * 60)
+    s = round(((x - g) * 60 - m) * 600)
+    if s == 600:
+        s, m = 0, m + 1
+    if m == 60:
+        m, g = 0, g + 1
+    return g * 100_000 + m * 1000 + s
+
+
+def declaracao(esp: str):
+    """Chaves (lat, lon) das linhas com cabeças da Declaração de Exploração 2024; None = linha ruim."""
+    with open(DECLARACAO_SRC / f'Declaracao Exploracao PR 2024_Preenchida_{esp}.csv', encoding='utf-8-sig', newline='') as fh:
+        linhas = csv.reader(fh)
+        n = len([c for c in next(linhas) if c])
+        for r in linhas:
+            try:
+                cabecas = sum(float(v) for v in r[3:n] if v.strip())
+                if any(v.strip() for v in r[n:]) or not cabecas:
+                    raise ValueError
+                yield gms_decimal(r[1]), gms_decimal(r[2])
+            except (ValueError, IndexError):
+                yield None
 
 
 def _utf8(m: re.Match) -> str:
@@ -242,8 +291,10 @@ def ler(padrao: str) -> tuple[Path, list[dict]]:
 def _demo() -> None:
     assert abs(dms('2336081') - 23.60225) < 1e-9 and abs(dms('5125236') - 51.42322) < 1e-5
     assert chave_gms('-23', '18', '47,8') == 2318478 and chave_gms('-49', '01', '0') == 4901000
-    assert atividade_especie('AVES(3).csv', 'Corte') == 1 and atividade_especie('AVES(3).csv', 'Não se Aplica') == 5
-    assert atividade_especie('SUINOS(3).csv', 'Produção') == 0 and atividade_especie('SUINOS(3).csv', 'Subsistência') == 5
+    assert gms_decimal('-25.8558611') == 2551211 and gms_decimal('-23.31327778') == 2318478
+    assert gms_decimal('-49.99999999') == 5000000
+    assert atividade_especie('AVES(3).csv', 'Corte') == 1 and atividade_especie('AVES(3).csv', 'Não se Aplica') == SUBSISTENCIA
+    assert atividade_especie('SUINOS(3).csv', 'Produção') == 0 and atividade_especie('SUINOS(3).csv', 'Subsistência') == SUBSISTENCIA
     assert atividade_especie('BOVINOS(corr).csv', 'Corte e Leite') == 3
     assert dms('-') is None and dms('       ') is None and dms('2361000') is None and dms('2336600') is None
     assert limpo('CONCEIÃ§Ã&pound;O') == 'CONCEIçãO' and limpo('SÃO JOÃO') == 'SÃO JOÃO'
@@ -309,7 +360,7 @@ def build_exploracoes(base: Base, ref: str) -> None:
     out = PRIV / 'adapar-exploracoes.json.gz'
     out.write_bytes(gzip.compress(json.dumps({
         'fonte': 'ADAPAR · propriedades com exploração pecuária ativa', 'referencia': ref,
-        'grupos': GRUPOS_DAP, 'atividades': ATIVIDADES, 'referencia_atividade': ESPECIES_REF, 'municipios': municipios,
+        'grupos': GRUPOS_DAP, 'atividades': ATIVIDADES, 'fonte_atividade': FONTE_ATIVIDADE, 'municipios': municipios,
         'campos': ['lon', 'lat', 'municipio', 'grupo', 'fora', 'ha', 'propriedade', 'n_produtores', 'produtores',
                    'atividade'],
         'sem_coordenada': sem_coord, 'p': pontos,
@@ -321,7 +372,7 @@ def build_exploracoes(base: Base, ref: str) -> None:
         r['a'][p[9]] += 1
     (PRIV / 'adapar-exploracoes-municipios.json').write_text(json.dumps({
         'fonte': 'ADAPAR · propriedades com exploração pecuária ativa', 'referencia': ref,
-        'referencia_atividade': ESPECIES_REF, 'grupos': GRUPOS_DAP, 'atividades': ATIVIDADES, 'municipios': resumo,
+        'fonte_atividade': FONTE_ATIVIDADE, 'grupos': GRUPOS_DAP, 'atividades': ATIVIDADES, 'municipios': resumo,
     }, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
     por_ativ = [sum(1 for p in pontos if p[9] == a) for a in range(len(ATIVIDADES))]
     print(f'  atividades {dict(zip(ATIVIDADES, por_ativ))}')

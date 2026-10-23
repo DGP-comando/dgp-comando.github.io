@@ -12,8 +12,10 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   (suínos ou aves comerciais, bovinos de leite, corte e leite ou corte,
   subsistência) vem dos cadastros de espécie da ADAPAR de mar/2022 pela mesma
   coordenada; com várias espécies vale a mais específica. Tooltip com a linha
-  Atividade. ~40% das propriedades de hoje não casam com 2022 e ficam como
-  "sem espécie".
+  Atividade. A Declaração de Exploração 2024 da ADAPAR completa quem não tem
+  espécie em 2022 (bovinos sem finalidade, aves ou suínos sem porte) e traz
+  os bubalinos; ficam ~29% "sem espécie" (ovinos, caprinos e equinos não
+  estão em nenhum dos dois cadastros).
 - **Ficha municipal e regional**: nova seção "Exploração pecuária · ADAPAR"
   com o total de propriedades, por atividade e por DAP/CAF (soma dos
   municípios na regional).

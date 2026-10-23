@@ -114,22 +114,23 @@ const DADOS = {
   referencia: '2026-10-02',
   grupos: ['DAP/CAF ativa', 'DAP/CAF inativa', 'Sem DAP/CAF informada'],
   atividades: ['Suinocultura comercial', 'Avicultura comercial', 'Bovinocultura de leite', 'Bovinos de corte e leite',
-    'Bovinocultura de corte', 'Aves ou suínos de subsistência', 'Sem espécie no cadastro de 2022'],
-  referencia_atividade: '2022-03',
+    'Bovinocultura de corte', 'Bubalinocultura', 'Bovinos, finalidade não informada', 'Aves ou suínos de subsistência',
+    'Aves ou suínos, porte não informado', 'Sem espécie nos cadastros'],
+  fonte_atividade: 'cadastros de espécie da ADAPAR de mar/2022 e Declaração de Exploração 2024',
   municipios: [['4119301', 'Pinhão']],
   sem_coordenada: 1,
   p: [
     [-51.6, -25.7, 0, 0, 0, 12.1, 'SÍTIO SÃO JOSÉ', 2, 'JOÃO DA SILVA; MARIA CONCEIÇÃO', 2],
-    [-51.7, -25.8, 0, 2, 1, null, 'CHÁCARA', 0, '', 6],
+    [-51.7, -25.8, 0, 2, 1, null, 'CHÁCARA', 0, '', 9],
   ],
 };
 
 test('propriedades: features por linha, contagem por grupo e tooltip', () => {
   const { features, counts, countsA } = exploracoesFeatures(DADOS);
   assert.deepEqual(counts, [1, 0, 1]);
-  assert.deepEqual(countsA, [0, 0, 1, 0, 0, 0, 1]);
+  assert.deepEqual(countsA, [0, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
   assert.deepEqual(features[1], {
-    type: 'Feature', id: 1, geometry: { type: 'Point', coordinates: [-51.7, -25.8] }, properties: { g: 2, fora: 1, a: 6 },
+    type: 'Feature', id: 1, geometry: { type: 'Point', coordinates: [-51.7, -25.8] }, properties: { g: 2, fora: 1, a: 9 },
   });
   assert.deepEqual(exploracoesFeatures(null), { features: [], counts: [], countsA: [] });
   // Legenda filtrável: key = índice da classe do modo (g ou a da feição).
@@ -148,7 +149,8 @@ test('propriedades: features por linha, contagem por grupo e tooltip', () => {
   assert.match(html, /Produtores \(2\)<\/dt><dd[^>]*>JOÃO DA SILVA; MARIA CONCEIÇÃO/);
   assert.match(html, /12,1 ha/);
   assert.match(html, /DAP\/CAF ativa/);
-  assert.match(html, /Bovinocultura de leite \(espécies ADAPAR mar\/22\)/);
+  assert.match(html, /Atividade<\/dt><dd[^>]*>Bovinocultura de leite/);
+  assert.match(html, /Declaração de Exploração 2024/);
   assert.match(html, /out\/26/);
   assert.doesNotMatch(html, /fora do município/);
   const vazio = exploracaoTooltip(DADOS.p[1], DADOS);
@@ -160,12 +162,12 @@ test('propriedades: features por linha, contagem por grupo e tooltip', () => {
 
 test('resumo por município soma g e a nos IBGEs da regional', () => {
   const d = {
-    referencia: '2026-10-02', referencia_atividade: '2022-03', grupos: ['x', 'y'], atividades: ['p', 'q', 'r'],
+    referencia: '2026-10-02', fonte_atividade: 'x 2024', grupos: ['x', 'y'], atividades: ['p', 'q', 'r'],
     municipios: { 4119301: { g: [1, 2], a: [3, 0, 0] }, 4100103: { g: [0, 4], a: [1, 1, 2] } },
   };
   const r = resumoExploracoes(d, ['4119301', 4100103, '9999999']);
   assert.deepEqual([r.total, r.g, r.a], [7, [1, 6], [4, 1, 2]]);
-  assert.equal(r.referenciaAtividade, '2022-03');
+  assert.equal(r.fonteAtividade, 'x 2024');
   assert.equal(resumoExploracoes(d, ['9999999']).total, 0);
   assert.equal(resumoExploracoes(null, ['4119301']), null);
 });
