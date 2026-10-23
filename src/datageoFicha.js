@@ -342,7 +342,8 @@ const SECTIONS = [
       `<div class="fx-sub">Por DAP/CAF no cadastro</div>${barrasClasse(linhas(adp.grupos, adp.grupos, EXPLORACOES_CORES, adp.g))}` +
       `<div class="fx-dim">ADAPAR · cadastro de ${esc(periodo(adp.referencia))}, propriedades com coordenada; atividade pelos ` +
       `${esc(adp.fonteAtividade)} na mesma coordenada (sem espécie: propriedade nova, coordenada alterada ou só ovinos, ` +
-      'caprinos ou equinos, fora desses cadastros) · pontos na camada Propriedades com exploração pecuária</div>');
+      'caprinos ou equinos, fora desses cadastros); a mesma coordenada com os mesmos produtores conta uma vez · pontos na ' +
+      'camada Propriedades com exploração pecuária</div>');
   },
 
   /**

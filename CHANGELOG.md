@@ -16,6 +16,9 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   espécie em 2022 (bovinos sem finalidade, aves ou suínos sem porte) e traz
   os bubalinos; ficam ~29% "sem espécie" (ovinos, caprinos e equinos não
   estão em nenhum dos dois cadastros).
+- Pontos repetidos (mesma coordenada e mesmos produtores) viram um ponto só,
+  com a melhor informação de cada campo; produtores diferentes no mesmo
+  ponto continuam separados.
 - **Ficha municipal e regional**: nova seção "Exploração pecuária · ADAPAR"
   com o total de propriedades, por atividade e por DAP/CAF (soma dos
   municípios na regional).

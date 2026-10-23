@@ -233,12 +233,13 @@ export const ATIVIDADES_CURTO = Object.freeze([
 /** Tooltip de uma linha de adapar-exploracoes (`campos` do build) com os metadados do arquivo. */
 export function exploracaoTooltip(linha, dados) {
   if (!linha) return '';
-  const [, , mun, g, fora, ha, propriedade, n, produtores, a] = linha;
+  const [, , mun, g, fora, ha, propriedade, n, produtores, a, np = 1] = linha;
   return tipCard({
     icon: '🐄',
-    title: propriedade || 'Propriedade sem nome',
+    title: np > 1 ? `${np} propriedades do mesmo produtor neste ponto` : propriedade || 'Propriedade sem nome',
     subtitle: [dados.municipios?.[mun]?.[1], 'exploração pecuária ativa'].filter(Boolean).join(' · '),
     rows: [
+      np > 1 ? ['Propriedades', propriedade] : null,
       [n > 1 ? `Produtores (${n})` : 'Produtor', produtores || 'sem produtor vinculado'],
       ['Área', ha ? fmtNum(ha, 1, 'ha') : ''],
       ['DAP/CAF no cadastro', dados.grupos?.[g]],

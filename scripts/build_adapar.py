@@ -61,6 +61,8 @@ import json
 import math
 import re
 import sys
+import unicodedata
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -247,6 +249,32 @@ def area_ha(v: str) -> float | None:
     return round(a, 2) if 0 < a <= AREA_MAX_HA else None
 
 
+def chave_nome(v: str) -> str:
+    """'Sítio  São José' e 'SITIO SAO JOSE' são a mesma propriedade."""
+    v = unicodedata.normalize('NFKD', v or '').encode('ascii', 'ignore').decode()
+    return ' '.join(v.upper().split())
+
+
+def funde(rows: list[list]) -> list:
+    """Pontos da mesma coordenada e produtores ([lon, lat, mun, g, fora, ha, nome, produtores, a]) num só, com a
+    melhor informação: DAP/CAF e atividade de maior prioridade, dentro do município se algum estiver,
+    município mais frequente, todos os nomes e produtores; área = maior de cada nome, somada entre nomes."""
+    areas: dict[str, float | None] = {}
+    rotulo: dict[str, str] = {}
+    prods: dict[str, bool] = {}
+    for r in rows:
+        k = chave_nome(r[6])
+        rotulo.setdefault(k, r[6])
+        if r[5] is not None:
+            areas[k] = max(areas.get(k) or 0, r[5])
+        prods.update(dict.fromkeys(r[7], True))
+    ha = round(sum(areas.values()), 2) if areas else None
+    mun = Counter(r[2] for r in rows).most_common(1)[0][0]
+    nomes_ = [n for n in rotulo.values() if n]
+    return [rows[0][0], rows[0][1], mun, min(r[3] for r in rows), min(r[4] for r in rows), ha, nomes(nomes_),
+            len(prods), nomes(list(prods)), min(r[8] for r in rows), len(rotulo)]
+
+
 def nomes(lista: list[str]) -> str:
     """Até MAX_NOMES nomes; o resto vira 'e mais N'."""
     resto = len(lista) - MAX_NOMES
@@ -291,6 +319,11 @@ def ler(padrao: str) -> tuple[Path, list[dict]]:
 def _demo() -> None:
     assert abs(dms('2336081') - 23.60225) < 1e-9 and abs(dms('5125236') - 51.42322) < 1e-5
     assert chave_gms('-23', '18', '47,8') == 2318478 and chave_gms('-49', '01', '0') == 4901000
+    a = [-51.0, -25.0, 3, 2, 1, 10.0, 'Sítio São José', ['ANA'], 7]
+    b = [-51.0, -25.0, 3, 0, 0, 12.5, 'SITIO SAO  JOSE', ['ANA', 'RUI'], 2]
+    c = [-51.0, -25.0, 4, 2, 0, 3.0, 'CHÁCARA', [], 9]
+    assert funde([a, b, c]) == [-51.0, -25.0, 3, 0, 0, 15.5, 'Sítio São José; CHÁCARA', 2, 'ANA; RUI', 2, 2]
+    assert funde([[0, 0, 1, 2, 1, None, '', [], 9]]) == [0, 0, 1, 2, 1, None, '', 0, '', 9, 1]
     assert gms_decimal('-25.8558611') == 2551211 and gms_decimal('-23.31327778') == 2318478
     assert gms_decimal('-49.99999999') == 5000000
     assert atividade_especie('AVES(3).csv', 'Corte') == 1 and atividade_especie('AVES(3).csv', 'Não se Aplica') == SUBSISTENCIA
@@ -342,27 +375,35 @@ def build_exploracoes(base: Base, ref: str) -> None:
             sem_coord += 1
             continue
         grupo = 0 if 'Ativo' in p['dap'] else 1 if 'Inativo' in p['dap'] else 2
-        prods = list(p['produtores'])
         a = ativ.get((int(la), int(lo)), SEM_ESPECIE)
         por_mun.setdefault(ibges[mun][0], []).append(
-            [round(-lon, 5), round(-lat, 5), grupo, p['area'], sem_documento(nome), len(prods), nomes(prods), a])
+            [round(-lon, 5), round(-lat, 5), grupo, p['area'], sem_documento(nome), list(p['produtores']), a])
 
-    pontos, fora_pr = [], 0
+    brutos, fora_pr = [], 0
     for cod in sorted(por_mun):
         rows = por_mun[cod]
         xs, ys = np.array([r[0] for r in rows]), np.array([r[1] for r in rows])
         no_mun = shapely.contains_xy(base.geom[cod].buffer(0.01), xs, ys)  # ~1 km de folga na divisa
         no_pr = shapely.contains_xy(base.pr, xs, ys)
         fora_pr += int((~no_pr).sum())
-        pontos += [[r[0], r[1], idx[cod], r[2], int(not dentro), *r[3:]]
+        brutos += [[r[0], r[1], idx[cod], r[2], int(not dentro), *r[3:]]
                    for r, dentro, pr in zip(rows, no_mun, no_pr) if pr]
+    # Mesma coordenada e mesmos produtores (a propriedade repetida com outra grafia,
+    # ou várias do mesmo dono num ponto só) viram um ponto, com a melhor informação
+    # de cada campo. Produtores diferentes no mesmo ponto ficam separados.
+    mesma: dict[tuple, list] = {}
+    for r in brutos:
+        mesma.setdefault((r[0], r[1], frozenset(chave_nome(x) for x in r[7])), []).append(r)
+    pontos = [funde(rs) for rs in mesma.values()]
+    print(f'  {len(brutos)} propriedades no mapa fundidas em {len(pontos)} pontos '
+          f'({sum(1 for rs in mesma.values() if len(rs) > 1)} coordenadas repetidas)')
 
     out = PRIV / 'adapar-exploracoes.json.gz'
     out.write_bytes(gzip.compress(json.dumps({
         'fonte': 'ADAPAR · propriedades com exploração pecuária ativa', 'referencia': ref,
         'grupos': GRUPOS_DAP, 'atividades': ATIVIDADES, 'fonte_atividade': FONTE_ATIVIDADE, 'municipios': municipios,
         'campos': ['lon', 'lat', 'municipio', 'grupo', 'fora', 'ha', 'propriedade', 'n_produtores', 'produtores',
-                   'atividade'],
+                   'atividade', 'n_propriedades'],
         'sem_coordenada': sem_coord, 'p': pontos,
     }, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8'), mtime=0))
     resumo: dict[str, dict] = {}

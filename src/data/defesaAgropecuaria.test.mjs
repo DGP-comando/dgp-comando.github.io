@@ -158,6 +158,9 @@ test('propriedades: features por linha, contagem por grupo e tooltip', () => {
   assert.match(vazio, /fora do município declarado/);
   assert.doesNotMatch(vazio, /Área|undefined|NaN/);
   assert.equal(exploracaoTooltip(undefined, DADOS), '');
+  const junto = exploracaoTooltip([-51.6, -25.7, 0, 0, 0, 15.5, 'SÍTIO A; CHÁCARA B', 1, 'ANA', 2, 2], DADOS);
+  assert.match(junto, /2 propriedades do mesmo produtor neste ponto/);
+  assert.match(junto, /Propriedades<\/dt><dd[^>]*>SÍTIO A; CHÁCARA B/);
 });
 
 test('resumo por município soma g e a nos IBGEs da regional', () => {
@@ -176,7 +179,14 @@ test('dado real: atividade em toda propriedade e resumo por município bate com 
   { skip: !existsSync(PRIV(EXPLORACOES)) || !existsSync(PRIV('adapar-exploracoes-municipios.json')) }, () => {
     const d = JSON.parse(gunzipSync(readFileSync(PRIV(EXPLORACOES))).toString('utf8'));
     const r = JSON.parse(readFileSync(PRIV('adapar-exploracoes-municipios.json'), 'utf8'));
-    assert.equal(d.campos.at(-1), 'atividade');
+    assert.equal(d.campos.at(-1), 'n_propriedades');
+    // Repetido só se os produtores diferem: mesma coordenada + mesmos produtores é um ponto.
+    const vistos = new Set();
+    for (const p of d.p) {
+      const k = `${p[0]},${p[1]},${p[8]}`;
+      assert.ok(!vistos.has(k) || p[8].includes(' e mais '), `ponto repetido ${k}`);
+      vistos.add(k);
+    }
     assert.deepEqual(r.atividades, d.atividades);
     const { countsA } = exploracoesFeatures(d);
     assert.equal(countsA.reduce((x, y) => x + y, 0), d.p.length, 'toda propriedade com atividade');

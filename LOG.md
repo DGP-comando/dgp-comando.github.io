@@ -10,8 +10,9 @@
 
 Pedido: classificação por atividade nas propriedades com exploração pecuária
 da ADAPAR, como nas outorgas, com totais nas fichas de município e de
-regional. Depois, a Declaração de Exploração 2024 com bubalinos. Commits
-`7b458f7` e `db43e31`, deploy no Pages concluído.
+regional. Depois, a Declaração de Exploração 2024 com bubalinos e a fusão
+dos pontos repetidos. Commits `7b458f7`, `db43e31` e o da fusão; deploy no
+Pages concluído.
 
 - **Fonte da atividade.**
   - O export atual (`explorações+ativas.csv`, out/2026) não traz espécie nem tipo de exploração.
@@ -51,6 +52,20 @@ regional. Depois, a Declaração de Exploração 2024 com bubalinos. Commits
   - Linhas com zero cabeças ou sem coordenada também ficam de fora. A coordenada decimal vira GGMMSSs (`gms_decimal`) e casa como a de 2022.
   - Verificação: os mesmos 16 testes, `npm test` (2.980) e o build passaram; QA 34/34 com as 10 classes na legenda e na ficha.
   - Ovinos, caprinos e equinos foram pedidos, mas não existem em nenhum arquivo local (procurado em H:, Downloads, Documentos e OneDrive). Falta um export do painel da ADAPAR com essas espécies.
+
+- **Pontos repetidos fundidos** (terceiro pedido da sessão).
+  - 10.166 coordenadas tinham mais de uma propriedade (22,8 mil pontos). Eram de dois tipos: a mesma propriedade com outra grafia ("SITIO SANTA ELISA" / "SÍTIO SANTA ELISA") ou vizinhas cadastradas num ponto só (até 68).
+  - Regra pedida: fundir só quando a coordenada e o conjunto de produtores são os mesmos. Com produtores diferentes, os dois pontos ficam (`funde()` agrupa por lon, lat e os produtores normalizados).
+  - Melhor informação de cada campo:
+    - DAP/CAF e atividade: a de maior prioridade;
+    - "fora do município": só se todos estiverem fora;
+    - município: o mais frequente;
+    - nomes e produtores: todos;
+    - área: a maior de cada nome (sem acento nem caixa), somada entre nomes diferentes.
+  - Pontos sem produtor vinculado na mesma coordenada também se fundem entre si.
+  - Resultado: 256.551 → 254.732 pontos (1.762 coordenadas). Em Palotina, 944 → 935.
+  - O arquivo ganhou o campo `n_propriedades`; o tooltip mostra "N propriedades do mesmo produtor neste ponto" com a lista.
+  - Verificação: os mesmos 16 testes (um deles garante que não há ponto repetido com os mesmos produtores), `npm test`, build e QA 34/34.
 
 ### Pegadinhas
 - O `LAT_DEC`/`LONG_DEC` do `SUINOS(CORR).csv` vem arredondado e só encontra 8%
