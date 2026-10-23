@@ -113,7 +113,7 @@ export function legendWithCounts(legend, counts) {
  */
 export function makePointsLayer({
   id, name, category = LOGISTICA, icon, source, url, estilo, legend, labelDists, tooltip,
-  stroke = { color: 'rgba(0,0,0,0.55)', width: 1 },
+  stroke = { color: 'rgba(0,0,0,0.55)', width: 1 }, legendaSoComDados = false,
 }) {
   const slug = id.replace(/^datageo-/, '');
   const sourceId = `dg-${slug}`;
@@ -181,7 +181,8 @@ export function makePointsLayer({
       if (tooltip && original) return tooltip(original);
       return p.__label ? tipCard({ title: p.__label, source }) : '';
     },
-    rowControls: () => ({ legend: legendWithCounts(legend, counts) }),
+    // legendaSoComDados: legenda de catálogo longo (URs do GETEC) mostra só as classes presentes.
+    rowControls: () => ({ legend: legendWithCounts(legend, counts).filter((g) => !legendaSoComDados || g.count > 0) }),
     // Clique na legenda esconde o grupo nos pontos e nos rótulos.
     legendFilter: '__grupo',
   });

@@ -134,28 +134,55 @@ export const pisciculturaTooltip = urTooltip({
 // ------------------------------------------------------ URs do GETEC
 
 /**
- * URs cadastradas no GETEC (scripts/build_getec_urs.py), todos os projetos:
- * cor pela família do projeto (regex sobre o nome do projeto do GETEC, em
- * ordem; o resto cai em "outros").
+ * URs cadastradas no GETEC (scripts/build_getec_urs.py). Os 31 projetos do
+ * catálogo do GETEC (select "Projeto" de rel_cad_ur.php) em famílias: a cor
+ * é a da família, num tom por projeto, e a legenda lista cada projeto.
+ * Projeto fora do catálogo cai em "Outros projetos".
  */
-export const GETEC_LEGENDA = Object.freeze([
-  { grupo: 'leite', label: 'Pecuária de leite', color: '#e2e8f0', re: /Leite/ },
-  { grupo: 'corte', label: 'Pecuária de corte e outras criações', color: '#dc2626', re: /Corte|Caprinos|Outras cria/ },
-  { grupo: 'graos', label: 'Grãos', color: '#facc15', re: /Grãos/ },
-  { grupo: 'hortifruti', label: 'Olericultura e fruticultura', color: '#22c55e', re: /Olericultura|Fruticultura|Condimentares/ },
-  { grupo: 'lavouras', label: 'Café, mandioca e outras lavouras', color: '#a16207',
-    re: /Café|Mandioca|Erva|Palmáceas|Sericicultura|Cultivo Florestal|Outras exploraç/ },
-  { grupo: 'agroind', label: 'Agroindústria e turismo rural', color: '#f472b6', re: /Agroindústria|Turismo/ },
-  { grupo: 'aguas', label: 'Piscicultura, pesca e abelhas', color: '#0ea5e9', re: /Piscicultura|Pesca|Maricultura|abelhas/ },
-  { grupo: 'ambiente', label: 'Recursos naturais e agroecologia', color: '#14b8a6', re: /Recursos Naturais|Agroecologia/ },
-  { grupo: 'social', label: 'Promoção social e organização', color: '#a78bfa', re: /^/ },
+export const GETEC_FAMILIAS = Object.freeze([
+  { familia: 'leite', label: 'Pecuária de leite', color: '#e2e8f0', projetos: ['Pecuária de Leite'] },
+  { familia: 'corte', label: 'Pecuária de corte e outras criações', color: '#dc2626',
+    projetos: ['Pecuária de Corte', 'Caprinos e Ovinos', 'Outras criações'] },
+  { familia: 'graos', label: 'Grãos', color: '#facc15', projetos: ['Grãos: Soja/Milho', 'Grãos: Feijão/Milho e Cereais de Inverno'] },
+  { familia: 'hortifruti', label: 'Olericultura e fruticultura', color: '#22c55e',
+    projetos: ['Olericultura', 'Fruticultura', 'Plantas Condimentares, Aromáticas e Ervas'] },
+  { familia: 'lavouras', label: 'Café, mandioca e outras lavouras', color: '#b45309',
+    projetos: ['Café', 'Mandioca', 'Erva-Mate', 'Palmáceas', 'Sericicultura', 'Cultivo Florestal', 'Outras explorações agrícolas'] },
+  { familia: 'agroind', label: 'Agroindústria e turismo rural', color: '#f472b6', projetos: ['Agroindústria', 'Turismo Rural'] },
+  { familia: 'aguas', label: 'Piscicultura, pesca e abelhas', color: '#0ea5e9',
+    projetos: ['Piscicultura', 'Pesca', 'Maricultura', 'Criação de abelhas'] },
+  { familia: 'ambiente', label: 'Recursos naturais, agroecologia e energia', color: '#14b8a6',
+    projetos: ['Recursos Naturais e sustentabilidade', 'Agroecologia', 'Energias renováveis'] },
+  { familia: 'social', label: 'Promoção social e organização', color: '#a78bfa',
+    projetos: ['Promoção Social e Cidadania', 'Associativismo', 'Cooperativismo', 'Sindicalismo', 'Crédito Rural',
+      'Demandas Institucionais'] },
 ]);
 
-export const getecGrupo = (projeto) => GETEC_LEGENDA.find((g) => g.re.test(projeto ?? '')).grupo;
-export const getecEstilo = (p) => {
-  const g = getecGrupo(p.Projeto);
-  return ponto(p, g, GETEC_LEGENDA.find((x) => x.grupo === g).color, p.Produtor);
-};
+/** '#rrggbb' misturado com branco (t > 0) ou preto (t < 0), |t| <= 1. */
+export function tom(hex, t) {
+  const alvo = t > 0 ? 255 : 0;
+  const k = Math.abs(t);
+  const c = [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * (1 - k) + alvo * k));
+  return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+const OUTRO_PROJETO = { grupo: 'outro', label: 'Outros projetos', color: '#94a3b8' };
+
+/** Legenda por projeto, na ordem das famílias: tons de -0,35 (escuro) a +0,35 (claro) dentro da família. */
+export const GETEC_LEGENDA = Object.freeze([
+  ...GETEC_FAMILIAS.flatMap(({ color, projetos }) => projetos.map((projeto, i) => ({
+    grupo: projeto, label: projeto,
+    color: projetos.length > 1 ? tom(color, -0.35 + (0.7 * i) / (projetos.length - 1)) : color,
+  }))),
+  OUTRO_PROJETO,
+]);
+const GETEC_COR = Object.fromEntries(GETEC_LEGENDA.map((g) => [g.grupo, g.color]));
+
+/** Grupo da legenda (o próprio projeto do catálogo, ou 'outro'). */
+export const getecGrupo = (projeto) => (GETEC_COR[projeto] && projeto !== 'outro' ? projeto : 'outro');
+export const getecFamilia = (projeto) => GETEC_FAMILIAS.find((f) => f.projetos.includes(projeto))?.familia ?? 'outro';
+export const getecCor = (projeto) => GETEC_COR[getecGrupo(projeto)];
+export const getecEstilo = (p) => ponto(p, getecGrupo(p.Projeto), getecCor(p.Projeto), p.Produtor);
 
 export const getecTooltip = urTooltip({
   icon: '📋',

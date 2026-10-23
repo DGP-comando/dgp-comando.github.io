@@ -12,7 +12,9 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   e 23 regionais, com cor por família de projeto. O ponto vem da família na
   CAF (nome do produtor no município, exato ou aproximado) ou das explorações
   pecuárias da ADAPAR; sem nenhum dos dois, a UR fica no centro do município,
-  esmaecida (73% têm ponto). O tooltip traz projeto, extensionista, origem do
+  esmaecida (73% têm ponto). A legenda lista cada projeto com UR (Erva-Mate,
+  Sericicultura, Maricultura...), num tom da cor da família, e filtra por
+  projeto. O tooltip traz projeto, extensionista, origem do
   ponto e se a UR também está numa planilha de programa ou no diagnóstico de
   agroindústrias. Token `Pf` no link compartilhado.
 - **Ficha municipal e regional**: seção "Unidades de Referência · GETEC" com o

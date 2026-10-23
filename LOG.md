@@ -82,6 +82,7 @@ dos pontos repetidos; por fim, as URs do GETEC ligadas à CAF. Commits
   - 73% com ponto. 43 pontos da CAF caem fora do município da UR e saem esmaecidos.
   - Comparação com as camadas atuais (planilhas dos programas): quase não se repetem. Grãos 48 de 199, Café 2 de 62, Pecuária de corte 6 de 68; piscicultura sem nome. No diagnóstico de agroindústrias, 10 das 33 URs de Agroindústria. Onde há par, os pontos conferem (mediana de 0,1 a 0,9 km). As camadas atuais ficam; "Também em" marca 57 URs.
   - Camada `datageo-urs-getec` (token `Pf`, no fim do registro; `layerState.test` agora conta 81), `CAMADAS_PRIVADAS`, seção da ficha (`getUrsGetec`), QA `qa-programas-idr.mjs` 27/27.
+  - Legenda por projeto (pedido seguinte): `GETEC_FAMILIAS` com os 31 projetos do catálogo do GETEC (select 511 de `rel_cad_ur`), um tom por projeto dentro da cor da família (`tom()`), 32 cores distintas; `makePointsLayer({legendaSoComDados})` esconde os projetos sem UR.
   - Relatório quantitativo (estado, regional, projeto e regional × projeto, só agregados) em `URs_GETEC_2026.html` na área de trabalho; script fora do repo.
 
 ### Pegadinhas

@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import {
   CAFE_LEGENDA, GETEC_LEGENDA, GRAOS_LEGENDA, PECUARIA_LEGENDA, PISCICULTURA_LEGENDA, UR_LABEL_DIST,
-  cafeEstilo, coordenadaConferida, getecEstilo, getecGrupo, getecTooltip, graosEstilo, graosGrupo, graosTooltip, pecuariaEstilo, pecuariaTooltip,
+  GETEC_FAMILIAS, cafeEstilo, coordenadaConferida, getecCor, getecEstilo, getecFamilia, getecGrupo, getecTooltip, tom, graosEstilo, graosGrupo, graosTooltip, pecuariaEstilo, pecuariaTooltip,
   pisciculturaEstilo,
 } from './programasIdrEstilos.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
@@ -133,12 +133,22 @@ test('dado real: soma das URs por município bate com os pontos ativos', { skip:
 });
 
 test('URs do GETEC: família do projeto, tooltip e resumo da ficha', async () => {
-  assert.equal(getecGrupo('Pecuária de Leite'), 'leite');
-  assert.equal(getecGrupo('Grãos: Feijão/Milho e Cereais de Inverno'), 'graos');
-  assert.equal(getecGrupo('Caprinos e Ovinos'), 'corte');
-  assert.equal(getecGrupo('Criação de abelhas'), 'aguas');
-  assert.equal(getecGrupo('Promoção Social e Cidadania'), 'social');
-  assert.equal(getecGrupo(undefined), 'social');
+  // Os 31 projetos do catálogo do GETEC, cada um com cor própria na legenda.
+  const catalogo = GETEC_FAMILIAS.flatMap((f) => f.projetos);
+  assert.equal(catalogo.length, 31);
+  assert.equal(new Set(catalogo).size, 31);
+  assert.equal(GETEC_LEGENDA.length, 32);
+  assert.equal(new Set(GETEC_LEGENDA.map((g) => g.color)).size, 32, 'cor repetida na legenda');
+  assert.equal(getecGrupo('Erva-Mate'), 'Erva-Mate');
+  assert.equal(getecFamilia('Erva-Mate'), 'lavouras');
+  assert.equal(getecFamilia('Caprinos e Ovinos'), 'corte');
+  assert.equal(getecGrupo('Projeto novo'), 'outro');
+  assert.equal(getecGrupo(undefined), 'outro');
+  assert.equal(getecCor('Pecuária de Leite'), '#e2e8f0');
+  assert.equal(tom('#000000', 0.5), '#808080');
+  assert.equal(tom('#ffffff', -1), '#000000');
+  const legenda = layers.find((l) => l.id === 'datageo-urs-getec').rowControls().legend;
+  assert.deepEqual(legenda, [], 'sem dado carregado a legenda não lista o catálogo vazio');
   const p = {
     Produtor: 'José da Silva', Projeto: 'Café', Ano: '2026', 'Município': 'Ivaiporã', ibge: '4111209',
     Extensionista: 'Fulano', 'Também em': 'Programa Café', 'Origem do ponto': 'família na CAF (nome no município)',

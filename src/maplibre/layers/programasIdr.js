@@ -78,7 +78,8 @@ export const ursGetecLayer = urs({
   url: '/privado/getec-urs-pr.geojson',
   estilo: getecEstilo,
   tooltip: getecTooltip,
-  legend: GETEC_LEGENDA.map(({ grupo, label, color }) => ({ grupo, label, color })),
+  legend: GETEC_LEGENDA,
+  legendaSoComDados: true,
   stroke: UR_CONTORNO.getec,
 });
 

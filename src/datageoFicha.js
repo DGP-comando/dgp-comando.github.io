@@ -29,7 +29,7 @@ import { getLicencasMunicipios } from './maplibre/layers/licenciamento.js';
 import { getCaf, periodo } from './data/cafFamilias.js';
 import { getExploracoesMunicipios } from './maplibre/layers/defesaAgropecuaria.js';
 import { getUrsGetec } from './data/programasIdr.js';
-import { GETEC_LEGENDA, getecGrupo } from './data/programasIdrEstilos.js';
+import { getecCor } from './data/programasIdrEstilos.js';
 import { ATIVIDADES_CORES, ATIVIDADES_CURTO, EXPLORACOES_CORES } from './data/defesaAgropecuariaEstilos.js';
 import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
@@ -336,8 +336,7 @@ const SECTIONS = [
     if (!urs) return null;
     const titulo = 'Unidades de Referência · GETEC';
     if (!urs.total) return section(titulo, '<div>Nenhuma UR cadastrada no GETEC</div>');
-    const cor = (proj) => GETEC_LEGENDA.find((g) => g.grupo === getecGrupo(proj)).color;
-    const linhas = urs.projetos.map(([proj, n]) => ({ label: proj, curto: proj.replace(/^Grãos: /, 'Grãos '), color: cor(proj), n }));
+    const linhas = urs.projetos.map(([proj, n]) => ({ label: proj, curto: proj.replace(/^Grãos: /, 'Grãos '), color: getecCor(proj), n }));
     return section(titulo,
       `<div>URs cadastradas: <b>${fmtN(urs.total)}</b> · ${fmtN(urs.comPonto)} com ponto da propriedade</div>` +
       `<div class="fx-sub">Por projeto</div>${barrasClasse(linhas)}` +
