@@ -10,7 +10,8 @@
 
 Pedido: classificação por atividade nas propriedades com exploração pecuária
 da ADAPAR, como nas outorgas, com totais nas fichas de município e de
-regional. Commit `7b458f7`, deploy no Pages concluído.
+regional. Depois, a Declaração de Exploração 2024 com bubalinos. Commits
+`7b458f7` e `db43e31`, deploy no Pages concluído.
 
 - **Fonte da atividade.**
   - O export atual (`explorações+ativas.csv`, out/2026) não traz espécie nem tipo de exploração.
@@ -22,16 +23,19 @@ regional. Commit `7b458f7`, deploy no Pages concluído.
   3. bovinocultura de leite;
   4. bovinos de corte e leite;
   5. bovinocultura de corte;
-  6. aves ou suínos de subsistência;
-  7. sem espécie no cadastro de 2022.
-- **Resultado.** 153 mil das 256,6 mil propriedades no mapa ganharam atividade; 103,7 mil ficaram "sem espécie".
+  6. bubalinocultura (2024);
+  7. bovinos, finalidade não informada (2024);
+  8. aves ou suínos de subsistência;
+  9. aves ou suínos, porte não informado (2024);
+  10. sem espécie nos cadastros.
+- **Resultado.** Só com 2022, 153 mil das 256,6 mil propriedades no mapa ganharam atividade. Com 2024, ficam 73,8 mil (~29%) "sem espécie".
 - **Gerador** (`scripts/build_adapar.py`).
   - Grava a atividade como último campo de cada ponto de `adapar-exploracoes.json.gz`.
   - Gera o resumo por município `adapar-exploracoes-municipios.json` (contagens por DAP/CAF e por atividade).
   - Os dois arquivos subiram para o bucket `datageo-privado` com `upload_privado.py adapar-exploracoes`.
 - **Camada.**
   - Chips **DAP/CAF / Atividade** (`EXPLORACOES_MODOS`); `onLegend` troca a cor dos pontos e o filtro da legenda.
-  - O tooltip ganhou a linha "Atividade", com a indicação de que vem do cadastro de 2022.
+  - O tooltip ganhou a linha "Atividade"; o rodapé do tooltip e o da ficha citam as duas fontes (2022 e 2024).
 - **Ficha.**
   - Nova seção "Exploração pecuária · ADAPAR" na ficha municipal e na regional: total de propriedades, barras por atividade e por DAP/CAF.
   - Na regional, soma os municípios. Sem acesso ao bucket privado a seção não aparece.
@@ -39,21 +43,26 @@ regional. Commit `7b458f7`, deploy no Pages concluído.
   - 16 testes em `defesaAgropecuaria.test.mjs` passaram, incluindo o dado real: toda propriedade tem atividade e o resumo bate com os pontos.
   - `npm test` e o build passaram.
   - `qa-defesa-agropecuaria.mjs`: 34/34, com chip, legenda, cor, tooltip, ficha de Palotina (944 propriedades) e ficha regional (1.432).
-
 - **Declaração de Exploração 2024** (pedido seguinte na mesma sessão).
   - Fonte: `H:\IDR-PARANA\GEOPROCESSAMENTO\adapar`, com aves, bovinos, bubalinos e suínos. Também está em `pecuária.gpkg`.
   - Traz só cabeças, sem finalidade nem porte. Entra abaixo do detalhe de 2022, com três classes novas: bubalinocultura (148), bovinos com finalidade não informada (27,9 mil) e aves ou suínos com porte não informado (3,5 mil).
   - "Sem espécie" caiu de 103,7 mil para 73,8 mil.
   - 86 linhas desalinhadas (nome de produtor numa coluna de cabeças) ficam de fora; dessas linhas nada é lido.
-  - Ovinos, caprinos e equinos foram pedidos, mas não existem em nenhum arquivo local. Falta um export do painel da ADAPAR com essas espécies.
+  - Linhas com zero cabeças ou sem coordenada também ficam de fora. A coordenada decimal vira GGMMSSs (`gms_decimal`) e casa como a de 2022.
+  - Verificação: os mesmos 16 testes, `npm test` (2.980) e o build passaram; QA 34/34 com as 10 classes na legenda e na ficha.
+  - Ovinos, caprinos e equinos foram pedidos, mas não existem em nenhum arquivo local (procurado em H:, Downloads, Documentos e OneDrive). Falta um export do painel da ADAPAR com essas espécies.
 
 ### Pegadinhas
 - O `LAT_DEC`/`LONG_DEC` do `SUINOS(CORR).csv` vem arredondado e só encontra 8%
   das propriedades. Usar grau, minuto e segundo (`SUINOS(3).csv`).
-- Cerca de 40% "sem espécie": propriedade nova, coordenada alterada ou só
-  espécies fora dos três cadastros (ovinos, caprinos, equinos). Um export
-  atual do painel da ADAPAR com espécie por propriedade substitui a ponte com
-  2022.
+- Cerca de 29% "sem espécie": propriedade nova, coordenada alterada ou só
+  ovinos, caprinos ou equinos, que não estão nos cadastros de 2022 nem de
+  2024. Um export atual do painel da ADAPAR com espécie por propriedade
+  substitui essa ponte.
+- Na Declaração 2024 há nome de produtor em coluna de cabeças (linha
+  desalinhada): nunca ler colunas fora do cabeçalho nomeado.
+- Ao escrever caminhos Windows por script Python, `` vira o caractere BEL
+  (já aconteceu em `GEOPROCESSAMENTOdapar`): usar string raw.
 
 ---
 
