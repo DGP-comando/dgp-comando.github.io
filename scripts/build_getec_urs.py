@@ -174,6 +174,14 @@ def liga(u: dict, ibge: str, idx) -> tuple[tuple | None, str]:
     return None, 'produtor não encontrado na CAF nem na ADAPAR'
 
 
+def centro(geom) -> tuple[float, float]:
+    """Centróide do município; o ponto interno só se o centróide cair fora (município em C ou em L)."""
+    c = geom.centroid
+    if not geom.contains(c):
+        c = geom.representative_point()
+    return c.x, c.y
+
+
 def espalha(feats: list[dict]) -> None:
     """URs no centro do mesmo município: anel de >= ~300 m, ~60 m entre vizinhas."""
     por_mun = defaultdict(list)
@@ -206,8 +214,7 @@ def main() -> None:
         if pt:
             checagem = OK if base.geom[ibge].buffer(0.01).contains(Point(pt)) else FORA
         else:
-            c = base.geom[ibge].representative_point()
-            pt, checagem = (c.x, c.y), CENTRO
+            pt, checagem = centro(base.geom[ibge]), CENTRO
         tambem = sorted({r for n, r in idx[4][ibge] if compativel(u['produtor'], n)})
         feats.append(feature(pt[0], pt[1], {
             'Produtor': u['produtor'], 'Projeto': u['projeto'], 'Ano': u['ano'], 'Município': nome_mun, 'ibge': ibge,

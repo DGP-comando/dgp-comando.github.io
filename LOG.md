@@ -78,7 +78,7 @@ dos pontos repetidos; por fim, as URs do GETEC ligadas à CAF. Commits
     2. nome aproximado (52): 1º e último nomes e todos os nomes da UR no da CAF, aceitando inicial e um erro de digitação. Só 1º+último trazia erros ("Paulo Henrique da Silva" → PAULO ANTONIO);
     3. nome único no estado em outro município (15);
     4. produtor da ADAPAR no município (57);
-    5. centro do município, em anel (171, que incluem 14 homônimos).
+    5. centro do município, em anel (171, que incluem 14 homônimos). Centro = centróide (o ponto interno do shapely ficava até 7,8 km dele, mediana 2 km); ponto interno só se o centróide cair fora.
   - 73% com ponto. 43 pontos da CAF caem fora do município da UR e saem esmaecidos.
   - Comparação com as camadas atuais (planilhas dos programas): quase não se repetem. Grãos 48 de 199, Café 2 de 62, Pecuária de corte 6 de 68; piscicultura sem nome. No diagnóstico de agroindústrias, 10 das 33 URs de Agroindústria. Onde há par, os pontos conferem (mediana de 0,1 a 0,9 km). As camadas atuais ficam; "Também em" marca 57 URs.
   - Camada `datageo-urs-getec` (token `Pf`, no fim do registro; `layerState.test` agora conta 81), `CAMADAS_PRIVADAS`, seção da ficha (`getUrsGetec`), QA `qa-programas-idr.mjs` 27/27.
