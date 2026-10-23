@@ -12,7 +12,10 @@ import {
 } from './defesaAgropecuariaEstilos.js';
 import { LAYER_STATE_REGISTRY } from './layerState.js';
 import { LAYER_ORDER } from '../maplibre/layers/index.js';
-import layers, { DEFESA_AGROPECUARIA, exploracoesFeatures, exploracoesLegenda, gunzipJson } from '../maplibre/layers/defesaAgropecuaria.js';
+import layers, {
+  DEFESA_AGROPECUARIA, EXPLORACOES_MODOS, exploracoesFeatures, exploracoesLegenda, gunzipJson, resumoExploracoes,
+} from '../maplibre/layers/defesaAgropecuaria.js';
+import { ATIVIDADES_CORES, ATIVIDADES_CURTO } from './defesaAgropecuariaEstilos.js';
 
 // data/privado/ fica fora do git: os testes com dado real só rodam onde o arquivo existe.
 const PRIV = (n) => new URL(`../../data/privado/${n}`, import.meta.url);
@@ -110,25 +113,34 @@ test('UC: lista de pragas cortada em 8 e definição da unidade no tooltip', () 
 const DADOS = {
   referencia: '2026-10-02',
   grupos: ['DAP/CAF ativa', 'DAP/CAF inativa', 'Sem DAP/CAF informada'],
+  atividades: ['Suinocultura comercial', 'Avicultura comercial', 'Bovinocultura de leite', 'Bovinos de corte e leite',
+    'Bovinocultura de corte', 'Aves ou suínos de subsistência', 'Sem espécie no cadastro de 2022'],
+  referencia_atividade: '2022-03',
   municipios: [['4119301', 'Pinhão']],
   sem_coordenada: 1,
   p: [
-    [-51.6, -25.7, 0, 0, 0, 12.1, 'SÍTIO SÃO JOSÉ', 2, 'JOÃO DA SILVA; MARIA CONCEIÇÃO'],
-    [-51.7, -25.8, 0, 2, 1, null, 'CHÁCARA', 0, ''],
+    [-51.6, -25.7, 0, 0, 0, 12.1, 'SÍTIO SÃO JOSÉ', 2, 'JOÃO DA SILVA; MARIA CONCEIÇÃO', 2],
+    [-51.7, -25.8, 0, 2, 1, null, 'CHÁCARA', 0, '', 6],
   ],
 };
 
 test('propriedades: features por linha, contagem por grupo e tooltip', () => {
-  const { features, counts } = exploracoesFeatures(DADOS);
+  const { features, counts, countsA } = exploracoesFeatures(DADOS);
   assert.deepEqual(counts, [1, 0, 1]);
+  assert.deepEqual(countsA, [0, 0, 1, 0, 0, 0, 1]);
   assert.deepEqual(features[1], {
-    type: 'Feature', id: 1, geometry: { type: 'Point', coordinates: [-51.7, -25.8] }, properties: { g: 2, fora: 1 },
+    type: 'Feature', id: 1, geometry: { type: 'Point', coordinates: [-51.7, -25.8] }, properties: { g: 2, fora: 1, a: 6 },
   });
-  assert.deepEqual(exploracoesFeatures(null), { features: [], counts: [] });
-  // Legenda filtrável: key = g da feição.
+  assert.deepEqual(exploracoesFeatures(null), { features: [], counts: [], countsA: [] });
+  // Legenda filtrável: key = índice da classe do modo (g ou a da feição).
   assert.deepEqual(exploracoesLegenda(counts, DADOS.grupos).map((l) => [l.key, l.count]), [[0, 1], [1, 0], [2, 1]]);
-  assert.equal(layers.find((l) => l.id === 'datageo-adapar-exploracoes').legendFilter, 'g');
+  assert.deepEqual(EXPLORACOES_MODOS.map((m) => [m.chip, m.prop, m.rotulos]), [['DAP/CAF', 'g', 'grupos'], ['Atividade', 'a', 'atividades']]);
+  const camada = layers.find((l) => l.id === 'datageo-adapar-exploracoes');
+  assert.deepEqual(camada.rowControls().chips.map((c) => [c.id, c.active]), [['modo-dap', true], ['modo-atividade', false]]);
+  assert.equal(typeof camada.onLegend, 'function');
   assert.equal(EXPLORACOES_CORES.length, DADOS.grupos.length);
+  assert.equal(ATIVIDADES_CORES.length, DADOS.atividades.length);
+  assert.equal(ATIVIDADES_CURTO.length, DADOS.atividades.length);
 
   const html = exploracaoTooltip(DADOS.p[0], DADOS);
   assert.match(html, /SÍTIO SÃO JOSÉ/);
@@ -136,6 +148,7 @@ test('propriedades: features por linha, contagem por grupo e tooltip', () => {
   assert.match(html, /Produtores \(2\)<\/dt><dd[^>]*>JOÃO DA SILVA; MARIA CONCEIÇÃO/);
   assert.match(html, /12,1 ha/);
   assert.match(html, /DAP\/CAF ativa/);
+  assert.match(html, /Bovinocultura de leite \(espécies ADAPAR mar\/22\)/);
   assert.match(html, /out\/26/);
   assert.doesNotMatch(html, /fora do município/);
   const vazio = exploracaoTooltip(DADOS.p[1], DADOS);
@@ -144,6 +157,34 @@ test('propriedades: features por linha, contagem por grupo e tooltip', () => {
   assert.doesNotMatch(vazio, /Área|undefined|NaN/);
   assert.equal(exploracaoTooltip(undefined, DADOS), '');
 });
+
+test('resumo por município soma g e a nos IBGEs da regional', () => {
+  const d = {
+    referencia: '2026-10-02', referencia_atividade: '2022-03', grupos: ['x', 'y'], atividades: ['p', 'q', 'r'],
+    municipios: { 4119301: { g: [1, 2], a: [3, 0, 0] }, 4100103: { g: [0, 4], a: [1, 1, 2] } },
+  };
+  const r = resumoExploracoes(d, ['4119301', 4100103, '9999999']);
+  assert.deepEqual([r.total, r.g, r.a], [7, [1, 6], [4, 1, 2]]);
+  assert.equal(r.referenciaAtividade, '2022-03');
+  assert.equal(resumoExploracoes(d, ['9999999']).total, 0);
+  assert.equal(resumoExploracoes(null, ['4119301']), null);
+});
+
+test('dado real: atividade em toda propriedade e resumo por município bate com os pontos',
+  { skip: !existsSync(PRIV(EXPLORACOES)) || !existsSync(PRIV('adapar-exploracoes-municipios.json')) }, () => {
+    const d = JSON.parse(gunzipSync(readFileSync(PRIV(EXPLORACOES))).toString('utf8'));
+    const r = JSON.parse(readFileSync(PRIV('adapar-exploracoes-municipios.json'), 'utf8'));
+    assert.equal(d.campos.at(-1), 'atividade');
+    assert.deepEqual(r.atividades, d.atividades);
+    const { countsA } = exploracoesFeatures(d);
+    assert.equal(countsA.reduce((x, y) => x + y, 0), d.p.length, 'toda propriedade com atividade');
+    const todos = resumoExploracoes(r, Object.keys(r.municipios));
+    assert.equal(todos.total, d.p.length);
+    assert.deepEqual(todos.a, countsA);
+    // Mais da metade das propriedades com espécie identificada em 2022.
+    assert.ok(countsA.at(-1) < d.p.length / 2, `${countsA.at(-1)} sem espécie`);
+    assert.doesNotMatch(JSON.stringify(r), /Ã[£§©¡³]|�/);
+  });
 
 test('gunzipJson devolve o JSON de um corpo gzipado, com acentos', async () => {
   const resp = new Response(gzipSync(Buffer.from(JSON.stringify(DADOS), 'utf8')));

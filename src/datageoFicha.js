@@ -26,7 +26,9 @@ import { getSusaf } from './data/susaf.js';
 import { gerenteDaRegional, getGerentes } from './data/gerentesIdr.js';
 import { getOutorgasMunicipios } from './maplibre/layers/outorgas.js';
 import { getLicencasMunicipios } from './maplibre/layers/licenciamento.js';
-import { getCaf } from './data/cafFamilias.js';
+import { getCaf, periodo } from './data/cafFamilias.js';
+import { getExploracoesMunicipios } from './maplibre/layers/defesaAgropecuaria.js';
+import { ATIVIDADES_CORES, ATIVIDADES_CURTO, EXPLORACOES_CORES } from './data/defesaAgropecuariaEstilos.js';
 import { getFontes } from './data/fontesProtegidas.js';
 import { secaoCaf } from './datageoCaf.js';
 import { getAspectosFisicos } from './data/aspectosFisicos.js';
@@ -325,6 +327,22 @@ const SECTIONS = [
   /** CAF do MDA (bucket privado): contagem, série, renda e perfil. Município e regional. */
   function caf({ caf }) {
     return secaoCaf(caf);
+  },
+
+  /** Propriedades com exploração pecuária ativa (ADAPAR, bucket privado), por atividade e DAP/CAF. */
+  function exploracoesPecuarias({ adp }) {
+    if (!adp) return null;
+    const titulo = 'Exploração pecuária · ADAPAR';
+    if (!adp.total) return section(titulo, '<div>Nenhuma propriedade com exploração pecuária ativa no cadastro</div>');
+    const linhas = (rotulos, curtos, cores, ns) => rotulos
+      .map((label, i) => ({ label, curto: curtos[i], color: cores[i], n: ns[i] })).filter((l) => l.n > 0);
+    return section(titulo,
+      `<div>Propriedades com exploração pecuária ativa: <b>${fmtN(adp.total)}</b></div>` +
+      `<div class="fx-sub">Por atividade</div>${barrasClasse(linhas(adp.atividades, ATIVIDADES_CURTO, ATIVIDADES_CORES, adp.a))}` +
+      `<div class="fx-sub">Por DAP/CAF no cadastro</div>${barrasClasse(linhas(adp.grupos, adp.grupos, EXPLORACOES_CORES, adp.g))}` +
+      `<div class="fx-dim">ADAPAR · cadastro de ${esc(periodo(adp.referencia))}, propriedades com coordenada; atividade pelas espécies ` +
+      `cadastradas em ${esc(periodo(adp.referenciaAtividade))} na mesma coordenada (sem espécie: propriedade nova, ` +
+      'coordenada alterada ou só outras espécies) · pontos na camada Propriedades com exploração pecuária</div>');
   },
 
   /**
@@ -960,7 +978,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -977,8 +995,9 @@ export async function openFicha({ ibge, nome, info }) {
       getGetec([ibge]),
       getAspectosFisicos([ibge]),
       getOttobacias([ibge]),
+      getExploracoesMunicipios([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp };
   });
 }
 
@@ -1030,7 +1049,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -1045,8 +1064,9 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getGetec(ibges),
       getAspectosFisicos(ibges),
       getOttobacias(ibges),
+      getExploracoesMunicipios(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp };
   });
 }
 

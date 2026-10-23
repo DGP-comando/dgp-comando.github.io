@@ -3,6 +3,21 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-10-23 — explorações pecuárias da ADAPAR por atividade
+
+### Added
+
+- **Propriedades com exploração pecuária · ADAPAR** (acesso restrito): chips
+  **DAP/CAF / Atividade**, como Tipo/Atividade nas outorgas. A atividade
+  (suínos ou aves comerciais, bovinos de leite, corte e leite ou corte,
+  subsistência) vem dos cadastros de espécie da ADAPAR de mar/2022 pela mesma
+  coordenada; com várias espécies vale a mais específica. Tooltip com a linha
+  Atividade. ~40% das propriedades de hoje não casam com 2022 e ficam como
+  "sem espécie".
+- **Ficha municipal e regional**: nova seção "Exploração pecuária · ADAPAR"
+  com o total de propriedades, por atividade e por DAP/CAF (soma dos
+  municípios na regional).
+
 ## [Unreleased] — 2026-10-16 — atendimentos do SISATER no card do produtor
 
 ### Added

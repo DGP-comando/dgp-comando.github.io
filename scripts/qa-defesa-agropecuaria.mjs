@@ -160,7 +160,45 @@ try {
   check(`${EXPLORACOES.id}: tooltip com propriedade, produtor, município e área`,
     te.includes(prop[6]) && te.includes(prop[8]) && te.includes(dados.municipios[prop[2]][1]) && / ha/.test(te)
       && !/undefined|NaN|Ã£|Ã§/.test(te), te.replace(prop[8], '<produtor>').slice(0, 300));
+  check(`${EXPLORACOES.id}: tooltip com a atividade`, te.includes(dados.atividades[prop[9]]), te.slice(0, 400));
   if (shot) await page.screenshot({ path: shot.replace(/\.png$/, `-${EXPLORACOES.id}.png`) });
+
+  // 4. Chip Atividade: legenda por atividade com contagem; clicar num item esconde a classe.
+  await page.evaluate((l) => document.querySelector(`[data-layer-id="${l}"] .data-toggle-chip[data-chip-id="modo-atividade"]`)?.click(),
+    EXPLORACOES.id);
+  await sleep(800);
+  const legA = await legendaDe(EXPLORACOES.id);
+  const porAtiv = dados.atividades.map((g, i) => `${g} ${abrev(dados.p.filter((p) => p[9] === i).length)}`);
+  check(`${EXPLORACOES.id}: chip Atividade troca a legenda`, porAtiv.every((l) => legA.includes(l)), { legA, porAtiv });
+  const cor = await page.evaluate(() => JSON.stringify(window.__godsEyeView.engine.map.getPaintProperty('dg-adapar-exploracoes-pt', 'circle-color')));
+  check(`${EXPLORACOES.id}: cor dos pontos pela atividade`, /\["get","a"\]/.test(cor), cor);
+
+  // 5. Ficha municipal e regional: seção da ADAPAR por atividade e DAP/CAF.
+  const secaoAdp = async () => {
+    await page.waitForFunction(() => [...document.querySelectorAll('#datageo-ficha .fx-section h3')]
+      .some((h) => h.textContent.startsWith('Exploração pecuária')), { timeout: 60_000 }).catch(() => {});
+    return page.evaluate(() => [...document.querySelectorAll('#datageo-ficha .fx-section')]
+      .find((x) => (x.querySelector('h3')?.textContent ?? '').startsWith('Exploração pecuária'))?.textContent ?? null);
+  };
+  const mun = dados.municipios.findIndex(([c]) => c === '4117909'); // Palotina
+  const nMun = dados.p.filter((p) => p[2] === mun).length;
+  await page.evaluate(async () => {
+    const { openFicha } = await import('/src/datageoFicha.js');
+    await openFicha({ ibge: '4117909', nome: 'Palotina' });
+  });
+  const fm = await secaoAdp();
+  check(`ficha municipal: ${nMun} propriedades por atividade e DAP/CAF`,
+    (fm ?? '').includes(`ativa: ${nMun.toLocaleString('pt-BR')}`) && /Por atividade/.test(fm ?? '') && /Por DAP\/CAF/.test(fm ?? '')
+      && /espécies cadastradas em mar\/22/.test(fm ?? ''), fm?.slice(0, 500));
+  const ibges = ['4117909', '4106407'];
+  const nReg = dados.p.filter((p) => ibges.includes(dados.municipios[p[2]][0])).length;
+  await page.evaluate(async (l) => {
+    const { openFichaRegiao } = await import('/src/datageoFicha.js');
+    await openFichaRegiao({ nome: 'Teste', meta: '', ibges: l });
+  }, ibges);
+  const fr = await secaoAdp();
+  check(`ficha regional: ${nReg} propriedades somadas`, (fr ?? '').includes(`ativa: ${nReg.toLocaleString('pt-BR')}`), fr?.slice(0, 300));
+  if (shot) await page.screenshot({ path: shot.replace(/\.png$/, '-ficha.png') });
 
   check('sem erros de página', errors.length === 0, errors.slice(0, 3));
 } catch (error) {

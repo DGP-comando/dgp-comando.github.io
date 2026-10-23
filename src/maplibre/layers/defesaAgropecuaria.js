@@ -2,7 +2,8 @@
 //
 // Grupo DEFESA AGROPECUÁRIA: cadastros da ADAPAR.
 //   - Propriedades com exploração pecuária ativa: um ponto por propriedade
-//     (~257 mil), cor pela DAP/CAF informada no cadastro; ponto VAZADO =
+//     (~257 mil), cor pela DAP/CAF informada no cadastro ou, no chip
+//     Atividade, pela atividade (espécies da ADAPAR de 2022); ponto VAZADO =
 //     coordenada fora do município declarado. O arquivo sobe gzipado
 //     (22 MB -> 6 MB) e é descomprimido aqui.
 //   - Estabelecimentos registrados (produtos veterinários, animais vivos,
@@ -18,7 +19,7 @@
 import { periodo } from '../../data/cafFamilias.js';
 import { dgFetchData } from '../../data/datageoClient.js';
 import {
-  ADAPAR_CONTORNO, ADAPAR_LABEL_DIST, AGROTOXICOS_LEGENDA, ANIMAIS_LEGENDA, CONSOLIDACAO_LEGENDA, EXPLORACOES_CORES,
+  ADAPAR_CONTORNO, ADAPAR_LABEL_DIST, ATIVIDADES_CORES, AGROTOXICOS_LEGENDA, ANIMAIS_LEGENDA, CONSOLIDACAO_LEGENDA, EXPLORACOES_CORES,
   FERTILIZANTES_LEGENDA, INDUSTRIAS_LEGENDA, UNIDADES_LEGENDA, VETERINARIOS_LEGENDA, agrotoxicoEstilo, agrotoxicoTooltip, animaisVivosEstilo, animaisVivosTooltip,
   consolidacaoEstilo, consolidacaoTooltip, exploracaoTooltip, fertilizanteEstilo, fertilizanteTooltip, industriaEstilo,
   industriaTooltip, unidadeAdaparEstilo, unidadeAdaparTooltip, veterinarioEstilo, veterinarioTooltip,
@@ -30,30 +31,72 @@ export const DEFESA_AGROPECUARIA = 'Defesa Agropecuária';
 
 // ------------------------------------------------------------ propriedades
 
+let resumoP = null; // adapar-exploracoes-municipios.json
+
+/** Soma o resumo por município (build) nos IBGEs: {total, g, a, ...metadados}; null sem dado. */
+export function resumoExploracoes(d, ibges) {
+  if (!d) return null;
+  const g = d.grupos.map(() => 0);
+  const a = d.atividades.map(() => 0);
+  for (const c of ibges ?? []) {
+    const m = d.municipios?.[String(c)];
+    m?.g.forEach((n, i) => { g[i] += n; });
+    m?.a.forEach((n, i) => { a[i] += n; });
+  }
+  const { referencia, referencia_atividade: referenciaAtividade, grupos, atividades } = d;
+  return { total: g.reduce((x, y) => x + y, 0), g, a, referencia, referenciaAtividade, grupos, atividades };
+}
+
+/** Propriedades com exploração pecuária dos municípios (ficha); null sem sessão liberada. */
+export function getExploracoesMunicipios(ibges) {
+  resumoP ??= dgFetchData('/privado/adapar-exploracoes-municipios.json')
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+    .then((d) => {
+      if (!d) resumoP = null;
+      return d;
+    });
+  return resumoP.then((d) => resumoExploracoes(d, ibges));
+}
+
 const SRC = 'dg-adapar-exploracoes';
 const PT = 'dg-adapar-exploracoes-pt';
 
 /** JSON de um corpo gzipado (o arquivo já sobe comprimido para o bucket). */
 export const gunzipJson = (resp) => new Response(resp.body.pipeThrough(new DecompressionStream('gzip'))).json();
 
-/** Features dos pontos (id = índice da linha em `p`) e contagem por grupo. */
+/** Chave dos chips: DAP/CAF (g) ou atividade (a); `rotulos` é o campo do arquivo com os nomes. */
+export const EXPLORACOES_MODOS = Object.freeze([
+  { id: 'dap', chip: 'DAP/CAF', prop: 'g', rotulos: 'grupos', cores: EXPLORACOES_CORES },
+  { id: 'atividade', chip: 'Atividade', prop: 'a', rotulos: 'atividades', cores: ATIVIDADES_CORES },
+]);
+
+/** Features dos pontos (id = índice da linha em `p`) e contagem por grupo e por atividade. */
 export function exploracoesFeatures(d) {
   const counts = new Array(d?.grupos?.length ?? 0).fill(0);
-  const features = (d?.p ?? []).map(([lon, lat, , g, fora], id) => {
+  const countsA = new Array(d?.atividades?.length ?? 0).fill(0);
+  const features = (d?.p ?? []).map(([lon, lat, , g, fora, , , , , a], id) => {
     counts[g] = (counts[g] ?? 0) + 1;
-    return { type: 'Feature', id, geometry: { type: 'Point', coordinates: [lon, lat] }, properties: { g, fora } };
+    if (a != null) countsA[a] = (countsA[a] ?? 0) + 1;
+    return { type: 'Feature', id, geometry: { type: 'Point', coordinates: [lon, lat] }, properties: { g, fora, a } };
   });
-  return { features, counts };
+  return { features, counts, countsA };
 }
 
-/** Legenda por grupo de DAP/CAF, key = g (índice do grupo). */
-export const exploracoesLegenda = (counts, grupos) => counts.map((count, i) => ({ key: i, label: grupos[i], color: EXPLORACOES_CORES[i], count }));
+/** Legenda de um modo, key = índice da classe (valor de `modo.prop` na feição). */
+export const exploracoesLegenda = (counts, rotulos, cores = EXPLORACOES_CORES) => counts
+  .map((count, i) => ({ key: i, label: rotulos[i], color: cores[i], count }));
 
-const cor = ['match', ['get', 'g'], ...EXPLORACOES_CORES.flatMap((c, i) => [i, c]), '#94a3b8'];
+const corDo = (modo) => ['match', ['get', modo.prop], ...modo.cores.flatMap((c, i) => [i, c]), '#94a3b8'];
 const vazado = ['==', ['get', 'fora'], 1];
+const pintura = (modo) => ({
+  'circle-color': ['case', vazado, 'rgba(0,0,0,0)', corDo(modo)],
+  'circle-stroke-color': ['case', vazado, corDo(modo), 'rgba(0,0,0,0.55)'],
+});
 
 let dados = null; // adapar-exploracoes.json
-let legenda = [];
+let contagens = {}; // modo.id -> [n por classe]
+let modo = EXPLORACOES_MODOS[0];
 
 export const exploracoesLayer = defineLayer({
   id: 'datageo-adapar-exploracoes',
@@ -70,8 +113,7 @@ export const exploracoesLayer = defineLayer({
     layout: { 'circle-sort-key': ['-', 0, ['get', 'g']] },
     paint: {
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 1.2, 10, 3, 14, 6],
-      'circle-color': ['case', vazado, 'rgba(0,0,0,0)', cor],
-      'circle-stroke-color': ['case', vazado, cor, 'rgba(0,0,0,0.55)'],
+      ...pintura(modo),
       'circle-stroke-width': ['case', vazado, 1.4, 0.5],
       'circle-opacity': 0.9,
     },
@@ -81,8 +123,8 @@ export const exploracoesLayer = defineLayer({
     const resp = await dgFetchData('/privado/adapar-exploracoes.json.gz');
     if (!resp.ok) throw new Error(resp.status < 500 ? 'acesso restrito: entre com usuário liberado' : `HTTP ${resp.status}`);
     dados = await gunzipJson(resp);
-    const { features, counts } = exploracoesFeatures(dados);
-    legenda = exploracoesLegenda(counts, dados.grupos);
+    const { features, counts, countsA } = exploracoesFeatures(dados);
+    contagens = { dap: counts, atividade: countsA };
     ctx.setData(SRC, fc(features));
     return {
       count: features.length,
@@ -90,8 +132,22 @@ export const exploracoesLayer = defineLayer({
     };
   },
   tooltip: (_p, feature) => exploracaoTooltip(dados?.p?.[feature?.id], dados),
-  rowControls: () => ({ legend: legenda }),
-  legendFilter: 'g',
+  rowControls: () => ({
+    chips: EXPLORACOES_MODOS.map((m) => ({ id: `modo-${m.id}`, label: m.chip, active: m === modo })),
+    legend: dados ? exploracoesLegenda(contagens[modo.id] ?? [], dados[modo.rotulos] ?? [], modo.cores) : [],
+  }),
+  onChip(chipId, ctx) {
+    const novo = EXPLORACOES_MODOS.find((m) => `modo-${m.id}` === chipId);
+    if (!novo || novo === modo) return;
+    modo = novo;
+    // As chaves mudam com o modo: zera os ocultos (o anfitrião chama onLegend).
+    ctx.setLegendHidden('datageo-adapar-exploracoes', []);
+  },
+  onLegend(ocultos, { map }) {
+    if (!map.getLayer(PT)) return;
+    for (const [k, v] of Object.entries(pintura(modo))) map.setPaintProperty(PT, k, v);
+    map.setFilter(PT, ocultos.size ? ['!', ['in', ['to-string', ['get', modo.prop]], ['literal', [...ocultos]]]] : null);
+  },
 });
 
 // -------------------------------------------------------- estabelecimentos
