@@ -61,8 +61,8 @@ regional. Depois, a Declaração de Exploração 2024 com bubalinos. Commits
   substitui essa ponte.
 - Na Declaração 2024 há nome de produtor em coluna de cabeças (linha
   desalinhada): nunca ler colunas fora do cabeçalho nomeado.
-- Ao escrever caminhos Windows por script Python, `` vira o caractere BEL
-  (já aconteceu em `GEOPROCESSAMENTOdapar`): usar string raw.
+- Ao escrever caminhos Windows por script Python, `\a` vira o caractere BEL
+  (já aconteceu em `GEOPROCESSAMENTO\adapar`): usar string raw.
 
 ---
 
