@@ -6,6 +6,50 @@
 
 ---
 
+## Sessão 2026-10-23: explorações pecuárias da ADAPAR por atividade
+
+Pedido: classificação por atividade nas propriedades com exploração pecuária
+da ADAPAR, como nas outorgas, com totais nas fichas de município e de
+regional. Commit `7b458f7`, deploy no Pages concluído.
+
+- **Fonte da atividade.**
+  - O export atual (`explorações+ativas.csv`, out/2026) não traz espécie nem tipo de exploração.
+  - A espécie vem dos cadastros da ADAPAR de mar/2022 em `H:\IDR-PARANA\SEAB\FONTES_BENNO`: `AVES(3).csv`, `BOVINOS(corr).csv` e `SUINOS(3).csv`, em cp1252 e sem nome nem CPF.
+  - O cruzamento é pela coordenada exata GGMMSSs (campos `LAT_GRAU`/`LAT_MIN`/`LAT_SEG`). Cerca de 93% dos registros de 2022 encontram uma propriedade de hoje.
+- **Classificação.** Com várias espécies vale a primeira, em ordem de prioridade:
+  1. suinocultura comercial (área de atuação Produção ou Reprodução);
+  2. avicultura comercial (qualquer classificação além de "Não se Aplica");
+  3. bovinocultura de leite;
+  4. bovinos de corte e leite;
+  5. bovinocultura de corte;
+  6. aves ou suínos de subsistência;
+  7. sem espécie no cadastro de 2022.
+- **Resultado.** 153 mil das 256,6 mil propriedades no mapa ganharam atividade; 103,7 mil ficaram "sem espécie".
+- **Gerador** (`scripts/build_adapar.py`).
+  - Grava a atividade como último campo de cada ponto de `adapar-exploracoes.json.gz`.
+  - Gera o resumo por município `adapar-exploracoes-municipios.json` (contagens por DAP/CAF e por atividade).
+  - Os dois arquivos subiram para o bucket `datageo-privado` com `upload_privado.py adapar-exploracoes`.
+- **Camada.**
+  - Chips **DAP/CAF / Atividade** (`EXPLORACOES_MODOS`); `onLegend` troca a cor dos pontos e o filtro da legenda.
+  - O tooltip ganhou a linha "Atividade", com a indicação de que vem do cadastro de 2022.
+- **Ficha.**
+  - Nova seção "Exploração pecuária · ADAPAR" na ficha municipal e na regional: total de propriedades, barras por atividade e por DAP/CAF.
+  - Na regional, soma os municípios. Sem acesso ao bucket privado a seção não aparece.
+- **Verificação.**
+  - 16 testes em `defesaAgropecuaria.test.mjs` passaram, incluindo o dado real: toda propriedade tem atividade e o resumo bate com os pontos.
+  - `npm test` e o build passaram.
+  - `qa-defesa-agropecuaria.mjs`: 34/34, com chip, legenda, cor, tooltip, ficha de Palotina (944 propriedades) e ficha regional (1.432).
+
+### Pegadinhas
+- O `LAT_DEC`/`LONG_DEC` do `SUINOS(CORR).csv` vem arredondado e só encontra 8%
+  das propriedades. Usar grau, minuto e segundo (`SUINOS(3).csv`).
+- Cerca de 40% "sem espécie": propriedade nova, coordenada alterada ou só
+  espécies fora dos três cadastros (ovinos, caprinos, equinos). Um export
+  atual do painel da ADAPAR com espécie por propriedade substitui a ponte com
+  2022.
+
+---
+
 ## Sessão 2026-10-21: Disk IO do c2-parana e alertas sem fan-out
 
 E-mail da Supabase: "c2-parana is running out of Disk IO Budget" (compute Micro,
