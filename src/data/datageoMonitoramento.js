@@ -248,6 +248,12 @@ export function buildIrtc(rows) {
       riskAmbiente: numOrNull(row.risk_ambiente),
       riskHidro: numOrNull(row.risk_hidro),
       riskAr: numOrNull(row.risk_ar),
+      // has_* (IRTC v1.1): false = dominio sem medicao, gravado como 0
+      hasClima: row.has_clima,
+      hasSaude: row.has_saude,
+      hasAmbiente: row.has_ambiente,
+      hasHidro: row.has_hidro,
+      hasAr: row.has_ar,
       calculatedAt: row.calculated_at,
     }));
   }
@@ -712,7 +718,9 @@ export const IRTC_NIVEL = Object.freeze({
 
 const DOMINIO = { clima: 'Clima', saude: 'Saúde', 'saúde': 'Saúde', ambiente: 'Ambiente', hidro: 'Hidrologia', ar: 'Qualidade do ar' };
 const riskTone = (v) => (blank(v) ? undefined : Number(v) >= 75 ? 'alert' : Number(v) >= 50 ? 'warn' : undefined);
-const riskRow = (label, v) => [label, blank(v) ? '' : `${fmtInt(v)} / 100`, riskTone(v)];
+// temDado === false (has_* do IRTC v1.1): o 0 gravado e ausencia de medicao.
+const riskRow = (label, v, temDado) =>
+  temDado === false ? [label, 'sem dado', 'muted'] : [label, blank(v) ? '' : `${fmtInt(v)} / 100`, riskTone(v)];
 
 export function irtcTooltip(p) {
   const nivel = IRTC_NIVEL[p.riskLevel] ?? (p.riskLevel ? { text: up(p.riskLevel), tone: 'muted' } : null);
@@ -732,11 +740,11 @@ export function irtcTooltip(p) {
     sections: [{
       title: 'Componentes do risco',
       rows: [
-        riskRow('Clima', p.riskClima),
-        riskRow('Saúde', p.riskSaude),
-        riskRow('Ambiente', p.riskAmbiente),
-        riskRow('Hidrologia', p.riskHidro),
-        riskRow('Qualidade do ar', p.riskAr),
+        riskRow('Clima', p.riskClima, p.hasClima),
+        riskRow('Saúde', p.riskSaude, p.hasSaude),
+        riskRow('Ambiente', p.riskAmbiente, p.hasAmbiente),
+        riskRow('Hidrologia', p.riskHidro, p.hasHidro),
+        riskRow('Qualidade do ar', p.riskAr, p.hasAr),
       ],
     }],
     source: 'IRTC · DataGeo PR',

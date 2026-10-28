@@ -354,6 +354,20 @@ test('tooltip IRTC: nível, posição no estado, componentes com tom', () => {
   assert.equal(row(med, 'Posição no PR').value, '2º de 2 (1º = maior risco)');
 });
 
+test('irtc: has_* falso (IRTC v1.1) mostra "sem dado" em vez de 0; sem a coluna, mantém o número', () => {
+  const { features } = buildIrtc([
+    { ibge_code: '4106902', irtc_score: 27.78, risk_level: 'médio', risk_clima: 0, risk_saude: 50, risk_hidro: 0,
+      has_clima: false, has_saude: true, has_hidro: false },
+    { ibge_code: '4113700', irtc_score: 10, risk_level: 'baixo', risk_clima: 0 },
+  ]);
+  const html = irtcTooltip(features[0].properties);
+  assert.deepEqual(row(html, 'Clima'), { tone: 'tt-muted', value: 'sem dado' });
+  assert.deepEqual(row(html, 'Hidrologia'), { tone: 'tt-muted', value: 'sem dado' });
+  assert.equal(row(html, 'Saúde').value, '50 / 100');
+  const antigo = irtcTooltip(features[1].properties);
+  assert.equal(row(antigo, 'Clima').value, '0 / 100');
+});
+
 test('tooltip dengue: nível InfoDengue, casos, incidência, população', () => {
   const html = dengueTooltip(props(buildDengue, {
     year: 2026, week: 37,
