@@ -136,8 +136,8 @@ async function init(user = null) {
     // principio do seletor de basemaps, que exibe apenas o disponivel.
     // Em dev todas continuam registradas.
     const PROXY_DEPENDENT_LAYER_IDS = new Set([
-      // 'flights' SAI da lista: em producao a camada le aviation_traffic
-      // do Supabase (etl-aviacao/adsb.lol) — trafego aereo fica disponivel.
+      // 'flights' SAI da lista: em producao a camada le a Edge Function
+      // aviacao-live do c2 (adsb.lol ao vivo) — trafego aereo fica disponivel.
       'military',
       'satellites',
       'rocket-launches',

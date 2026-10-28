@@ -3,9 +3,9 @@
  * @description Camada TRÁFEGO AÉREO (id `flights`) desenhada no MapLibre GL.
  *
  * FONTE DOS DADOS (inalterada)
- *  - Produção (build estático): tabela `aviation_traffic` do Supabase via
- *    `fetchAviationStates` (datageoClient.js), crédito "DataGeo PR ·
- *    etl-aviacao", cobertura "Paraná · raio 250 NM", já no formato
+ *  - Produção (build estático): Edge Function aviacao-live do c2 (adsb.lol
+ *    ao vivo, sem banco) via `fetchAviationStates` (datageoClient.js),
+ *    crédito "DataGeo PR · ao vivo", cobertura "Paraná · raio 250 NM", já no formato
  *    OpenSky /states/all.
  *  - Dev: proxy /api/opensky (com fallback adsb.lol no próprio Vite), tipo e
  *    rota em /api/adsbdb (enriquecimento) e histórico em /api/opensky-track
@@ -408,8 +408,8 @@ const _neutral = (p) => (p ? geoPoint(p.lon, p.lat, p.alt || 0) : null);
 // ---------------------------------------------------------------------------
 
 /**
- * Produção (deploy estático): os estados vêm da tabela aviation_traffic do
- * Supabase (etl-aviacao, pg_cron 1 min, fonte adsb.lol), já no formato
+ * Produção (deploy estático): os estados vêm da Edge Function aviacao-live
+ * (adsb.lol ao vivo, cache de 10 s, nada no banco), já no formato
  * /states/all; um Response sintético mantém o mesmo pipeline de status/headers.
  */
 async function _fetchStatesPayload(engine, signal) {
@@ -423,7 +423,7 @@ async function _fetchStatesPayload(engine, signal) {
     headers: {
       'Content-Type': 'application/json',
       // "adsb.lol" no rótulo dispararia a heurística de FALLBACK do manager.
-      'x-flight-source': 'DataGeo PR · etl-aviacao',
+      'x-flight-source': 'DataGeo PR · ao vivo',
       'x-flight-coverage': 'Paraná · raio 250 NM',
     },
   });
