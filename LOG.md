@@ -6,6 +6,44 @@
 
 ---
 
+## Sessão 2026-10-28: disk IO do Supabase, aviação ao vivo, fim do GeoLibre, logout geral e recuperação de senha
+
+Pedido: o Supabase do c2 (fialxjcsgywvvuxjxcly, plano gratuito) acusou o
+limite de disk IO de novo. Depois: avaliar os demais pipelines sem perder
+qualidade para o usuário, tirar o GeoLibre WASM da produção, derrubar todas
+as sessões e criar uma recuperação de senha.
+
+- **Tráfego aéreo sem banco.**
+  - Causa: `aviation_traffic` gravava ~700 linhas/min com 7 dias de retenção (5,2 mi inserts, 4,7 mi deletes). O mapa só lia os últimos 5 min.
+  - O adsb.lol não manda CORS, então o navegador não lê direto. Edge Function `aviacao-live` (c2) busca na hora, devolve no shape `/states/all` e guarda 10 s em memória; só responde a usuário logado.
+  - `fetchAviationStates` chama a função. Rótulo da fonte: "DataGeo PR · ao vivo".
+  - Migration 054 (c2): desagenda `etl-aviacao`, tira o pipeline do monitor e dá TRUNCATE na tabela (102 MB → 48 kB). A tabela fica vazia porque o `useTrafego` do C2 ainda a cita.
+- **Dieta de disk IO (c2).**
+  - 13 workflows `cron-*.yml` do GitHub Actions rodavam os mesmos ETLs do pg_cron e dobravam as escritas. Saiu o `schedule`; fica o `workflow_dispatch`. No Actions seguem só datasus, getec e maritimo.
+  - Migration 055: desagenda escalation, legislativo, healthcare, agro, agua e stale-monitor, que só alimentavam o C2 (conferido que o DataGeo não lê nada deles).
+  - `VACUUM FULL net._http_response`: 129 MB → 376 kB. Banco: 210 → 82 MB.
+  - Migration 056: `etl-clima` de 15 para 30 min (minutos 9 e 39). As 12 estações publicam ~8 leituras novas por dia.
+- **GeoLibre WASM fora.** Saíram `src/processing/`, o `<details id="proc-panel">`, o CSS `.proc-*` e a dependência `geolibre-wasm`. O build não tem mais `.wasm`.
+- **Logout geral.**
+  - `delete from auth.sessions` (77 sessões; refresh tokens caem junto).
+  - `requireLogin` usa `getUser()` em vez de só `getSession()`: sessão revogada no Auth volta ao login no próximo carregamento. `SIGNED_OUT` no meio do uso recarrega a página.
+  - Pegadinha: JWT já emitido ainda lê dados até 1 h. Não rotacionar o JWT secret, que quebra a ANON_KEY do front e os crons.
+- **Recuperação de senha.**
+  - Edge Function `datageo-senha` (c2), pública: login + CPF + senha nova. Confere o CPF do termo LGPD mais recente em `datageo-termos/<uid>/` e grava a senha direto, sem senha temporária adivinhável.
+  - Sem e-mail porque não há SMTP e o login do SISATER é sintético (`@sisater.local`).
+  - Limite: 5 falhas por login e 20 por IP em 15 min, contadas no `datageo_acesso_log` (eventos `senha_recuperacao_falha` e `senha_recuperada`). Toda falha responde igual.
+  - Front: `src/datageoSenha.js` (validação + POST, com teste) e o passo "Recuperar senha" em `datageoLogin.js`.
+  - Quem nunca assinou o termo (sem CPF guardado) recupera pelo admin (`resetar`).
+
+### Estado ao fim da sessão
+- Commits datageo-command: aviação ao vivo, remoção do GeoLibre, login com `getUser()` + recuperação (`2516ffa`). c2-parana: `aviacao-live`, 054, 055 + workflows, 056, `datageo-senha`. Tudo no `main` e no ar.
+- Testado: `aviacao-live` local contra o adsb.lol e anon 401 em produção; `datageo-senha` contra o banco real só nos caminhos de falha (400 genérico, 429 na 6ª); CPF legível nos 28 termos; suíte toda verde.
+- Não testado: troca de senha bem-sucedida e o logout visto numa aba logada. Conferir com uma matrícula própria.
+- Risco aberto: 1.100 de 1.144 usuários seguem na senha inicial (matrícula invertida), mais fraca que a recuperação por CPF. Só 28 assinaram o termo.
+- Próximo, se o disk IO subir de novo: olhar `data_cache` (health records por execução) e a cadência de alerts/cemaden.
+
+---
+
 ## Sessão 2026-10-23: explorações pecuárias da ADAPAR, URs do GETEC e enrich de imóvel (fase 0)
 
 Pedido: classificação por atividade nas propriedades com exploração pecuária
