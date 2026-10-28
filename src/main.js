@@ -40,7 +40,6 @@ import { requireLogin } from './datageoLogin.js';
 import { registrar } from './data/acessoLog.js';
 import { initAnalytics } from './datageoAnalytics.js';
 import { CAMADAS_PRIVADAS, definirExterno, ehExterno } from './data/acessoExterno.js';
-import { initGeolibrePanel } from './processing/geolibrePanel.js';
 import { registerServiceWorker } from './pwa.js';
 
 initLogoGaze();
@@ -240,7 +239,6 @@ async function init(user = null) {
       };
     }
     dataManager.buildTogglePanel(document.getElementById('data-toggles'), document.getElementById('data-panel-tools'));
-    initGeolibrePanel(document.getElementById('proc-panel'), engine.map);
     styleManager.attachDataManager(dataManager);
 
     // Initialize deterministic scene playback for social clip capture
