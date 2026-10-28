@@ -275,13 +275,14 @@ export async function fetchCemadenAlerts() {
   );
 }
 
-/** IRTC dos 399 municipios. */
+/**
+ * IRTC dos 399 municipios. `select=*` traz os has_* por dominio (migration 054
+ * do c2-parana, IRTC v1.1) quando existem, sem quebrar contra o banco antigo.
+ */
 export async function fetchIrtcScores() {
   return dgSelect(
     'irtc_scores',
-    'select=ibge_code,municipality,irtc_score,risk_level,dominant_domain,' +
-      'data_coverage,risk_clima,risk_saude,risk_ambiente,risk_hidro,risk_ar,calculated_at' +
-      '&order=irtc_score.desc&limit=500',
+    'select=*&order=irtc_score.desc&limit=500',
     { ttlMs: DATAGEO_TTL.layer },
   );
 }
@@ -669,8 +670,8 @@ export async function fetchMunicipioFicha(ibge, nome) {
   const tasks = {
     irtc: dgSelect(
       'irtc_scores',
-      'select=irtc_score,risk_level,dominant_domain,data_coverage,risk_clima,' +
-        `risk_saude,risk_ambiente,risk_hidro,risk_ar,calculated_at&ibge_code=eq.${code}&limit=1`,
+      // * inclui os has_* do IRTC v1.1 quando o banco ja os tem
+      `select=*&ibge_code=eq.${code}&limit=1`,
       fichaOpts(),
     ),
     dengueSerie: dgSelect(

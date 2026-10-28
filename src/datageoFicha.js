@@ -46,7 +46,13 @@ const RISK_COLORS = {
   alto: '#f97316', critico: '#ef4444', ['crítico']: '#ef4444',
 };
 
-function bar(label, value, color) {
+function bar(label, value, color, temDado = true) {
+  if (temDado === false) {
+    return (
+      `<div class="fx-bar-row"><span class="fx-bar-label">${esc(label)}</span>` +
+      '<span class="fx-dim">sem dado</span></div>'
+    );
+  }
   const pct = Math.max(0, Math.min(100, Number(value) || 0));
   return (
     `<div class="fx-bar-row"><span class="fx-bar-label">${esc(label)}</span>` +
@@ -423,11 +429,12 @@ const SECTIONS = [
       `<div class="fx-irtc"><span class="fx-irtc-score" style="color:${cor}">${Number(r.irtc_score).toFixed(0)}</span>` +
         `<span class="fx-irtc-nivel" style="color:${cor}">${esc(nivel.toUpperCase())}</span>` +
         `<span class="fx-dim">dom.: ${esc(r.dominant_domain ?? '—')} · cobertura ${(Number(r.data_coverage) * 100).toFixed(0)}%</span></div>` +
-        bar('Clima', r.risk_clima, '#38bdf8') +
-        bar('Saúde', r.risk_saude, '#f472b6') +
-        bar('Ambiente', r.risk_ambiente, '#fb923c') +
-        bar('Hidro', r.risk_hidro, '#60a5fa') +
-        bar('Ar', r.risk_ar, '#a3a3a3'),
+        // has_* (IRTC v1.1): dominio sem medicao vira "sem dado", nao 0
+        bar('Clima', r.risk_clima, '#38bdf8', r.has_clima) +
+        bar('Saúde', r.risk_saude, '#f472b6', r.has_saude) +
+        bar('Ambiente', r.risk_ambiente, '#fb923c', r.has_ambiente) +
+        bar('Hidro', r.risk_hidro, '#60a5fa', r.has_hidro) +
+        bar('Ar', r.risk_ar, '#a3a3a3', r.has_ar),
     );
   },
 
