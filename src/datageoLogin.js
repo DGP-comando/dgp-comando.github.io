@@ -23,6 +23,7 @@ import {
 } from './data/termoLgpd.js';
 import { ativarLog, descarregarLog, registrar } from './data/acessoLog.js';
 import { pedirSolicitacao } from './datageoSolicitacao.js';
+import { AJUDA_RECUPERACAO, recuperarSenha, validaRecuperacao } from './datageoSenha.js';
 
 const MSG_SEM_ACESSO = 'Seu usuário não tem acesso ao DataGeo. Procure o administrador.';
 
@@ -92,7 +93,16 @@ function pedirLogin(form, aviso) {
         type: 'button', className: 'login-secundario', textContent: 'Solicitar acesso (usuários externos)',
       });
       pedir.addEventListener('click', () => pedirSolicitacao(form, { voltar: mostrarLogin }));
-      form.append(pedir);
+      const esqueci = Object.assign(document.createElement('button'), {
+        type: 'button', className: 'login-secundario', textContent: 'Esqueci minha senha',
+      });
+      esqueci.addEventListener('click', () => {
+        void pedirRecuperacao(form, mostrarLogin).then(() => {
+          aviso = 'Senha alterada. Entre com a senha nova.';
+          mostrarLogin();
+        });
+      });
+      form.append(esqueci, pedir);
     };
     mostrarLogin();
   });
@@ -116,6 +126,32 @@ async function passoLogin(form, aviso) {
       return data.user;
     },
   });
+}
+
+/** Recuperação sem e-mail: login + CPF do termo + senha nova (src/datageoSenha.js). */
+function pedirRecuperacao(form, voltar) {
+  const pronto = passo(form, {
+    titulo: 'Recuperar senha',
+    botao: 'Trocar senha',
+    campos: [
+      { label: 'Matrícula ou e-mail', attrs: { name: 'username', autocomplete: 'username' } },
+      { label: 'CPF', attrs: { name: 'cpf', inputMode: 'numeric', autocomplete: 'off', maxLength: 14, placeholder: '000.000.000-00' } },
+      { label: `Nova senha (mín. ${SENHA_MIN})`, attrs: { type: 'password', autocomplete: 'new-password' } },
+      { label: 'Repita a senha', attrs: { type: 'password', autocomplete: 'new-password' } },
+    ],
+    validar: validaRecuperacao,
+    enviar: async ([login, cpf, senha]) => recuperarSenha({ login, cpf, senha }),
+  });
+  const cpf = form.querySelector('input[name="cpf"]');
+  cpf.addEventListener('input', () => { cpf.value = mascaraCpf(cpf.value); });
+  const ajuda = Object.assign(document.createElement('p'), { className: 'login-hint', textContent: AJUDA_RECUPERACAO });
+  const volta = Object.assign(document.createElement('button'), {
+    type: 'button', className: 'login-secundario', textContent: 'Voltar ao login',
+  });
+  volta.addEventListener('click', voltar);
+  form.querySelector('.login-error').before(ajuda);
+  form.append(volta);
+  return pronto;
 }
 
 async function pedirNovaSenha(form, user) {
@@ -228,13 +264,31 @@ async function pedirTermo(form, user) {
   });
 }
 
+/**
+ * Usuário da sessão salva, conferido no servidor: getSession() só lê o
+ * localStorage, getUser() pergunta ao Auth, que recusa sessão revogada
+ * (logout geral pelo admin, senha trocada). Recusou = limpa e pede login.
+ */
+async function usuarioValido() {
+  const auth = getAuth();
+  const { data } = await auth.getSession();
+  if (!data.session) return null;
+  const { data: u, error } = await auth.getUser();
+  if (u?.user) return u.user;
+  // Falha de rede não derruba quem está logado; só a recusa do Auth.
+  if (error && (error.status === 401 || error.status === 403 || error.status === 404)) {
+    await auth.signOut({ scope: 'local' });
+    return null;
+  }
+  return data.session.user;
+}
+
 export async function requireLogin() {
   const screen = document.getElementById('loading-screen');
   const content = screen.querySelector('.loader-content');
   const status = content.querySelector('.loader-status');
 
-  const { data } = await getAuth().getSession();
-  let user = data.session?.user ?? null;
+  let user = await usuarioValido();
   if (user && temAcesso(user) && !precisaTrocarSenha(user)) {
     // Sessão salva também passa pelo termo (versão nova do texto = assinar de novo).
     if (!termoAssinado(user)) {
@@ -269,6 +323,9 @@ export async function requireLogin() {
 /** Log de acesso, botao Sair e, para admin (app_metadata.datageo_admin), o cadastro de usuarios. */
 function initConta(user, via) {
   ativarLog(via);
+  // Sessão revogada no servidor: a renovação do token falha e o Auth emite
+  // SIGNED_OUT; recarrega para cair no login em vez de ficar sem dados.
+  getAuth().onAuthStateChange((evento) => { if (evento === 'SIGNED_OUT') location.reload(); });
   document.getElementById('logout-btn')?.addEventListener('click', async () => {
     registrar('logout');
     await descarregarLog();
