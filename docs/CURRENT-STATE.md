@@ -1,7 +1,8 @@
-# God's Eye View Current State
+# DataGeo PR · Estado atual (runtime)
 
-Updated: September 26, 2026 (engine swap); the sections after the first two
-notes were last reviewed August 24, 2026.
+Atualizado em 26/09/2026 (troca de motor). As seções depois das duas primeiras
+notas foram revisadas pela última vez em 24/08/2026 e ainda descrevem a base
+herdada do God's Eye View; o README e o `LOG.md` trazem o estado do produto.
 
 > **2026-09-26 — troca de motor: CesiumJS → MapLibre GL JS 6.7**
 > (`src/maplibre/`, guia completo em `docs/MIGRACAO_MAPLIBRE.md`).
