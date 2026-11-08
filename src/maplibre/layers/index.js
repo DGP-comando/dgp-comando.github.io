@@ -20,6 +20,7 @@ import cafPj from './cafPj.js';
 import fontesProtegidas from './fontesProtegidas.js';
 import faxinais from './faxinais.js';
 import programasIdr from './programasIdr.js';
+import manejo from './manejo.js';
 import defesaAgropecuaria from './defesaAgropecuaria.js';
 import aspectosFisicos from './aspectosFisicos.js';
 import ottobacias from './ottobacias.js';
@@ -48,6 +49,7 @@ export const LAYER_ORDER = [
   'datageo-subestacoes', 'datageo-geracao', 'datageo-gd-solar',
   'datageo-agroindustrias-idr', 'datageo-urs-getec', 'datageo-urs-graos', 'datageo-urs-cafe', 'datageo-urs-piscicultura',
   'datageo-urs-pecuaria-corte', 'datageo-rotas-turisticas',
+  'datageo-manejo-talhoes', 'datageo-manejo-coletores', 'datageo-manejo-armadilhas', 'datageo-manejo-pulverizacoes', 'datageo-manejo-pluviometros', 'datageo-manejo-limites',
   // Grupo Defesa Agropecuária: escritórios da ADAPAR primeiro, cadastros depois.
   'datageo-adapar-unidades', 'datageo-adapar-exploracoes', 'datageo-adapar-veterinarios', 'datageo-adapar-animais-vivos',
   'datageo-adapar-agrotoxicos', 'datageo-adapar-fertilizantes', 'datageo-adapar-unidades-consolidacao',
@@ -82,6 +84,7 @@ const all = [
   ...fontesProtegidas,
   ...faxinais,
   ...programasIdr,
+  ...manejo,
   ...defesaAgropecuaria,
   ...aspectosFisicos,
   ...ottobacias,
