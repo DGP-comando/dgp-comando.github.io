@@ -33,6 +33,11 @@ export const CAMADAS_PRIVADAS = new Set([
   'datageo-urs-piscicultura',
   'datageo-urs-pecuaria-corte',
   'datageo-estradas-conveniadas',
+  'datageo-manejo-talhoes',
+  'datageo-manejo-coletores',
+  'datageo-manejo-armadilhas',
+  'datageo-manejo-pulverizacoes',
+  'datageo-manejo-pluviometros',
 ]);
 
 export const ehExterno = (user) => user?.app_metadata?.datageo_externo === true;

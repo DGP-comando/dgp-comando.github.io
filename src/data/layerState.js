@@ -389,6 +389,12 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-el-nino', token: 'Eb', disposition: 'enabled-only' }),
   // 'Pf' = URs do GETEC (prefixo 'P' de Programas IDR; 'Pe' segue reservado).
   Object.freeze({ id: 'datageo-urs-getec', token: 'Pf', disposition: 'enabled-only' }),
+  // Prefixo 'M' = Manejo.App (IDR).
+  Object.freeze({ id: 'datageo-manejo-talhoes', token: 'Ma', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-manejo-coletores', token: 'Mb', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-manejo-armadilhas', token: 'Mc', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-manejo-pulverizacoes', token: 'Md', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-manejo-pluviometros', token: 'Me', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));
