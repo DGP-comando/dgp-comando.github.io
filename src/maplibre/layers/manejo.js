@@ -5,7 +5,8 @@
 // Bucket privado (produtor + coordenada exata), gravado pela Edge Function
 // etl-manejo do c2. Cinza = sem ocorrência; cor = o que pede atenção.
 
-import { fmtInt, fmtNum, tipCard } from '../kit.js';
+import { dgFetchData } from '../../data/datageoClient.js';
+import { EMPTY_FC, defineLayer, fmtInt, fmtNum, tipCard } from '../kit.js';
 import { makePointsLayer } from './energiaLogistica.js';
 
 const CATEGORIA = 'IDR-Paraná';
@@ -98,7 +99,49 @@ const camada = (slug, name, icon, { cor, tem }, rotulos, tooltip) => makePointsL
   tooltip,
 });
 
+export const LIMITES = Object.freeze([
+  { key: 'propriedade', label: 'Propriedade', color: '#fde68a' },
+  { key: 'talhao', label: 'Talhão', color: '#f97316' },
+]);
+const LIMITES_SRC = 'dg-manejo-limites';
+const COR_LIMITE = ['match', ['get', 'tipo'], ...LIMITES.flatMap((l) => [l.key, l.color]), NEUTRO];
+const EM_HOVER = ['boolean', ['feature-state', 'hover'], false];
+let contagemLimites = {};
+
+export const limiteTooltip = (p) => tipCard({
+  ...cabecalho(p, p.tipo === 'talhao' ? '🌾' : '🏡'),
+  rows: [['Limite', LIMITES.find((l) => l.key === p.tipo)?.label], ...pessoa(p)],
+});
+
+const limitesLayer = defineLayer({
+  id: 'datageo-manejo-limites',
+  name: 'Manejo: limites de talhão e propriedade',
+  category: CATEGORIA,
+  icon: '🗺️',
+  source: FONTE,
+  sources: { [LIMITES_SRC]: { type: 'geojson', data: EMPTY_FC, generateId: true } },
+  layers: [
+    { id: `${LIMITES_SRC}-fill`, type: 'fill', source: LIMITES_SRC,
+      paint: { 'fill-color': COR_LIMITE, 'fill-opacity': ['case', EM_HOVER, 0.45, ['==', ['get', 'tipo'], 'talhao'], 0.25, 0.05] } },
+    { id: `${LIMITES_SRC}-line`, type: 'line', source: LIMITES_SRC,
+      paint: { 'line-color': ['case', EM_HOVER, '#fde047', COR_LIMITE], 'line-width': ['case', EM_HOVER, 3, 1.5] } },
+  ],
+  interactive: [`${LIMITES_SRC}-fill`],
+  hoverState: LIMITES_SRC,
+  async load(ctx) {
+    const resp = await dgFetchData('/privado/manejo-limites.geojson');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const gj = await resp.json();
+    contagemLimites = Object.fromEntries(LIMITES.map((l) => [l.key, gj.features.filter((f) => f.properties.tipo === l.key).length]));
+    ctx.setData(LIMITES_SRC, gj);
+    return gj.features.length;
+  },
+  tooltip: (p) => limiteTooltip(p),
+  rowControls: () => ({ legend: LIMITES.map((l) => ({ ...l, count: contagemLimites[l.key] ?? '' })) }),
+});
+
 export default [
+  limitesLayer,
   camada('talhoes', 'Manejo: talhões monitorados', '🌱', TALHOES, ['Com ferrugem', 'Sem ferrugem'], talhaoTooltip),
   camada('coletores', 'Manejo: coletores de esporos', '🍄', COLETORES, ['Esporo detectado', 'Sem esporo'], coletorTooltip),
   camada('armadilhas', 'Manejo: armadilhas', '🪤', ARMADILHAS, ['Com indivíduos', 'Sem indivíduos'], armadilhaTooltip),

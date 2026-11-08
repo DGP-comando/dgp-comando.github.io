@@ -395,6 +395,7 @@ export const LAYER_STATE_REGISTRY = Object.freeze([
   Object.freeze({ id: 'datageo-manejo-armadilhas', token: 'Mc', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-manejo-pulverizacoes', token: 'Md', disposition: 'enabled-only' }),
   Object.freeze({ id: 'datageo-manejo-pluviometros', token: 'Me', disposition: 'enabled-only' }),
+  Object.freeze({ id: 'datageo-manejo-limites', token: 'Mf', disposition: 'enabled-only' }),
 ]);
 
 export const REGISTERED_LAYER_IDS = Object.freeze(LAYER_STATE_REGISTRY.map((entry) => entry.id));

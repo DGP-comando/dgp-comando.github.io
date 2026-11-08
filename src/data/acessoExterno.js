@@ -38,6 +38,7 @@ export const CAMADAS_PRIVADAS = new Set([
   'datageo-manejo-armadilhas',
   'datageo-manejo-pulverizacoes',
   'datageo-manejo-pluviometros',
+  'datageo-manejo-limites',
 ]);
 
 export const ehExterno = (user) => user?.app_metadata?.datageo_externo === true;

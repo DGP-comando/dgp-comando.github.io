@@ -2,10 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CAMADAS_PRIVADAS } from '../../data/acessoExterno.js';
 import { pointFeatures } from './energiaLogistica.js';
-import camadas, { armadilhaTooltip, coletorTooltip, pulverizacaoTooltip } from './manejo.js';
+import camadas, { armadilhaTooltip, coletorTooltip, limiteTooltip, pulverizacaoTooltip } from './manejo.js';
+
+test('limite diz se é talhão ou propriedade e escapa HTML', () => {
+  const html = limiteTooltip({ tipo: 'talhao', produtor: '<i>Conceição</i>' });
+  assert.ok(html.includes('Talhão'));
+  assert.ok(html.includes('Conceição'));
+  assert.ok(!html.includes('<i>'));
+});
 
 test('toda camada Manejo é privada: usuário externo não recebe', () => {
-  assert.equal(camadas.length, 5);
+  assert.equal(camadas.length, 6);
   for (const c of camadas) assert.ok(CAMADAS_PRIVADAS.has(c.id), c.id);
 });
 
