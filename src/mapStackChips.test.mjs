@@ -67,19 +67,20 @@ const CONTROLLER_STACKS = [
   { id: 'esri', label: 'Satélite', requiresIon: false, available: true, unavailableReason: null },
   { id: 'osm', label: 'OSM', requiresIon: false, available: true, unavailableReason: null },
   { id: 'osm-vector', label: 'OSM vetorial', requiresIon: false, available: true, unavailableReason: null },
+  { id: 'positron', label: 'Claro', requiresIon: false, available: true, unavailableReason: null },
 ];
 
-test('the row renders exactly the three accepted sources', () => {
+test('the row renders exactly the four accepted sources', () => {
   const container = makeElement();
   renderMapStackChips(container, CONTROLLER_STACKS, { activeId: 'esri', doc });
 
   assert.deepEqual(container.children.map((chip) => chip.dataset.stackId), [
-    'esri', 'osm', 'osm-vector',
+    'esri', 'osm', 'osm-vector', 'positron',
   ]);
   assert.deepEqual(container.children.map(chipText), [
-    'Satélite', 'OSM', 'OSM vetorial',
+    'Satélite', 'OSM', 'OSM vetorial', 'Claro',
   ]);
-  assert.deepEqual(PRESENTED_MAP_STACK_IDS, ['esri', 'osm', 'osm-vector']);
+  assert.deepEqual(PRESENTED_MAP_STACK_IDS, ['esri', 'osm', 'osm-vector', 'positron']);
   assert.ok(container.children.every((chip) => chip.tagName === 'button' && chip.type === 'button'));
   assert.ok(container.children.every((chip) => chip.classList.contains(MAP_STACK_CHIP_CLASS)));
 });
@@ -91,7 +92,7 @@ test('internal and future stacks stay outside the approved presentation set', ()
   const withHybrid = [...CONTROLLER_STACKS, { id: 'hybrid', label: 'Hybrid', available: true }];
   renderMapStackChips(container, withHybrid, { activeId: 'esri', doc });
 
-  assert.equal(container.children.length, 3);
+  assert.equal(container.children.length, 4);
   assert.doesNotMatch(container.children.map(chipText).join(' '), /Hybrid/);
 });
 
@@ -154,7 +155,7 @@ test('an unavailable stack is filtered out of the tray (only usable sources beco
     unavailableReason: 'OSM vetorial indisponível',
   } : stack));
   renderMapStackChips(container, oneDown, { activeId: 'esri', doc });
-  assert.deepEqual(container.children.map((chip) => chip.dataset.stackId), ['esri', 'osm']);
+  assert.deepEqual(container.children.map((chip) => chip.dataset.stackId), ['esri', 'osm', 'positron']);
 });
 
 test('presentation toggles render after the sources and report the next state on click', () => {
@@ -169,8 +170,8 @@ test('presentation toggles render after the sources and report the next state on
     ],
     doc,
   });
-  assert.equal(container.children.length, 6);
-  const toggles = container.children.slice(3);
+  assert.equal(container.children.length, 7);
+  const toggles = container.children.slice(4);
   assert.deepEqual(toggles.map((chip) => chip.dataset.toggleId), ['labels', 'globe', 'terrain']);
   assert.ok(toggles.every((chip) => chip.classList.contains(MAP_TOGGLE_CHIP_CLASS)));
   assert.ok(toggles.every((chip) => !chip.dataset.stackId), 'toggles never read as a source');

@@ -12,6 +12,9 @@ const ESRI_LABELS_URL =
 const ESRI_CREDIT = 'Esri, Maxar, Earthstar Geographics, and the GIS User Community';
 const OSM_CREDIT = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>';
 const OPENFREEMAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+// Positron pelo OpenFreeMap: os tiles do próprio CARTO saem com a marca d'água
+// "API KEY REQUIRED".
+const OPENFREEMAP_POSITRON_STYLE = 'https://tiles.openfreemap.org/styles/positron';
 
 // As fontes do OpenFreeMap servem também os rótulos das camadas DataGeo nos
 // mapas base raster, que não trazem glyphs próprios.
@@ -23,6 +26,7 @@ export const BASEMAPS = [
   { id: 'esri', label: 'Satélite', hint: 'Esri World Imagery' },
   { id: 'osm', label: 'OSM', hint: 'OpenStreetMap raster' },
   { id: 'osm-vector', label: 'OSM vetorial', hint: 'OpenFreeMap (vetorial)' },
+  { id: 'positron', label: 'Claro', hint: 'Positron (OpenFreeMap, cinza claro)' },
 ];
 
 function rasterStyle(sources, layers) {
@@ -44,6 +48,7 @@ function rasterStyle(sources, layers) {
  */
 export function buildBaseStyle(id, { esriLabels = true } = {}) {
   if (id === 'osm-vector') return OPENFREEMAP_STYLE;
+  if (id === 'positron') return OPENFREEMAP_POSITRON_STYLE;
   if (id === 'osm') {
     return rasterStyle(
       {

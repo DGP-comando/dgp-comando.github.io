@@ -3610,6 +3610,7 @@ export class StyleManager {
   _renderMapStackState(state) {
     if (!state) return;
     syncMapStackChips(this._mapStackChips, state.activeId, this._mapToggleState(state));
+    globalThis.document?.body?.classList.toggle('basemap-light', state.activeId === 'positron');
     const globeChip = this._mapStackChips?.querySelector?.('[data-toggle-id="globe"] .map-stack-chip-label');
     if (globeChip) globeChip.textContent = state.globe === false ? '2D' : 'Globo';
     if (this._mapStackStatus) {

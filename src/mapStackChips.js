@@ -1,7 +1,7 @@
 // MAP STACK source chips — the always-visible replacement for the `<select>`
 // that used to sit in the Map Stack panel. One button per stack, rendered from
-// `MapStackController.getStacks()`. The three accepted sources below (the
-// MapLibre basemaps: Satélite, OSM, OSM vetorial) are the whole shipped set;
+// `MapStackController.getStacks()`. The four accepted sources below (the
+// MapLibre basemaps: Satélite, OSM, OSM vetorial, Claro) are the whole shipped set;
 // keeping the allowlist explicit means a stack added to `MAP_STACKS` for
 // internal use cannot reach the tray until someone names it here.
 //
@@ -18,6 +18,7 @@ export const PRESENTED_MAP_STACK_IDS = Object.freeze([
   'esri',
   'osm',
   'osm-vector',
+  'positron',
 ]);
 export const MAP_TOGGLE_CHIP_CLASS = 'map-stack-toggle';
 

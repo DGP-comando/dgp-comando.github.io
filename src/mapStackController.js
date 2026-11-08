@@ -14,7 +14,7 @@ import { BASEMAPS } from './maplibre/basemaps.js';
  * aceitos — links antigos, cenas e voz — e caem em `esri`
  * (`normalizeStackId`).
  */
-const SHORT_LABELS = { esri: 'SAT', osm: 'OSM', 'osm-vector': 'VET' };
+const SHORT_LABELS = { esri: 'SAT', osm: 'OSM', 'osm-vector': 'VET', positron: 'CLR' };
 
 export const MAP_STACKS = BASEMAPS.map((basemap) => Object.freeze({
   id: basemap.id,

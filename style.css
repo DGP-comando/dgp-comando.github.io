@@ -519,6 +519,22 @@ body.cockpit-mode #cockpit-cloud-effects.active {
   transition: var(--transition-smooth);
 }
 
+/* Mapa base Claro: o cabeçalho flutua sobre fundo branco, sem painel próprio. */
+body.basemap-light #title-bar h1,
+body.basemap-light #title-bar .subtitle,
+body.basemap-light #style-indicator .indicator-label {
+  color: #24323d;
+  text-shadow: none;
+}
+
+body.basemap-light #title-bar .title-accent,
+body.basemap-light #style-indicator .indicator-value {
+  color: #006b78;
+  text-shadow: none;
+}
+
+body.basemap-light #title-bar .title-glow { display: none; }
+
 /* ── Control Panel ────────────────────────────── */
 #control-panel {
   position: fixed;

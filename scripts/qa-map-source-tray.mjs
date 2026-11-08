@@ -107,8 +107,8 @@ try {
     controls: document.getElementById('control-panel-toggle')?.getAttribute('aria-controls'),
   }));
   check(
-    'exact three-source + three-toggle presentation; the retired left Map Stack panel is gone',
-    JSON.stringify(presentation.ids) === JSON.stringify(['esri', 'osm', 'osm-vector'])
+    'exact four-source + three-toggle presentation; the retired left Map Stack panel is gone',
+    JSON.stringify(presentation.ids) === JSON.stringify(['esri', 'osm', 'osm-vector', 'positron'])
       && JSON.stringify(presentation.toggles) === JSON.stringify(['labels', 'globe', 'terrain'])
       && !presentation.retiredPanel,
     JSON.stringify(presentation),
