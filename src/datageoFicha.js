@@ -32,6 +32,7 @@ import { getUrsGetec } from './data/programasIdr.js';
 import { getecCor } from './data/programasIdrEstilos.js';
 import { ATIVIDADES_CORES, ATIVIDADES_CURTO, EXPLORACOES_CORES } from './data/defesaAgropecuariaEstilos.js';
 import { getFontes } from './data/fontesProtegidas.js';
+import { getColetores } from './data/coletoresEsporos.js';
 import { secaoCaf } from './datageoCaf.js';
 import { getAspectosFisicos } from './data/aspectosFisicos.js';
 import { getOttobacias } from './data/ottobacias.js';
@@ -688,6 +689,16 @@ const SECTIONS = [
       `<div class="fx-dim">${esc(fonteRef)} · nascentes com solo-cimento para captação · pontos na camada Fontes protegidas</div>`);
   },
 
+  /** Coletores de esporos do Manejo.App: total e quantos já detectaram esporo. */
+  function coletoresEsporos({ coletores }) {
+    if (!coletores) return null;
+    const corpo = coletores.total
+      ? `<div>Coletores: <b>${fmtN(coletores.total)}</b> · com esporo: <b>${fmtN(coletores.comEsporo)}</b></div>`
+      : '<div>Nenhum coletor de esporos cadastrado</div>';
+    return section('Coletores de esporos · Manejo.App',
+      `${corpo}<div class="fx-dim">Manejo.App · IDR-Paraná · pontos na camada Manejo: coletores de esporos</div>`);
+  },
+
   function hidro({ ficha }) {
     const rios = Array.isArray(ficha.rios) ? ficha.rios : [];
     const cemaden = Array.isArray(ficha.cemaden) ? ficha.cemaden : [];
@@ -994,7 +1005,7 @@ export async function openFicha({ ibge, nome, info }) {
   // arquivos estaticos: em paralelo com o Supabase, e sem poder derrubar a
   // ficha (nenhum deles lanca).
   await renderSecoes(panel, seq, async () => {
-    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs] = await Promise.all([
+    const [ficha, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs, coletores] = await Promise.all([
       fetchMunicipioFicha(ibge, nome),
       getClimaMunicipio(ibge),
       getCarMunicipio(ibge),
@@ -1013,8 +1024,9 @@ export async function openFicha({ ibge, nome, info }) {
       getOttobacias([ibge]),
       getExploracoesMunicipios([ibge]),
       getUrsGetec([ibge]),
+      getColetores([ibge]),
     ]);
-    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs };
+    return { ficha, info, climaHist, car, ind, mod, ext, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs, coletores };
   });
 }
 
@@ -1066,7 +1078,7 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
   panel.querySelector('.fx-nome').textContent = nome;
   panel.querySelector('.fx-meta').textContent = meta;
   await renderSecoes(panel, seq, async () => {
-    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs] = await Promise.all([
+    const [ind, car, info, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs, coletores] = await Promise.all([
       getIndicadores(ibges),
       getCarAgregado(ibges),
       infoAgregada(ibges),
@@ -1083,8 +1095,9 @@ export async function openFichaRegiao({ nome, meta, ibges }) {
       getOttobacias(ibges),
       getExploracoesMunicipios(ibges),
       getUrsGetec(ibges),
+      getColetores(ibges),
     ]);
-    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs };
+    return { ficha: {}, info, car, ind, mod, sus, ps, gerentes, out, lic, caf, fontes, getec, fis, otto, adp, urs, coletores };
   });
 }
 

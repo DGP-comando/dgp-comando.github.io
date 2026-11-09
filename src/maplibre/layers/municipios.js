@@ -7,6 +7,7 @@
 // do município selecionado.
 
 import { openFicha } from '../../datageoFicha.js';
+import { loadColetoresMunicipios } from '../../data/coletoresEsporos.js';
 import { loadFaxinaisMunicipios } from '../../data/faxinais.js';
 import { loadFontes } from '../../data/fontesProtegidas.js';
 import { loadUrsMunicipios } from '../../data/programasIdr.js';
@@ -34,11 +35,13 @@ let infoTip = null;
 let fontesTip = null;
 let faxinaisTip = null;
 let ursTip = null;
+let coletoresTip = null;
 function carregaTooltip() {
   if (!infoTip) loadMunicipiosInfo().then((i) => { infoTip = i; });
   if (!faxinaisTip) loadFaxinaisMunicipios().then((f) => { faxinaisTip = f; });
   if (!fontesTip) loadFontes().then((f) => { fontesTip = f; });
   if (!ursTip) loadUrsMunicipios().then((u) => { ursTip = u; });
+  if (!coletoresTip) loadColetoresMunicipios().then((c) => { coletoresTip = c; });
 }
 
 export async function openMunicipioFicha(ibge, nome) {
@@ -123,10 +126,11 @@ export const municipiosLayer = defineLayer({
     return 399;
   },
   tooltip: (p) => {
-    if (!fontesTip || !faxinaisTip || !ursTip) carregaTooltip(); // login depois do boot, ou falha de rede
+    if (!fontesTip || !faxinaisTip || !ursTip || !coletoresTip) carregaTooltip(); // login depois do boot, ou falha de rede
     const ibge = String(p.CD_MUN);
     return municipioTooltipHtml(
       p.NM_MUN, infoTip?.municipios?.[ibge], fontesTip?.municipios?.[ibge], Boolean(fontesTip), faxinaisTip?.[ibge], ursTip?.[ibge],
+      coletoresTip?.[ibge],
     );
   },
   click: (p) => {

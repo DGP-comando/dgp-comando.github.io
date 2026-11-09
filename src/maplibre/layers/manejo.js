@@ -5,6 +5,7 @@
 // Bucket privado (produtor + coordenada exata), gravado pela Edge Function
 // etl-manejo do c2. Cinza = sem ocorrência; cor = o que pede atenção.
 
+import { temEsporo } from '../../data/coletoresEsporos.js';
 import { dgFetchData } from '../../data/datageoClient.js';
 import { EMPTY_FC, defineLayer, fmtInt, fmtNum, tipCard } from '../kit.js';
 import { makePointsLayer } from './energiaLogistica.js';
@@ -32,7 +33,7 @@ const cabecalho = (p, icon) => ({
 const pessoa = (p) => [['Cultura', p.cultura ?? p.culturas], ['Cultivar', p.cultivar], ['Responsável técnico', p.responsavel_tecnico]];
 
 const TALHOES = { cor: '#f97316', tem: (p) => Number(p.total_ferrugem) > 0 };
-const COLETORES = { cor: '#ef4444', tem: (p) => Boolean(p.primeiro_esporo) };
+const COLETORES = { cor: '#ef4444', tem: temEsporo };
 const ARMADILHAS = { cor: '#a855f7', tem: (p) => Number(p.individuos) > 0 };
 const PULVERIZACOES = { cor: '#14b8a6', tem: (p) => Number(p.aplicacoes) > 0 };
 const PLUVIOMETROS = { cor: '#38bdf8', tem: (p) => Number(p.leituras) > 0 };

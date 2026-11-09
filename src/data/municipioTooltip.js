@@ -33,13 +33,17 @@ export function ursTexto(urs) {
   return `${fmtInt(urs.total)}${partes ? ` (${partes})` : ''}`;
 }
 
+/** Coletores do Manejo.App: '3 (1 com esporo)'; '' sem coletor (a linha some). */
+export const coletoresTexto = (c) => (c?.total ? `${fmtInt(c.total)} (${fmtInt(c.comEsporo)} com esporo)` : '');
+
 /**
  * `info`: entrada de municipios-info.json; `fontes`: entrada do município em
  * fontes-protegidas.json; `fontesCarregadas`: o arquivo privado veio (logado);
  * `faxinais`: {total, aresur} do município (src/data/faxinais.js);
- * `urs`: {total, programas} do município (src/data/programasIdr.js).
+ * `urs`: {total, programas} do município (src/data/programasIdr.js);
+ * `coletores`: {total, comEsporo} do município (src/data/coletoresEsporos.js).
  */
-export function municipioTooltipHtml(nome, info, fontes = null, fontesCarregadas = false, faxinais = null, urs = null) {
+export function municipioTooltipHtml(nome, info, fontes = null, fontesCarregadas = false, faxinais = null, urs = null, coletores = null) {
   const vbp = info?.vbp;
   return tipCard({
     icon: '🏛️',
@@ -50,6 +54,7 @@ export function municipioTooltipHtml(nome, info, fontes = null, fontesCarregadas
       ['Cadeia líder', info?.cadeia ?? ''],
       ['Fontes protegidas (IDR)', fontesTexto(fontes, fontesCarregadas)],
       ['URs dos programas (IDR)', ursTexto(urs)],
+      ['Coletores de esporos (Manejo.App)', coletoresTexto(coletores)],
       ['Faxinais (IAT, 2010)', faxinaisTexto(faxinais)],
       ['ARESUR (IAT)', aresurTexto(faxinais)],
     ],
