@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import geologia, {
-  SERVICO_ANM, litologiaTooltip, ocorrenciaTooltip, processoMinerarioTooltip, processosMinerariosLayer,
+  SERVICO_ANM, litologiaTooltip, ocorrenciaTooltip, processoMinerarioTooltip, processosMinerariosLayer, solosTooltip,
 } from './geologia.js';
 
 test('ANM: nome do serviço com acento vai codificado em toda URL de tile', () => {
@@ -32,7 +32,19 @@ test('ocorrência SGB: substância no título', () => {
 });
 
 test('camadas da geologia na aba Aspectos físicos, ids únicos', () => {
-  assert.equal(geologia.length, 5);
+  assert.equal(geologia.length, 6);
   assert.ok(geologia.every((l) => l.category === 'Aspectos físicos'));
-  assert.equal(new Set(geologia.map((l) => l.id)).size, 5);
+  assert.equal(new Set(geologia.map((l) => l.id)).size, 6);
+});
+
+test('solos: classe no título, sigla no subtítulo e associação sem campos vazios', () => {
+  const html = solosTooltip({
+    sbcs: 'LVef1', tipo_unida: 'associação', ordem_1: 'LATOSSOLO', sub_ordem_: 'VERMELHO', grande_gru: 'Eutroférrico',
+    familia_1_: 'textura argilosa', fase_relev: 'suave ondulado', ordem_2: 'NITOSSOLO', sub_ordem1: 'VERMELHO', grande_g_1: ' ',
+    ordem_3: ' ', sub_orde_1: ' ', grande_g_2: ' ',
+  });
+  assert.match(html, /LATOSSOLO VERMELHO Eutroférrico/);
+  assert.match(html, /LVef1 · associação/);
+  assert.match(html, /NITOSSOLO VERMELHO/);
+  assert.doesNotMatch(html, /NITOSSOLO VERMELHO \+/);
 });

@@ -6,6 +6,7 @@
 //
 // - Litologia (litologia_pr, 3.193 polígonos, 185 unidades no padrão SGB):
 //   cache de tiles do zoom 7 ao 16 (fora disso o GeoPR devolve 404).
+// - Solos (solos_parana_embrapa, 5.413 polígonos, SiBCS, 1:250.000).
 // - Unidades geomorfológicas do ZEE-PR (50 polígonos).
 // - Falhas e diques do ZEE-PR (17 mil linhas: só a partir do zoom 8).
 // - Processos minerários ativos da ANM (9.615 poligonais). LGPD: o titular
@@ -137,6 +138,51 @@ export const geomorfologiaLayer = camadaComTooltip({
   minzoom: 6,
   tooltip: (p) => geomorfologiaTooltip(p),
   oQue: 'unidades',
+});
+
+// --- solos -------------------------------------------------------------------
+
+/** Ordem + subordem + grande grupo de um dos três componentes da unidade. */
+const classeSolo = (...partes) => partes.map(txt).filter(Boolean).join(' ');
+
+export function solosTooltip(p) {
+  const associados = [
+    classeSolo(p.ordem_2, p.sub_ordem1, p.grande_g_1),
+    classeSolo(p.ordem_3, p.sub_orde_1, p.grande_g_2),
+  ].filter(Boolean).join(' + ');
+  return tipCard({
+    icon: '🟤',
+    title: classeSolo(p.ordem_1, p.sub_ordem_, p.grande_gru) || txt(p.legenda) || 'Unidade de solo',
+    subtitle: [txt(p.sbcs), txt(p.tipo_unida)].filter(Boolean).join(' · '),
+    rows: [
+      ['Subgrupo', txt(p.sub_grupo_)],
+      ['Textura', txt(p.familia_1_)],
+      ['Horizonte A', txt(p.familia_12)],
+      ['Relevo', txt(p.fase_relev)],
+      ['Vegetação', txt(p.fase_veget)],
+      ['Associado a', associados],
+    ],
+    source: 'Embrapa Solos via IAT/GeoPR · mapa de solos do Paraná 1:250.000 (SiBCS), consulta ao vivo',
+  });
+}
+
+export const solosLayer = camadaComTooltip({
+  spec: geoprSpec({
+    category: CATEGORY,
+    id: 'datageo-solos',
+    sufixo: 'solos',
+    name: 'Solos · tipos (Embrapa)',
+    icon: '🟤',
+    source: 'Embrapa Solos via IAT/GeoPR · solos_parana_embrapa (1:250.000), ao vivo',
+    fontes: [{ servico: 'solos_parana_embrapa' }],
+    opacity: 0.6,
+  }),
+  servico: 'solos_parana_embrapa',
+  campos: ['sbcs', 'tipo_unida', 'legenda', 'ordem_1', 'sub_ordem_', 'grande_gru', 'sub_grupo_', 'familia_1_', 'familia_12',
+    'fase_veget', 'fase_relev', 'ordem_2', 'sub_ordem1', 'grande_g_1', 'ordem_3', 'sub_orde_1', 'grande_g_2'],
+  minzoom: 9,
+  tooltip: (p) => solosTooltip(p),
+  oQue: 'polígonos',
 });
 
 // --- falhas e diques ---------------------------------------------------------
@@ -271,4 +317,4 @@ export const ocorrenciasMineraisLayer = defineLayer({
   rowControls: () => ({ legend: STATUS_MINERAL.map(({ key, label, color }) => ({ key, label, color })) }),
 });
 
-export default [litologiaLayer, geomorfologiaLayer, estruturasLayer, processosMinerariosLayer, ocorrenciasMineraisLayer];
+export default [litologiaLayer, solosLayer, geomorfologiaLayer, estruturasLayer, processosMinerariosLayer, ocorrenciasMineraisLayer];

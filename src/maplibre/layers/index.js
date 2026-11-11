@@ -58,7 +58,7 @@ export const LAYER_ORDER = [
   'datageo-conectividade',
   'datageo-altimetria', 'datageo-declividade', 'datageo-hidrografia', 'datageo-ottobacias-idr', 'datageo-ottobacias-trecho',
   'datageo-nascentes', 'datageo-curvas-nivel',
-  'datageo-litologia', 'datageo-estruturas-geologicas', 'datageo-geomorfologia',
+  'datageo-litologia', 'datageo-solos', 'datageo-estruturas-geologicas', 'datageo-geomorfologia',
   'datageo-processos-minerarios', 'datageo-ocorrencias-minerais',
   'datageo-uso-solo',
   'datageo-clima-historico', 'datageo-el-nino', 'datageo-precipitacao', 'datageo-ventos',
