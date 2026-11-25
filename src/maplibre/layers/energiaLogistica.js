@@ -21,9 +21,11 @@
 //     invisível larga na mesma fonte.
 //
 // Os arquivos /privado/ (agroindústrias) saem do bucket autenticado pelo
-// mesmo dgFetchData do app (JWT do usuário logado).
+// mesmo dgFetchData do app (JWT do usuário logado). Armazéns têm as duas
+// versões (`urlPrivado`): cadastro completo para o usuário interno, público
+// minimizado para externo, sem sessão ou em falha (dgJsonPrivadoOuPublico).
 
-import { dgFetchData } from '../../data/datageoClient.js';
+import { dgFetchData, dgJsonPrivadoOuPublico } from '../../data/datageoClient.js';
 import {
   AGRO_LEGENDA, ARMAZEM_LEGENDA, CEASA_LEGENDA, DISTRIBUICAO_KV, ENERGIA_CORES, IDR_GRUPOS, ROTA_LEGENDA,
   SUBESTACAO_LEGENDA, USINA_LEGENDA,
@@ -110,9 +112,10 @@ export function legendWithCounts(legend, counts) {
  * de rótulo por teto; o teste confere contra os dados reais).
  * `stroke`: contorno do círculo ({color, width}), para distinguir camadas
  * vizinhas sem depender só da cor do preenchimento.
+ * `urlPrivado`: versão completa no bucket privado; `url` vira a reserva aberta.
  */
 export function makePointsLayer({
-  id, name, category = LOGISTICA, icon, source, url, estilo, legend, labelDists, tooltip,
+  id, name, category = LOGISTICA, icon, source, url, urlPrivado, estilo, legend, labelDists, tooltip,
   stroke = { color: 'rgba(0,0,0,0.55)', width: 1 }, legendaSoComDados = false,
 }) {
   const slug = id.replace(/^datageo-/, '');
@@ -168,9 +171,15 @@ export function makePointsLayer({
     ],
     interactive: [circleId],
     async load(ctx) {
-      const resp = await dgFetchData(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const built = pointFeatures(await resp.json(), estilo);
+      let gj;
+      if (urlPrivado) {
+        gj = (await dgJsonPrivadoOuPublico(urlPrivado, url)).data;
+      } else {
+        const resp = await dgFetchData(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        gj = await resp.json();
+      }
+      const built = pointFeatures(gj, estilo);
       counts = built.counts;
       props = built.props;
       ctx.setData(sourceId, fc(built.features));
@@ -420,8 +429,9 @@ const armazensLayer = makePointsLayer({
   id: 'datageo-armazens',
   name: 'Armazéns (CONAB)',
   icon: '🌾',
-  source: 'CONAB/CDA 2023',
+  source: 'CONAB · Cadastro Nacional de Unidades Armazenadoras',
   url: '/data/armazens-conab-pr.geojson',
+  urlPrivado: '/privado/armazens-conab-pr.geojson',
   estilo: armazemEstilo,
   tooltip: armazemTooltipHtml,
   legend: ARMAZEM_LEGENDA,

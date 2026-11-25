@@ -255,6 +255,13 @@ test('tooltips dos pontos no formato tipCard, escapados', () => {
   assert.match(arm, /Chapéu chinês/);
   assert.match(arm, /21\.410 t/);
   assert.match(arm, /<dt>Entidade<\/dt><dd class="">Cooperativa/);
+  assert.doesNotMatch(arm, /E-mail|Endereço|Código CONAB/); // público: extras ausentes somem
+  const priv = armazemTooltipHtml({ kind: 'armazem_conab', nome: 'João', tipo: 'Silo', cap_t: 100,
+    pessoa: 'Pessoa física', email: '<script>x</script>@a.br', endereco: 'Rua A', codigo: '41.0001.0001-1', cap_recepcao_t: 60 });
+  assert.match(priv, /<dt>E-mail<\/dt><dd class="">&lt;script&gt;x&lt;\/script&gt;@a.br/);
+  assert.match(priv, /<dt>Endereço<\/dt><dd class="">Rua A/);
+  assert.match(priv, /<dt>Capacidade de recepção<\/dt><dd class="">60 t</);
+  assert.doesNotMatch(priv, /<script>|expedição/);
   assert.match(armazemTooltipHtml({ kind: 'porto', nome: 'Porto de Paranaguá', municipio: 'Paranaguá', tipo: 'porto graneleiro' }), /tt-badge tt-warn">Porto</);
 
   const ceasa = ceasaTooltipHtml({ nome: 'CEASA Londrina' });

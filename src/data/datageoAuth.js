@@ -65,6 +65,12 @@ export async function adminUsuarios(corpo) {
   return { ok: resp.ok, status: resp.status, body: await resp.json().catch(() => ({})) };
 }
 
+/** Há sessão salva (só lê o storage; quem valida o JWT é o servidor). */
+export async function temSessao() {
+  const { data } = await getAuth().getSession();
+  return Boolean(data.session);
+}
+
 /** Headers PostgREST/Storage com o JWT do usuario (getSession renova se expirou). */
 export async function authHeaders() {
   const { data } = await getAuth().getSession();

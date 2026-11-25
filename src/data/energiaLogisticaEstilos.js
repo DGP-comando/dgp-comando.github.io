@@ -559,6 +559,14 @@ export function armazemTooltipHtml(p) {
       ['Capacidade estática', cap ? fmtInt(cap, 't') : ''],
       ['Entidade', p.entidade],
       ['Município', p.municipio],
+      // Só no arquivo privado (usuário interno); ausentes somem do cartão.
+      ['Pessoa', p.pessoa],
+      ['Espécie', p.especie],
+      ['Capacidade de expedição', Number(p.cap_expedicao_t) ? fmtInt(p.cap_expedicao_t, 't') : ''],
+      ['Capacidade de recepção', Number(p.cap_recepcao_t) ? fmtInt(p.cap_recepcao_t, 't') : ''],
+      ['Código CONAB', p.codigo],
+      ['Endereço', p.endereco],
+      ['E-mail', p.email],
     ],
     source: porto ? 'DataGeo PR' : 'CONAB · Cadastro Nacional de Unidades Armazenadoras',
   });

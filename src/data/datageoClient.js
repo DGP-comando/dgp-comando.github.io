@@ -17,7 +17,7 @@ import {
   writeStoredGrid,
 } from './weatherGridStore.js';
 import { createPool } from './fetchPool.js';
-import { SUPABASE_URL, authHeaders } from './datageoAuth.js';
+import { SUPABASE_URL, authHeaders, temSessao } from './datageoAuth.js';
 import { registrar } from './acessoLog.js';
 import { semPrivado } from './acessoExterno.js';
 
@@ -38,6 +38,28 @@ export async function dgFetchData(url) {
   return fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/datageo-privado/${nome}`, {
     headers: await authHeaders(),
   });
+}
+
+/**
+ * JSON de arquivo com duas versões: a completa no bucket privado e a
+ * minimizada (LGPD) em public/. Usuário interno logado lê `privado`; externo
+ * (semPrivado), sem sessão, ou qualquer falha no privado (HTTP, rede, JSON)
+ * cai em `publico`. Por isso a camada que usa isto NÃO entra em
+ * CAMADAS_PRIVADAS: o externo continua vendo a versão aberta.
+ * @returns {Promise<{data: any, privado: boolean}>}
+ */
+export async function dgJsonPrivadoOuPublico(privado, publico, { sessao = temSessao } = {}) {
+  if (!semPrivado() && await sessao().catch(() => false)) {
+    try {
+      const resp = await dgFetchData(privado);
+      if (resp.ok) return { data: await resp.json(), privado: true };
+    } catch {
+      // cai no público
+    }
+  }
+  const resp = await fetch(publico);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return { data: await resp.json(), privado: false };
 }
 
 /**

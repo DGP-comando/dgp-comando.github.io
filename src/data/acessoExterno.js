@@ -8,7 +8,12 @@
 // o externo recebe 403 mesmo chamando a API direto. Aqui só se tira do painel
 // o que viria vazio e se evita a requisição.
 
-/** Camadas cujos dados saem do bucket datageo-privado. Camada nova com `/privado/`? Inclua aqui. */
+/**
+ * Camadas cujos dados saem do bucket datageo-privado. Camada nova com `/privado/`? Inclua aqui.
+ * Exceção: camada com versão aberta de reserva (`urlPrivado` em makePointsLayer,
+ * dgJsonPrivadoOuPublico), como datageo-armazens: fica fora, porque o externo
+ * vê a versão pública minimizada.
+ */
 export const CAMADAS_PRIVADAS = new Set([
   'datageo-caf',
   'datageo-caf-pj',
