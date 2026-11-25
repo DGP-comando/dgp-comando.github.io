@@ -64,7 +64,45 @@ test('seção da ficha: contagem, série, variação real e amostra pequena', ()
   assert.match(html, /variação pouco confiável/);
   assert.doesNotMatch(html, /mesmas famílias/); // painel com 18 famílias não mostra variação
   assert.match(html, /1 quilombolas · 6 pescadores/);
+  // Extração antiga (sem `produtos`, `posse`, `area`): cai no top e no "% não proprietários".
+  assert.match(html, /Mandioca<\/span>.*>9 · 19%</);
+  assert.match(html, /não proprietários 66,0%/);
+  assert.match(html, /Área mediana 5,9 ha/);
+  assert.doesNotMatch(html, /Condição de posse|Área das famílias|Mão de obra/);
   assert.equal(secaoCaf(null), null);
+});
+
+test('seção da ficha: produtos por nº de famílias, posse, área, mão de obra e perfil', () => {
+  const produtos = ['Soja', 'Milho', 'Leite', 'Feijão', 'Mandioca', 'Fumo', 'Café', 'Uva', 'Mel <b>', 'Ovos']
+    .map((p, i) => ({ p, n: 40 - i * 4, v: 1000 * (i + 1) }));
+  const html = secaoCaf({
+    meta: { ...META, grupos: ['Soja', 'Milho', 'Leite'] },
+    caf: { '2025-10': 50 }, dap: {}, vencidas: 2, inativas: 5,
+    renda: { rt: 1000, ha: 12 }, painel: { n: 30 }, fora_pct: 10,
+    top: produtos.slice(0, 5), produtos, n_produtos: 14, com_producao: 45, n_prod: 2, grupos: [30, 0, 15],
+    posse: { por: [{ c: 'Proprietário', n: 30, ha: 600 }, { c: 'Arrendatário', n: 15, ha: 300 }, { c: 'Comodatário', n: 5, ha: 100 },
+      { c: 'Não informado', n: 0, ha: 0 }], mista: 4 },
+    area: { media: 21.3, mediana: 12, total: 1000, multi: 8,
+      faixas: [{ f: 'Sem área', n: 3 }, { f: 'Até 5 ha', n: 10 }, { f: '5 a 10 ha', n: 0 }, { f: 'Mais de 50 ha', n: 37 }] },
+    local_area: { Rural: 48, Urbana: 2 }, mo: { familiar: 110, contratada: 7, com_contratada: 5 },
+    escolaridade: { 'Fundamental incompleto': 20, 'Médio completo': 30 }, idade_faixas: [{ f: 'Até 29', n: 0 }, { f: '60 ou mais', n: 20 }],
+    pronaf: {}, mulheres: 10, jovens: 5, membros: 100, idade: 55, escol_baixa: 10, nao_prop: 20, aposent: 5, bolsa: 1, idr: 40,
+  });
+  assert.match(html, /Soja<\/span>.*>40 · 80%</);
+  assert.match(html, /<details>.*mais 2 produtos.*Mel &lt;b&gt;.*<\/details>/);
+  assert.match(html, /45 famílias com produção declarada \(90,0%\) · 14 produtos diferentes \(4 fora da lista\)/);
+  assert.match(html, /maior renda declarada: Ovos, R\$ 10\.000/);
+  assert.match(html, /Produto principal da família.*Soja<\/span>.*>30 · 60%<.*Leite<\/span>.*>15 · 30%</);
+  assert.doesNotMatch(html, />Milho<\/span>[^]*?>0 · 0%</); // grupo sem família não entra
+  assert.match(html, /Condição de posse da terra.*Arrendatário<\/span>.*>15 · 30%</);
+  assert.match(html, /1\.000 ha, todas as áreas\): proprietário 60,0% · arrendatário 30,0% · comodatário 10,0% · 4 famílias \(8,0%\)/);
+  assert.doesNotMatch(html, /Não informado|não proprietários|Área mediana/);
+  assert.match(html, /Média <b>21,3 ha<\/b> · mediana <b>12,0 ha<\/b>.*total <b>1\.000 ha<\/b>/);
+  assert.doesNotMatch(html, /5 a 10 ha/);
+  assert.match(html, /8 famílias \(16,0%\) com mais de uma área · localização do imóvel principal: rural 96,0% · urbana 4,0%/);
+  assert.match(html, /Familiar <b>110<\/b> pessoas · contratada <b>7<\/b> · 5 famílias \(10,0%\) contratam/);
+  assert.match(html, /2 ativas com validade vencida.*5 inativas/);
+  assert.match(html, /Idade do declarante.*60 ou mais.*Escolaridade do declarante.*Médio completo/);
 });
 
 test('cadastro da família: escapa texto, formata CPF e diz o que conferir', () => {

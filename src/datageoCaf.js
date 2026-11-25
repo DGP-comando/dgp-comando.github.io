@@ -19,6 +19,84 @@ const pct = (parte, total) => (total > 0 ? `${n((parte / total) * 100, 1)}%` : '
 const data = (iso) => (iso ? esc(String(iso).slice(0, 10).split('-').reverse().join('/')) : '—');
 const section = (title, body) => `<section class="fx-section"><h3>${esc(title)}</h3>${body}</section>`;
 const PEQUENA = 20; // abaixo disso a variação da mediana é ruído
+const VISIVEIS = 8; // produtos à vista; o resto da lista abre em "mais produtos"
+const sub = (t) => `<div class="fx-sub" style="margin-top:8px">${t}</div>`;
+
+/**
+ * Barras de contagem ([{label, n, cor?, extra?}]): comprimento pelo nº de
+ * famílias, valor "n · x%" sobre `total` (sem total, só n). `maior` fixa a
+ * escala quando a lista sai em dois blocos.
+ */
+function barras(linhas, total, cor = '#a3e635', maior = Math.max(1, ...linhas.map((l) => l.n))) {
+  return linhas.map((l) => {
+    const p = total > 0 ? ` · ${n((l.n / total) * 100)}%` : '';
+    const dica = `${l.label}: ${n(l.n)} famílias${total > 0 ? ` (${pct(l.n, total)})` : ''}${l.extra ? ` · ${l.extra}` : ''}`;
+    return `<div class="fx-bar-row" title="${esc(dica)}"><span class="fx-bar-label fx-bar-label-wide">${esc(l.label)}</span>` +
+      `<span class="fx-bar-track"><span class="fx-bar-fill" style="width:${Math.round((l.n / maior) * 100)}%;background:${l.cor ?? cor}"></span></span>` +
+      `<span class="fx-bar-val fx-bar-val-wide" style="flex-basis:88px">${n(l.n)}${p}</span></div>`;
+  }).join('');
+}
+
+/** Produtos por nº de famílias que os declaram: os primeiros à vista, o resto recolhido. */
+function produtosHtml(c, ativas) {
+  // Extração antiga só traz `top` (5 maiores por renda): serve, reordenado pela contagem.
+  const lista = (c.produtos ?? [...(c.top ?? [])].sort((a, b) => b.n - a.n)).filter((t) => t.n > 0);
+  if (!lista.length) return [];
+  const linha = (t) => ({ label: t.p, n: t.n, extra: `renda declarada ${brl(t.v)}` });
+  const vista = lista.slice(0, VISIVEIS).map(linha);
+  const resto = lista.slice(VISIVEIS).map(linha);
+  const fora = (c.n_produtos ?? lista.length) - lista.length;
+  const escala = Math.max(1, ...lista.map((t) => t.n));
+  const out = [sub('Produtos · nº de famílias que declaram (% das CAF ativas)'), barras(vista, ativas, undefined, escala)];
+  if (resto.length) {
+    out.push(`<details><summary class="fx-dim" style="cursor:pointer">mais ${n(resto.length)} produtos</summary>${barras(resto, ativas, undefined, escala)}</details>`);
+  }
+  const maior = [...lista].sort((a, b) => b.v - a.v)[0];
+  out.push('<div class="fx-dim">' + [
+    c.com_producao !== undefined ? `${n(c.com_producao)} famílias com produção declarada (${pct(c.com_producao, ativas)})` : '',
+    c.n_produtos ? `${n(c.n_produtos)} produtos diferentes${fora > 0 ? ` (${n(fora)} fora da lista)` : ''}` : '',
+    `${n(c.n_prod ?? 0)} por família (mediana)`,
+    maior ? `maior renda declarada: ${esc(maior.p)}, ${brl(maior.v)}` : '',
+  ].filter(Boolean).join(' · ') + '. Uma família conta em cada produto que declara.</div>');
+  return out;
+}
+
+/** Produto principal de cada família (maior renda dentro do estabelecimento), nas cores da camada. */
+function principalHtml(c, meta, ativas) {
+  const linhas = (c.grupos ?? []).map((k, i) => ({ label: meta.grupos?.[i] ?? '', n: k, cor: CAF_CORES[i] }))
+    .filter((l) => l.n > 0 && l.label).sort((a, b) => b.n - a.n);
+  if (!linhas.length) return [];
+  return [sub('Produto principal da família (maior renda)'), barras(linhas, ativas)];
+}
+
+/** Condição de posse: famílias pelo imóvel principal, hectares de todas as áreas. */
+function posseHtml(c, ativas) {
+  const por = (c.posse?.por ?? []).filter((x) => x.n > 0 || x.ha > 0);
+  if (!por.length) return [];
+  const ha = por.reduce((s, x) => s + x.ha, 0);
+  const out = [sub('Condição de posse da terra (imóvel principal)'),
+    barras(por.map((x) => ({ label: x.c, n: x.n, extra: `${n(x.ha, 1)} ha em áreas nessa condição` })), ativas, '#38bdf8')];
+  const areas = por.filter((x) => x.ha > 0).map((x) => `${esc(x.c.toLowerCase())} ${pct(x.ha, ha)}`);
+  out.push(`<div class="fx-dim">Da área declarada (${n(ha)} ha, todas as áreas): ${areas.join(' · ')}` +
+    (c.posse.mista ? ` · ${n(c.posse.mista)} famílias (${pct(c.posse.mista, ativas)}) têm áreas em mais de uma condição` : '') + '</div>');
+  return out;
+}
+
+/** Área por família: média, mediana, total e faixas. */
+function areasResumoHtml(c, ativas) {
+  const a = c.area;
+  if (!a) return [];
+  const out = [sub('Área das famílias'),
+    `<div>Média <b>${a.media !== null ? n(a.media, 1) : '—'} ha</b> · mediana <b>${a.mediana !== null ? n(a.mediana, 1) : '—'} ha</b> ` +
+    `<span class="fx-dim">(famílias com área)</span> · total <b>${n(a.total)} ha</b></div>`,
+    barras((a.faixas ?? []).filter((x) => x.n > 0).map((x) => ({ label: x.f, n: x.n })), ativas, '#fbbf24')];
+  const loc = Object.entries(c.local_area ?? {}).filter(([, v]) => v).map(([k, v]) => `${esc(k.toLowerCase())} ${pct(v, ativas)}`);
+  out.push('<div class="fx-dim">' + [
+    `${n(a.multi ?? 0)} famílias (${pct(a.multi, ativas)}) com mais de uma área`,
+    loc.length ? `localização do imóvel principal: ${loc.join(' · ')}` : '',
+  ].filter(Boolean).join(' · ') + '</div>');
+  return out;
+}
 
 /** "▲ 3,3%" verde / "▼ 4,1%" vermelho / "" sem variação. */
 export function seta(v) {
@@ -51,6 +129,12 @@ export function secaoCaf(c) {
   const rows = [];
   rows.push(`<div>Famílias com CAF ativa: <b>${n(ativas)}</b> <span class="fx-dim">(${ref})</span>` +
     (c.vencer ? ` · <span class="fx-warn">${n(c.vencer)} vencem em 6 meses</span>` : '') + '</div>');
+  if (c.vencidas || c.inativas) {
+    rows.push('<div class="fx-sub">' + [
+      c.vencidas ? `<span class="fx-warn">${n(c.vencidas)} ativas com validade vencida</span>` : '',
+      c.inativas ? `${n(c.inativas)} inativas no cadastro (fora das contagens)` : '',
+    ].filter(Boolean).join(' · ') + '</div>');
+  }
   const fam = c.familias ?? {};
   if (fam['2023-11']) {
     rows.push(`<div>Com cadastro (CAF ou DAP): ${periodo('2023-11')} <b>${n(fam['2023-11'])}</b> → ${ref} <b>${n(fam['2025-10'])}</b> ` +
@@ -64,19 +148,14 @@ export function secaoCaf(c) {
   rows.push(`<div class="fx-sub" style="margin-top:8px">Renda mediana por família · ${ref} x ${ant} (variação real, IPCA)</div>`);
   rows.push(linhaRenda('Renda total', r.rt, r.rt24, pa.rt, pa.rt24, pa.n));
   rows.push(linhaRenda('Renda por hectare', r.rha, r.rha24, pa.rha, pa.rha24, pa.n, '/ha'));
-  if (r.ha) rows.push(`<div class="fx-sub">Área mediana ${n(r.ha, 1)} ha · renda de fora do estabelecimento ${n(c.fora_pct ?? 0, 1)}% da renda</div>`);
+  rows.push('<div class="fx-sub">' + (r.ha && !c.area ? `Área mediana ${n(r.ha, 1)} ha · ` : '') +
+    `Renda de fora do estabelecimento: ${n(c.fora_pct ?? 0, 1)}% da renda</div>`);
   if (pa.n < PEQUENA) rows.push(`<div class="fx-dim">Só ${n(pa.n ?? 0)} famílias nas duas extrações: variação pouco confiável</div>`);
 
-  if (c.top?.length) {
-    const total = c.top.reduce((s, t) => s + t.v, 0);
-    const maior = c.top[0].v || 1;
-    rows.push('<div class="fx-sub" style="margin-top:8px">Principais produtos (renda declarada)</div>');
-    for (const t of c.top.slice(0, 3)) {
-      rows.push(`<div class="fx-bar-row"><span class="fx-bar-label fx-bar-label-wide" title="${esc(t.p)}">${esc(t.p)}</span>` +
-        `<span class="fx-bar-track"><span class="fx-bar-fill" style="width:${Math.round((t.v / maior) * 100)}%;background:#a3e635"></span></span>` +
-        `<span class="fx-bar-val fx-bar-val-wide">${n(t.n)}</span></div>`);
-    }
-    rows.push(`<div class="fx-dim">Número de famílias que declaram o produto · ${n(c.n_prod ?? 0)} produto(s) por família (mediana) · top 5 somam ${brl(total)}</div>`);
+  rows.push(...produtosHtml(c, ativas), ...principalHtml(c, meta, ativas), ...posseHtml(c, ativas), ...areasResumoHtml(c, ativas));
+  if (c.mo) {
+    rows.push(`${sub('Mão de obra')}<div>Familiar <b>${n(c.mo.familiar)}</b> pessoas · contratada <b>${n(c.mo.contratada)}</b> · ` +
+      `${n(c.mo.com_contratada)} famílias (${pct(c.mo.com_contratada, ativas)}) contratam</div>`);
   }
 
   const pr = c.pronaf ?? {};
@@ -91,7 +170,11 @@ export function secaoCaf(c) {
   rows.push(`<div class="fx-sub">Mulheres declarantes ${pct(c.mulheres, ativas)} · jovens 16-29 anos ${n(c.jovens ?? 0)} ` +
     `(${pct(c.jovens, c.membros)} dos membros) · idade mediana do declarante ${c.idade ? n(c.idade) : '—'}</div>`);
   rows.push(`<div class="fx-sub">Declarante até o 5º ano ou sem escolaridade ${pct(c.escol_baixa, ativas)} · ` +
-    `não proprietários ${pct(c.nao_prop, ativas)} · aposentadoria/pensão ${pct(c.aposent, ativas)} · Bolsa Família ${n(c.bolsa ?? 0)}</div>`);
+    `${c.posse ? '' : `não proprietários ${pct(c.nao_prop, ativas)} · `}aposentadoria/pensão ${pct(c.aposent, ativas)} · Bolsa Família ${n(c.bolsa ?? 0)}</div>`);
+  const idades = (c.idade_faixas ?? []).filter((x) => x.n > 0);
+  if (idades.length) rows.push(sub('Idade do declarante (anos)'), barras(idades.map((x) => ({ label: x.f, n: x.n })), ativas, '#c084fc'));
+  const escol = Object.entries(c.escolaridade ?? {}).filter(([, v]) => v);
+  if (escol.length) rows.push(sub('Escolaridade do declarante'), barras(escol.map(([k, v]) => ({ label: k, n: v })), ativas, '#c084fc'));
   rows.push(`<div class="fx-sub">CAFs emitidas pelo IDR: ${pct(c.idr, ativas)}</div>`);
   if (c.pj) {
     const tipos = Object.entries(c.pj.tipos).filter(([, v]) => v).map(([t, v]) => `${n(v)} ${esc(t.toLowerCase())}`);

@@ -6,6 +6,23 @@
 
 ---
 
+## Sessão 2026-11-25: mais resumo da CAF nas fichas municipal e regional
+
+Pedido: mais resumos nos cards dos municípios e das regionais, começando pela
+CAF: contagem das CAF por produto (o mais importante), condição de posse da
+terra, média das áreas e o que mais faltar do cadastro.
+
+- **Build (`scripts/build_caf.py`, `agrega`).** Campos novos em cada recorte:
+  - `produtos` (15 por nº de famílias, com renda), `n_produtos`, `com_producao`. O `top` (5 por renda) fica.
+  - `posse`: famílias por `ds_condicao_dominio` do imóvel principal e hectares de todas as áreas em cada condição; `mista` = famílias com mais de uma condição. Chaves como vêm do MDA, sem lista fixa.
+  - `area`: média e mediana (só famílias com área), total, faixas (sem área, até 5, 5-10, 10-20, 20-50, mais de 50 ha) e famílias com mais de uma área. `local_area`: localização do imóvel principal.
+  - `mo` (pessoas da família, contratadas, famílias que contratam), `escolaridade` e `idade_faixas` do declarante.
+- **Ficha (`src/datageoCaf.js`, `secaoCaf`).** Barras de contagem com % das CAF ativas para produtos (8 à vista, o resto em "mais N produtos"), produto principal (`grupos`, que já vinha no arquivo e não aparecia), posse, faixas de área, idade e escolaridade. Linha de vencidas e inativas.
+- **Pegadinha.** Os CSVs do MDA não estão no repositório nem na nuvem: o build NÃO foi rodado nesta sessão. Conferido só com famílias sintéticas e com o `_demo`. Falta rodar `py -3 scripts/build_caf.py` e `upload_privado.py caf-municipios.json` na máquina do IDR. Com o arquivo antigo a ficha já mostra top 5 por contagem, produto principal e vencidas/inativas, e mantém o "% não proprietários".
+- A média de área é sensível a declaração errada (área em unidade diferente de ha conta zero no build); por isso a mediana vai ao lado.
+
+---
+
 ## Sessão 2026-10-28: disk IO do Supabase, aviação ao vivo, fim do GeoLibre, logout geral e recuperação de senha
 
 Pedido: o Supabase do c2 (fialxjcsgywvvuxjxcly, plano gratuito) acusou o

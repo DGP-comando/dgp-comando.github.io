@@ -10,6 +10,8 @@ Saídas (data/privado/, gitignored, bucket privado via scripts/upload_privado.py
     caf-pontos.json        um ponto por família (imóvel principal), leve
     caf/<ibge>.json        o cadastro COMPLETO de cada família do município (clique)
     caf-municipios.json    agregados por município, regional IDR e estado (ficha)
+                           contagem, renda, produtos por nº de famílias, condição de
+                           posse, área (média, mediana, faixas), mão de obra e perfil
 
 LGPD: o cadastro completo (CPF, nome, contato, endereço) é dado pessoal. O
 usuário autorizou em 2026-10-01 o detalhe integral para o técnico localizar e
@@ -72,6 +74,13 @@ VENCE_DIAS = 182
 GRUPOS = ['Soja', 'Milho', 'Leite', 'Bovinos de corte', 'Fumo', 'Hortaliças e frutas',
           'Aves e suínos', 'Outras atividades', 'Só renda de fora']
 HORTI_FRUTA = {'Horticultura', 'Lavouras Permanentes', 'Floricultura'}
+
+# Faixas da ficha: área total da família (ha) e idade do declarante (anos).
+HA_FAIXAS = [('Sem área', None, 0), ('Até 5 ha', 0, 5), ('5 a 10 ha', 5, 10), ('10 a 20 ha', 10, 20),
+             ('20 a 50 ha', 20, 50), ('Mais de 50 ha', 50, None)]
+IDADE_FAIXAS = [('Até 29', None, 29), ('30 a 44', 29, 44), ('45 a 59', 44, 59), ('60 ou mais', 59, None)]
+N_PRODUTOS = 15      # produtos listados na ficha (por nº de famílias)
+SEM_INFO = 'Não informado'
 
 LAT = (22.4, 26.8)   # |lat| do PR
 LON = (48.0, 54.7)   # |lon| do PR
@@ -184,6 +193,14 @@ def _demo():
     assert produto('Feijão Preto em Grão - Kg') == 'Feijão'
     assert produto('Erva-Mate (Folha Verde) - Kg') == 'Erva-Mate'
     assert cpf('1992884960') == '01992884960' and cpf('01992884960')[3:9] == '928849'
+    assert [x['n'] for x in faixas([0, 3, 5, 5.1, 20, 80, None], HA_FAIXAS)] == [1, 2, 1, 1, 0, 1]
+    assert [x['n'] for x in faixas([29, 30, 59, 60], IDADE_FAIXAS)] == [1, 1, 1, 1]
+    at = pd.DataFrame({'dominio': ['Proprietário', 'Arrendatário', 'Proprietário']}, index=['1', '2', '3'])
+    ar = pd.DataFrame({'nr_caf': ['1', '1', '2', '3', '9'], 'ha': [10.0, 4, 6, 2, 99],
+                       'ds_condicao_dominio': ['Proprietário', 'Arrendatário', 'Arrendatário', '', 'Posseiro']})
+    p = posse(at, ar)
+    assert p['mista'] == 1 and p['por'][0] == {'c': 'Proprietário', 'n': 2, 'ha': 10.0}
+    assert {'c': 'Arrendatário', 'n': 1, 'ha': 10.0} in p['por'] and {'c': SEM_INFO, 'n': 0, 'ha': 2.0} in p['por']
 
 
 # ------------------------------------------------------------ leitura
@@ -279,7 +296,7 @@ def idade(nasc, ref):
         return None
 
 
-def familias(dados, membros, esp, areas, prod, ref):
+def familias(dados, membros, esp, areas, mo, prod, ref):
     """Tabela de uma linha por família (2025), com o que os agregados usam."""
     f = pd.DataFrame(index=dados.index)
     f['ativa'] = dados.ds_situacao_unidade_familiar.eq('ATIVA')
@@ -301,11 +318,18 @@ def familias(dados, membros, esp, areas, prod, ref):
     f['aposent'] = f.index.isin(fora[fora.ds_produto.str.contains('APOSENT|PENS', case=False)].nr_caf)
     f['bolsa'] = f.index.isin(fora[fora.ds_produto.str.contains('Bolsa Fam', case=False)].nr_caf)
     prin = areas[areas.principal].drop_duplicates('nr_caf').set_index('nr_caf')
-    f['nao_prop'] = prin.ds_condicao_dominio.reindex(f.index).fillna('').ne('Proprietário')
+    f['dominio'] = prin.ds_condicao_dominio.reindex(f.index).fillna('').str.strip().replace('', SEM_INFO)
+    f['nao_prop'] = f.dominio.ne('Proprietário')
+    f['local_area'] = prin.ds_tipo_localizacao_area.reindex(f.index).fillna('').str.strip().replace('', SEM_INFO)
+    f['n_areas'] = areas.groupby('nr_caf').size().reindex(f.index, fill_value=0)
+    # Mão de obra: 1a coluna familiar, 2a contratada (mesma ordem da ficha da família).
+    f['mo_fam'] = pd.to_numeric(mo.iloc[:, 0], errors='coerce').reindex(f.index).fillna(0)
+    f['mo_contr'] = pd.to_numeric(mo.iloc[:, 1], errors='coerce').reindex(f.index).fillna(0)
     decl = membros[membros.nm_tipo_membro_familiar.str.startswith('Pessoa responsável')].drop_duplicates('nr_caf').set_index('nr_caf')
     f['mulher'] = decl.nm_sexo.reindex(f.index).eq('Feminino')
     f['idade'] = decl.dt_nascimento.reindex(f.index).map(lambda v: idade(v, ref))
-    f['escol_baixa'] = decl.ds_tipo_escolaridade.reindex(f.index).isin(['Analfabeto', 'Até 5º Ano Incompleto'])
+    f['escol'] = decl.ds_tipo_escolaridade.reindex(f.index).fillna('').str.strip().replace('', SEM_INFO)
+    f['escol_baixa'] = f.escol.isin(['Analfabeto', 'Até 5º Ano Incompleto'])
     f['nome'] = decl.nm_pessoa_fisica.reindex(f.index).fillna('')
     idades = membros.dt_nascimento.map(lambda v: idade(v, ref))
     f['jovens'] = membros[idades.between(16, 29)].groupby('nr_caf').size().reindex(f.index, fill_value=0)
@@ -345,7 +369,37 @@ def var(a, b):
     return round((b / a - 1) * 100, 1) if a and b is not None else None
 
 
-def agrega(f, f24, prod, serie_caf, serie_dap):
+def media(s):
+    s = pd.Series(s).dropna()
+    return round(float(s.mean()), 2) if len(s) else None
+
+
+def faixas(s, cortes):
+    """Contagem por faixa (lo, hi]; lo None = sem piso, hi None = sem teto. Nulo fica de fora."""
+    s = pd.Series(s).dropna()
+    return [{'f': nome, 'n': int(((s > lo if lo is not None else True) & (s <= hi if hi is not None else True)).sum())}
+            for nome, lo, hi in cortes]
+
+
+def contagem(s):
+    """{valor: nº de famílias}, do mais ao menos frequente."""
+    return {str(k): int(v) for k, v in pd.Series(s).value_counts().items()}
+
+
+def posse(at, areas):
+    """Condição de posse da terra: famílias pelo imóvel principal e hectares de todas as áreas."""
+    a = areas[areas.nr_caf.isin(at.index)]
+    cond = a.ds_condicao_dominio.fillna('').str.strip().replace('', SEM_INFO)
+    ha = a.groupby(cond).ha.sum()
+    # Família com mais de uma condição (ex.: dona de uma área e arrendatária de outra).
+    mista = int((cond.groupby(a.nr_caf).nunique() > 1).sum())
+    n = at.dominio.value_counts()
+    chaves = sorted(set(n.index) | set(ha.index[ha > 0]), key=lambda k: (-int(n.get(k, 0)), k))
+    return {'por': [{'c': k, 'n': int(n.get(k, 0)), 'ha': round(float(ha.get(k, 0)), 1)} for k in chaves],
+            'mista': mista}
+
+
+def agrega(f, f24, prod, areas, serie_caf, serie_dap):
     """Agregado de um recorte (município, regional ou estado). `f`/`f24`: famílias do recorte."""
     at = f[f.ativa]
     at24 = f24[f24.ativa]
@@ -366,6 +420,9 @@ def agrega(f, f24, prod, serie_caf, serie_dap):
     renda['var_rd'] = var(renda['rd24'], renda['rd'])
     pd_ = prod[prod.nr_caf.isin(at.index) & prod.dentro]
     top = pd_.groupby('produto').agg(v=('vl_renda_auferida', 'sum'), n=('nr_caf', 'nunique')).sort_values('v', ascending=False)
+    # Lista longa por nº de famílias (a contagem é o que a ficha mostra); empate pela renda.
+    por_n = top.sort_values(['n', 'v'], ascending=False)
+    com_ha = at.ha[at.ha > 0]
     tot = float(at.rt.sum())
     n = len(at)
     cnt = lambda m: int(m.sum())
@@ -381,6 +438,17 @@ def agrega(f, f24, prod, serie_caf, serie_dap):
         'aposent': cnt(at.aposent), 'bolsa': cnt(at.bolsa),
         'n_prod': med(at.n_prod),
         'top': [{'p': p, 'v': round(float(r.v)), 'n': int(r.n)} for p, r in top.head(5).iterrows()],
+        'produtos': [{'p': p, 'v': round(float(r.v)), 'n': int(r.n)} for p, r in por_n.head(N_PRODUTOS).iterrows()],
+        'n_produtos': int(len(top)),
+        'com_producao': int(pd_.nr_caf.nunique()),
+        'posse': posse(at, areas),
+        'area': {'media': media(com_ha), 'mediana': med(com_ha), 'total': round(float(at.ha.sum()), 1),
+                 'faixas': faixas(at.ha, HA_FAIXAS), 'multi': cnt(at.n_areas > 1)},
+        'local_area': contagem(at.local_area),
+        'mo': {'familiar': int(at.mo_fam.sum()), 'contratada': int(at.mo_contr.sum()),
+               'com_contratada': cnt(at.mo_contr > 0)},
+        'escolaridade': contagem(at.escol),
+        'idade_faixas': faixas(at.idade, IDADE_FAIXAS),
         'pronaf': {k: cnt(at.pronaf == k) for k in ('A', 'B', 'V')},
         'publico': {k: cnt(at.caract == v) for k, v in (
             ('assentados', 'Assentamento da Reforma Agrária'), ('quilombolas', 'Quilombo'),
@@ -515,7 +583,7 @@ def main():
     st = pd.Series({k: v[2] for k, v in loc.items()}).value_counts()
     print('  ', st.to_dict())
 
-    f = familias(dados, membros, esp, areas, prod, ref)
+    f = familias(dados, membros, esp, areas, mo, prod, ref)
     # Município da família: o da área usada no ponto (principal); sem área, o do endereço.
     f['ibge'] = pd.Series({k: v[4] for k, v in loc.items()}).reindex(f.index)
     f['ibge'] = f.ibge.fillna(end.cd_municipio.reindex(f.index))
@@ -541,7 +609,7 @@ def main():
         soma = lambda s: int(s.reindex(list(ibges)).fillna(0).sum())
         serie_caf = {'2023-11': soma(caf23), '2025-01': soma(caf25jan)}
         serie_dap = {'2023-11': len(dd), **{k: soma(dap_mda[k]) for k in dap_mda}}
-        a = agrega(ff, ff24, prod[prod.nr_caf.isin(ff.index)], serie_caf, serie_dap)
+        a = agrega(ff, ff24, prod[prod.nr_caf.isin(ff.index)], areas, serie_caf, serie_dap)
         return com_familias(a, dd)
 
     print('agregando...')
@@ -584,6 +652,9 @@ def main():
     print(f'  série CAF {e["caf"]} · DAP {e["dap"]} · famílias {e["familias"]}')
     print(f'  renda mediana {e["renda"]} · painel {e["painel"]}')
     print(f'  IPCA ago/24-set/25 {IPCA:.4f} · vencem em {VENCE_DIAS} d: {e["vencer"]}')
+    print(f'  posse {e["posse"]}')
+    print(f'  área {e["area"]} · mão de obra {e["mo"]}')
+    print(f'  produtos ({e["n_produtos"]}): {[(t["p"], t["n"]) for t in e["produtos"]]}')
 
 
 if __name__ == '__main__':

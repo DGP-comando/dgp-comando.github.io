@@ -3,6 +3,21 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-11-25 — Resumo da CAF nas fichas
+
+### Changed
+
+- **Agricultura familiar · CAF** (ficha municipal e regional, acesso restrito):
+  a seção passa a trazer os produtos pelo nº de famílias que os declaram (15,
+  com % das CAF ativas; antes 3), o produto principal de cada família nas cores
+  da camada, a condição de posse da terra (proprietário, arrendatário,
+  comodatário... pelo imóvel principal, e a área em cada condição), a área
+  das famílias (média, mediana, total e faixas), mão de obra familiar e
+  contratada, idade e escolaridade do declarante, CAFs vencidas e inativas.
+  Posse, área, mão de obra, idade, escolaridade e a lista longa de produtos
+  dependem de regerar `caf-municipios.json` (`scripts/build_caf.py`) e subir
+  ao bucket privado; até lá a ficha mostra o que o arquivo atual tem.
+
 ## [Unreleased] — 2026-10-23 — URs do GETEC
 
 ### Added
