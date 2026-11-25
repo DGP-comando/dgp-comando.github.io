@@ -49,7 +49,7 @@ import shapely
 from pyproj import Transformer
 
 # Constantes e `produto` moram no script que refaz o resumo só com o bucket (sem pandas).
-from build_caf_resumo import HA_FAIXAS, IDADE_FAIXAS, N_PRODUTOS, SEM_INFO, produto
+from build_caf_resumo import HA_FAIXAS, HA_TETO, IDADE_FAIXAS, N_PRODUTOS, SEM_INFO, produto
 
 MDA = Path(r'H:\IDR-PARANA\INTEL\MDA')
 E25 = MDA / '2025' / 'OneDrive_2025-10-08' / 'IDRPR - 55000.0099172024-47' / 'CAFS - PF' / 'ARQUIVOS'
@@ -177,7 +177,7 @@ def _demo():
     assert cpf('1992884960') == '01992884960' and cpf('01992884960')[3:9] == '928849'
     assert [x['n'] for x in faixas([0, 3, 5, 5.1, 20, 80, None], HA_FAIXAS)] == [1, 2, 1, 1, 0, 1]
     assert [x['n'] for x in faixas([29, 30, 59, 60], IDADE_FAIXAS)] == [1, 1, 1, 1]
-    at = pd.DataFrame({'dominio': ['Proprietário', 'Arrendatário', 'Proprietário']}, index=['1', '2', '3'])
+    at = pd.DataFrame({'dominio': ['Proprietário', 'Arrendatário', 'Proprietário'], 'acima': False}, index=['1', '2', '3'])
     ar = pd.DataFrame({'nr_caf': ['1', '1', '2', '3', '9'], 'ha': [10.0, 4, 6, 2, 99],
                        'ds_condicao_dominio': ['Proprietário', 'Arrendatário', 'Arrendatário', '', 'Posseiro']})
     p = posse(at, ar)
@@ -304,6 +304,8 @@ def familias(dados, membros, esp, areas, mo, prod, ref):
     f['nao_prop'] = f.dominio.ne('Proprietário')
     f['local_area'] = prin.ds_tipo_localizacao_area.reindex(f.index).fillna('').str.strip().replace('', SEM_INFO)
     f['n_areas'] = areas.groupby('nr_caf').size().reindex(f.index, fill_value=0)
+    # Área de assentamento inteiro declarada como da família (ver HA_TETO).
+    f['acima'] = areas.groupby('nr_caf').ha.max().reindex(f.index, fill_value=0) > HA_TETO
     # Mão de obra: 1a coluna familiar, 2a contratada (mesma ordem da ficha da família).
     f['mo_fam'] = pd.to_numeric(mo.iloc[:, 0], errors='coerce').reindex(f.index).fillna(0)
     f['mo_contr'] = pd.to_numeric(mo.iloc[:, 1], errors='coerce').reindex(f.index).fillna(0)
@@ -372,7 +374,8 @@ def posse(at, areas):
     """Condição de posse da terra: famílias pelo imóvel principal e hectares de todas as áreas."""
     a = areas[areas.nr_caf.isin(at.index)]
     cond = a.ds_condicao_dominio.fillna('').str.strip().replace('', SEM_INFO)
-    ha = a.groupby(cond).ha.sum()
+    dentro = a.nr_caf.isin(at.index[~at.acima])  # hectares sem as declarações acima do teto
+    ha = a[dentro].groupby(cond[dentro]).ha.sum()
     # Família com mais de uma condição (ex.: dona de uma área e arrendatária de outra).
     mista = int((cond.groupby(a.nr_caf).nunique() > 1).sum())
     n = at.dominio.value_counts()
@@ -404,7 +407,8 @@ def agrega(f, f24, prod, areas, serie_caf, serie_dap):
     top = pd_.groupby('produto').agg(v=('vl_renda_auferida', 'sum'), n=('nr_caf', 'nunique')).sort_values('v', ascending=False)
     # Lista longa por nº de famílias (a contagem é o que a ficha mostra); empate pela renda.
     por_n = top.sort_values(['n', 'v'], ascending=False)
-    com_ha = at.ha[at.ha > 0]
+    ok = at[~at.acima]
+    com_ha = ok.ha[ok.ha > 0]
     tot = float(at.rt.sum())
     n = len(at)
     cnt = lambda m: int(m.sum())
@@ -424,8 +428,9 @@ def agrega(f, f24, prod, areas, serie_caf, serie_dap):
         'n_produtos': int(len(top)),
         'com_producao': int(pd_.nr_caf.nunique()),
         'posse': posse(at, areas),
-        'area': {'media': media(com_ha), 'mediana': med(com_ha), 'total': round(float(at.ha.sum()), 1),
-                 'faixas': faixas(at.ha, HA_FAIXAS), 'multi': cnt(at.n_areas > 1)},
+        'area': {'media': media(com_ha), 'mediana': med(com_ha), 'total': round(float(ok.ha.sum()), 1),
+                 'faixas': faixas(ok.ha, HA_FAIXAS), 'multi': cnt(at.n_areas > 1),
+                 'acima': cnt(at.acima), 'teto': HA_TETO},
         'local_area': contagem(at.local_area),
         'mo': {'familiar': int(at.mo_fam.sum()), 'contratada': int(at.mo_contr.sum()),
                'com_contratada': cnt(at.mo_contr > 0)},

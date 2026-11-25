@@ -9,6 +9,7 @@ arquivo (contagens, séries, renda, painel) ficam como estão.
     produtos, n_produtos, com_producao   produtos por nº de famílias
     posse                                condição de posse (imóvel principal) e ha
     area, local_area                     média, mediana, total, faixas, localização
+                                         (sem as declarações acima de HA_TETO)
     mo                                   mão de obra familiar e contratada
     escolaridade, idade_faixas           declarante
 
@@ -46,6 +47,12 @@ HA_FAIXAS = [('Sem área', None, 0), ('Até 5 ha', 0, 5), ('5 a 10 ha', 5, 10), 
              ('20 a 50 ha', 20, 50), ('Mais de 50 ha', 50, None)]
 IDADE_FAIXAS = [('Até 29', None, 29), ('30 a 44', 29, 44), ('45 a 59', 44, 59), ('60 ou mais', 59, None)]
 N_PRODUTOS = 15      # produtos listados na ficha (por nº de famílias)
+# Área acima disto não é de uma família: ~0,5% das CAFs (quase todas de assentados)
+# declaram o assentamento inteiro (até 68 mil ha) e somavam 83% da área do estado.
+# Entre 110 e 1.000 ha quase não há declaração; a agricultura familiar vai a 4
+# módulos fiscais (120 ha no PR). Essas famílias contam em `area.acima` e ficam
+# fora da média, da mediana, do total, das faixas e dos hectares por posse.
+HA_TETO = 500
 SEM_INFO = 'Não informado'
 CAMPOS = ('produtos', 'n_produtos', 'com_producao', 'posse', 'area', 'local_area', 'mo', 'escolaridade', 'idade_faixas')
 
@@ -97,6 +104,7 @@ def linha(fam):
         'local': _txt(prin.get('localizacao')) if prin else SEM_INFO,
         'cond_ha': [(c, ha) for c, ha, _ in areas],
         'ha': sum(ha for _, ha, _ in areas),
+        'acima': any(ha > HA_TETO for _, ha, _ in areas),
         'n_areas': len(areas),
         'mo_fam': float(fam.get('mo_familiar') or 0), 'mo_contr': float(fam.get('mo_contratada') or 0),
         'escol': _txt(decl.get('escolaridade')) if decl else SEM_INFO,
@@ -113,11 +121,12 @@ def resumo(linhas):
             n[p] += 1
     por_n = sorted(n, key=lambda p: (-n[p], -v[p], p))
     dom, ha_cond = Counter(f['dominio'] for f in linhas), Counter()
-    for f in linhas:
+    ok = [f for f in linhas if not f['acima']]
+    for f in ok:
         for c, ha in f['cond_ha']:
             ha_cond[c] += ha
     chaves = sorted(set(dom) | {c for c, ha in ha_cond.items() if ha > 0}, key=lambda k: (-dom.get(k, 0), k))
-    has = [f['ha'] for f in linhas]
+    has = [f['ha'] for f in ok]
     com_ha = [h for h in has if h > 0]
     return {
         'produtos': [{'p': p, 'v': round(v[p]), 'n': n[p]} for p in por_n[:N_PRODUTOS]],
@@ -128,7 +137,8 @@ def resumo(linhas):
         'area': {'media': round(statistics.fmean(com_ha), 2) if com_ha else None,
                  'mediana': round(statistics.median(com_ha), 2) if com_ha else None,
                  'total': round(sum(has), 1), 'faixas': _faixas(has, HA_FAIXAS),
-                 'multi': sum(1 for f in linhas if f['n_areas'] > 1)},
+                 'multi': sum(1 for f in linhas if f['n_areas'] > 1),
+                 'acima': len(linhas) - len(ok), 'teto': HA_TETO},
         'local_area': _contagem(Counter(f['local'] for f in linhas)),
         'mo': {'familiar': int(sum(f['mo_fam'] for f in linhas)), 'contratada': int(sum(f['mo_contr'] for f in linhas)),
                'com_contratada': sum(1 for f in linhas if f['mo_contr'] > 0)},
@@ -186,17 +196,20 @@ def _demo():
                       {'dentro': False, 'produto': 'APOSENTADORIA', 'auferida': 9}], mo_familiar=2, mo_contratada=1),
         fam(areas=[{'dominio': 'Arrendatário', 'area': 3, 'unidade': 'm²', 'principal': True, 'localizacao': ''}],
             producao=[{'dentro': True, 'produto': 'Milho', 'auferida': None}]),
+        fam(areas=[{'dominio': 'Assentado', 'area': 40000, 'unidade': 'ha', 'principal': True, 'localizacao': 'Rural'}]),
         fam(situacao='INATIVA', areas=[{'dominio': 'Posseiro', 'area': 99, 'unidade': 'ha', 'principal': True}]),
     ]
     linhas = [x for x in map(linha, fs) if x]
     r = resumo(linhas)
-    assert len(linhas) == 2 and r['produtos'] == [{'p': 'Soja', 'v': 1005, 'n': 1}, {'p': 'Milho', 'v': 0, 'n': 1}]
+    assert len(linhas) == 3 and r['produtos'] == [{'p': 'Soja', 'v': 1005, 'n': 1}, {'p': 'Milho', 'v': 0, 'n': 1}]
     assert r['com_producao'] == 2 and r['n_produtos'] == 2
-    assert r['posse'] == {'por': [{'c': 'Arrendatário', 'n': 1, 'ha': 4.0}, {'c': 'Proprietário', 'n': 1, 'ha': 10.0}], 'mista': 1}
+    assert r['posse'] == {'por': [{'c': 'Arrendatário', 'n': 1, 'ha': 4.0}, {'c': 'Assentado', 'n': 1, 'ha': 0},
+                                  {'c': 'Proprietário', 'n': 1, 'ha': 10.0}], 'mista': 1}
     assert r['area']['media'] == 14.0 and r['area']['total'] == 14.0 and r['area']['multi'] == 1
+    assert r['area']['acima'] == 1 and r['area']['teto'] == HA_TETO  # o assentamento inteiro fica de fora
     assert [x['n'] for x in r['area']['faixas']] == [1, 0, 0, 1, 0, 0]
-    assert r['local_area'] == {'Não informado': 1, 'Rural': 1} and r['mo'] == {'familiar': 2, 'contratada': 1, 'com_contratada': 1}
-    assert r['escolaridade'] == {'Analfabeto': 1, 'Não informado': 1} and [x['n'] for x in r['idade_faixas']] == [0, 0, 0, 1]
+    assert r['local_area'] == {'Rural': 2, 'Não informado': 1} and r['mo'] == {'familiar': 2, 'contratada': 1, 'com_contratada': 1}
+    assert r['escolaridade'] == {'Não informado': 2, 'Analfabeto': 1} and [x['n'] for x in r['idade_faixas']] == [0, 0, 0, 1]
 
 
 def main():

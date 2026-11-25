@@ -20,6 +20,7 @@ const data = (iso) => (iso ? esc(String(iso).slice(0, 10).split('-').reverse().j
 const section = (title, body) => `<section class="fx-section"><h3>${esc(title)}</h3>${body}</section>`;
 const PEQUENA = 20; // abaixo disso a variação da mediana é ruído
 const VISIVEIS = 8; // produtos à vista; o resto da lista abre em "mais produtos"
+const POSSE_VISIVEIS = 6; // condições de posse à vista (o MDA tem ~15)
 const sub = (t) => `<div class="fx-sub" style="margin-top:8px">${t}</div>`;
 
 /**
@@ -77,9 +78,15 @@ function posseHtml(c, ativas) {
   const por = (c.posse?.por ?? []).filter((x) => x.n > 0 || x.ha > 0);
   if (!por.length) return [];
   const ha = por.reduce((s, x) => s + x.ha, 0);
-  const out = [sub('Condição de posse da terra (imóvel principal)'),
-    barras(por.map((x) => ({ label: x.c, n: x.n, extra: `${n(x.ha, 1)} ha em áreas nessa condição` })), ativas, '#38bdf8')];
-  const areas = por.filter((x) => x.ha > 0).map((x) => `${esc(x.c.toLowerCase())} ${pct(x.ha, ha)}`);
+  const linhas = por.filter((x) => x.n > 0).map((x) => ({ label: x.c, n: x.n, extra: `${n(x.ha, 1)} ha em áreas nessa condição` }));
+  const escala = Math.max(1, ...linhas.map((l) => l.n));
+  const resto = linhas.slice(POSSE_VISIVEIS);
+  const out = [sub('Condição de posse da terra (imóvel principal)'), barras(linhas.slice(0, POSSE_VISIVEIS), ativas, '#38bdf8', escala)];
+  if (resto.length) {
+    out.push(`<details><summary class="fx-dim" style="cursor:pointer">mais ${n(resto.length)} condições</summary>${barras(resto, ativas, '#38bdf8', escala)}</details>`);
+  }
+  // Fatias de área abaixo de 1% não entram no texto (seguem na dica de cada barra).
+  const areas = por.filter((x) => ha > 0 && x.ha / ha >= 0.01).sort((a, b) => b.ha - a.ha).map((x) => `${esc(x.c.toLowerCase())} ${pct(x.ha, ha)}`);
   out.push(`<div class="fx-dim">Da área declarada (${n(ha)} ha, todas as áreas): ${areas.join(' · ')}` +
     (c.posse.mista ? ` · ${n(c.posse.mista)} famílias (${pct(c.posse.mista, ativas)}) têm áreas em mais de uma condição` : '') + '</div>');
   return out;
@@ -94,6 +101,10 @@ function areasResumoHtml(c, ativas) {
     `<span class="fx-dim">(famílias com área)</span> · total <b>${n(a.total)} ha</b></div>`,
     barras((a.faixas ?? []).filter((x) => x.n > 0).map((x) => ({ label: x.f, n: x.n })), ativas, '#fbbf24')];
   const loc = Object.entries(c.local_area ?? {}).filter(([, v]) => v).map(([k, v]) => `${esc(k.toLowerCase())} ${pct(v, ativas)}`);
+  if (a.acima) {
+    out.push(`<div class="fx-warn">${n(a.acima)} famílias declaram mais de ${n(a.teto)} ha</div>` +
+      '<div class="fx-dim">Em geral a área do assentamento inteiro: ficam fora da média, da mediana, do total, das faixas e dos hectares por posse.</div>');
+  }
   out.push('<div class="fx-dim">' + [
     `${n(a.multi ?? 0)} famílias (${pct(a.multi, ativas)}) com mais de uma área`,
     loc.length ? `localização do imóvel principal: ${loc.join(' · ')}` : '',

@@ -82,7 +82,7 @@ test('seção da ficha: produtos por nº de famílias, posse, área, mão de obr
     top: produtos.slice(0, 5), produtos, n_produtos: 14, com_producao: 45, n_prod: 2, grupos: [30, 0, 15],
     posse: { por: [{ c: 'Proprietário', n: 30, ha: 600 }, { c: 'Arrendatário', n: 15, ha: 300 }, { c: 'Comodatário', n: 5, ha: 100 },
       { c: 'Não informado', n: 0, ha: 0 }], mista: 4 },
-    area: { media: 21.3, mediana: 12, total: 1000, multi: 8,
+    area: { media: 21.3, mediana: 12, total: 1000, multi: 8, acima: 3, teto: 500,
       faixas: [{ f: 'Sem área', n: 3 }, { f: 'Até 5 ha', n: 10 }, { f: '5 a 10 ha', n: 0 }, { f: 'Mais de 50 ha', n: 37 }] },
     local_area: { Rural: 48, Urbana: 2 }, mo: { familiar: 110, contratada: 7, com_contratada: 5 },
     escolaridade: { 'Fundamental incompleto': 20, 'Médio completo': 30 }, idade_faixas: [{ f: 'Até 29', n: 0 }, { f: '60 ou mais', n: 20 }],
@@ -99,6 +99,7 @@ test('seção da ficha: produtos por nº de famílias, posse, área, mão de obr
   assert.doesNotMatch(html, /Não informado|não proprietários|Área mediana/);
   assert.match(html, /Média <b>21,3 ha<\/b> · mediana <b>12,0 ha<\/b>.*total <b>1\.000 ha<\/b>/);
   assert.doesNotMatch(html, /5 a 10 ha/);
+  assert.match(html, /3 famílias declaram mais de 500 ha/);
   assert.match(html, /8 famílias \(16,0%\) com mais de uma área · localização do imóvel principal: rural 96,0% · urbana 4,0%/);
   assert.match(html, /Familiar <b>110<\/b> pessoas · contratada <b>7<\/b> · 5 famílias \(10,0%\) contratam/);
   assert.match(html, /2 ativas com validade vencida.*5 inativas/);
