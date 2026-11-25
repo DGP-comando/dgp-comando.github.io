@@ -47,7 +47,7 @@ function produtosHtml(c, ativas) {
   const resto = lista.slice(VISIVEIS).map(linha);
   const fora = (c.n_produtos ?? lista.length) - lista.length;
   const escala = Math.max(1, ...lista.map((t) => t.n));
-  const out = [sub('Produtos · nº de famílias que declaram (% das CAF ativas)'), barras(vista, ativas, undefined, escala)];
+  const out = [sub('Todos os produtos · nº de famílias que declaram (% das CAF ativas)'), barras(vista, ativas, undefined, escala)];
   if (resto.length) {
     out.push(`<details><summary class="fx-dim" style="cursor:pointer">mais ${n(resto.length)} produtos</summary>${barras(resto, ativas, undefined, escala)}</details>`);
   }
@@ -61,12 +61,15 @@ function produtosHtml(c, ativas) {
   return out;
 }
 
-/** Produto principal de cada família (maior renda dentro do estabelecimento), nas cores da camada. */
+/**
+ * Produto principal de cada família (maior renda dentro do estabelecimento):
+ * os mesmos grupos, ordem e cores da legenda da camada, inclusive os zerados.
+ */
 function principalHtml(c, meta, ativas) {
-  const linhas = (c.grupos ?? []).map((k, i) => ({ label: meta.grupos?.[i] ?? '', n: k, cor: CAF_CORES[i] }))
-    .filter((l) => l.n > 0 && l.label).sort((a, b) => b.n - a.n);
-  if (!linhas.length) return [];
-  return [sub('Produto principal da família (maior renda)'), barras(linhas, ativas)];
+  const linhas = (meta.grupos ?? []).map((label, i) => ({ label, n: c.grupos?.[i] ?? 0, cor: CAF_CORES[i] }));
+  if (!c.grupos || !linhas.length) return [];
+  return [sub('Produto principal da família · grupos da legenda da camada'), barras(linhas, ativas),
+    '<div class="fx-dim">Cada família conta uma vez, no produto de maior renda dentro do estabelecimento.</div>'];
 }
 
 /** Condição de posse: famílias pelo imóvel principal, hectares de todas as áreas. */
@@ -152,7 +155,7 @@ export function secaoCaf(c) {
     `Renda de fora do estabelecimento: ${n(c.fora_pct ?? 0, 1)}% da renda</div>`);
   if (pa.n < PEQUENA) rows.push(`<div class="fx-dim">Só ${n(pa.n ?? 0)} famílias nas duas extrações: variação pouco confiável</div>`);
 
-  rows.push(...produtosHtml(c, ativas), ...principalHtml(c, meta, ativas), ...posseHtml(c, ativas), ...areasResumoHtml(c, ativas));
+  rows.push(...principalHtml(c, meta, ativas), ...produtosHtml(c, ativas), ...posseHtml(c, ativas), ...areasResumoHtml(c, ativas));
   if (c.mo) {
     rows.push(`${sub('Mão de obra')}<div>Familiar <b>${n(c.mo.familiar)}</b> pessoas · contratada <b>${n(c.mo.contratada)}</b> · ` +
       `${n(c.mo.com_contratada)} famílias (${pct(c.mo.com_contratada, ativas)}) contratam</div>`);

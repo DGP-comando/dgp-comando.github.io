@@ -93,7 +93,7 @@ test('seção da ficha: produtos por nº de famílias, posse, área, mão de obr
   assert.match(html, /45 famílias com produção declarada \(90,0%\) · 14 produtos diferentes \(4 fora da lista\)/);
   assert.match(html, /maior renda declarada: Ovos, R\$ 10\.000/);
   assert.match(html, /Produto principal da família.*Soja<\/span>.*>30 · 60%<.*Leite<\/span>.*>15 · 30%</);
-  assert.doesNotMatch(html, />Milho<\/span>[^]*?>0 · 0%</); // grupo sem família não entra
+  assert.match(html, /grupos da legenda.*Soja<\/span>.*Milho<\/span>.*>0 · 0%<.*Leite<\/span>.*Todos os produtos/); // ordem da legenda, zerado entra
   assert.match(html, /Condição de posse da terra.*Arrendatário<\/span>.*>15 · 30%</);
   assert.match(html, /1\.000 ha, todas as áreas\): proprietário 60,0% · arrendatário 30,0% · comodatário 10,0% · 4 famílias \(8,0%\)/);
   assert.doesNotMatch(html, /Não informado|não proprietários|Área mediana/);
