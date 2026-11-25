@@ -541,13 +541,9 @@ export function usinaTooltipHtml(p) {
   });
 }
 
-// O CSV da CONAB veio com Latin-1 lido como UTF-8 em alguns tipos.
-const ARMAZEM_TIPO = Object.freeze({
-  'Chapï¿½u Chines': 'Chapéu chinês',
-  'Depï¿½sito': 'Depósito',
-  'porto graneleiro': 'Porto graneleiro',
-});
-export const armazemTipo = (t) => ARMAZEM_TIPO[t] ?? String(t ?? '').replace(/ï¿½/g, '�');
+// O build (scripts/build_armazens_conab.py) já grava o tipo rotulado e acentuado.
+const ARMAZEM_TIPO = Object.freeze({ 'porto graneleiro': 'Porto graneleiro' });
+export const armazemTipo = (t) => ARMAZEM_TIPO[t] ?? String(t ?? '');
 
 export function armazemTooltipHtml(p) {
   const porto = p.kind === 'porto';
@@ -561,9 +557,10 @@ export function armazemTooltipHtml(p) {
     rows: [
       ['Tipo', tipo],
       ['Capacidade estática', cap ? fmtInt(cap, 't') : ''],
+      ['Entidade', p.entidade],
       ['Município', p.municipio],
     ],
-    source: porto ? 'DataGeo PR' : 'CONAB · Cadastro Nacional de Armazéns (CDA 2023)',
+    source: porto ? 'DataGeo PR' : 'CONAB · Cadastro Nacional de Unidades Armazenadoras',
   });
 }
 

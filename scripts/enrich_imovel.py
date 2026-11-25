@@ -461,7 +461,7 @@ class Enrich:
             _, d = mais_proximo(self.cam.linhas[id_], utm)
             v[campo(id_, rotulo, fonte, 'km')] = km(d) if d is not None else None
         p, d = mais_proximo(self.cam.armazens, utm)
-        f = 'CONAB/CDA 2023 (armazéns cadastrados)'
+        f = 'CONAB · Cadastro Nacional de Unidades Armazenadoras'
         v[campo('armazem_proximo', 'Armazém mais próximo', f)] = p and f"{p.get('nome')} ({p.get('municipio')})"
         v[campo('armazem_proximo_km', 'Distância ao armazém mais próximo', f, 'km')] = km(d)
         v[campo('armazem_proximo_cap_t', 'Capacidade do armazém mais próximo', f, 't')] = p and p.get('cap_t')

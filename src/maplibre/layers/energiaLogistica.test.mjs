@@ -251,9 +251,10 @@ test('tooltips dos pontos no formato tipCard, escapados', () => {
   assert.match(usinaTooltipHtml({ tipo: 'aerogerador', nome: 'Água Doce', pot_kw: 600, alt: 86.6 }), /600 kW.*86,6 m/s);
   assert.equal(usinaTooltipHtml({ tipo: 'x' }), '');
 
-  const arm = armazemTooltipHtml({ kind: 'armazem_conab', nome: 'Coop', municipio: 'Toledo', tipo: 'Chapï¿½u Chines', cap_t: 21410 });
+  const arm = armazemTooltipHtml({ kind: 'armazem_conab', nome: 'Coop', municipio: 'Toledo', tipo: 'Chapéu chinês', entidade: 'Cooperativa', cap_t: 21410 });
   assert.match(arm, /Chapéu chinês/);
   assert.match(arm, /21\.410 t/);
+  assert.match(arm, /<dt>Entidade<\/dt><dd class="">Cooperativa/);
   assert.match(armazemTooltipHtml({ kind: 'porto', nome: 'Porto de Paranaguá', municipio: 'Paranaguá', tipo: 'porto graneleiro' }), /tt-badge tt-warn">Porto</);
 
   const ceasa = ceasaTooltipHtml({ nome: 'CEASA Londrina' });

@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 """Gera as camadas de logistica agro em public/data/.
 
+Armazens (armazens-conab-pr.geojson) sairam daqui: vem direto do cadastro da
+CONAB em scripts/build_armazens_conab.py (regra LGPD documentada la).
+
 Fontes (locais, ja LGPD-clean — sem contato/PII):
-  1. armazens-conab-pr.geojson  <- valor-de-terras/.../logistics_pois_seed_pr.sql
-     (cadastro CDA/CONAB 2023-11: ~2457 armazens + porto de Paranagua,
-     capacidade em toneladas)
-  2. agroindustrias-pr.geojson  <- valor-de-terras/.../cadeias_pois_seed.sql
+  1. agroindustrias-pr.geojson  <- valor-de-terras/.../cadeias_pois_seed.sql
      (SIGSIF/MAPA: frigorificos + laticinios, centroide municipal; OSM:
      serrarias)
-  3. ceasas-pr.geojson          <- Overpass (name~ceasa no PR), com fallback
+  2. ceasas-pr.geojson          <- Overpass (name~ceasa no PR), com fallback
      hardcoded das 5 unidades da CEASA/PR se o Overpass falhar.
 
-Uso: py -3 scripts/build_logistica.py
+Uso: py -3 scripts/build_logistica.py [agroindustrias] [ceasas] [--seeds DIR]
+  (sem camada, gera as duas; DIR padrao: env DATAGEO_SEEDS ou SEEDS_PADRAO)
 """
 
+import argparse
 import json
+import os
 import re
+import sys
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent / 'public' / 'data'
-SEEDS = Path('E:/UPWORK/01-CONTRACTS/valor-de-terras/supabase/migrations')
-LOGISTICS_SQL = SEEDS / '20260703233100_logistics_pois_seed_pr.sql'
-CADEIAS_SQL = SEEDS / '20260704140200_cadeias_pois_seed.sql'
+SEEDS_PADRAO = 'G:/UPWORK/01-CONTRACTS/valor-de-terras/supabase/migrations'
+CADEIAS_SQL_NOME = '20260704140200_cadeias_pois_seed.sql'
 
 POINT_RE = re.compile(r"st_makepoint\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\)")
 
@@ -89,39 +92,12 @@ def feat(lon, lat, props):
     }
 
 
-def build_armazens():
+def build_agroindustrias(seeds):
+    cadeias_sql = Path(seeds) / CADEIAS_SQL_NOME
+    if not cadeias_sql.exists():
+        sys.exit(f'seed nao encontrado: {cadeias_sql} (passe --seeds ou DATAGEO_SEEDS)')
     feats = []
-    for line in LOGISTICS_SQL.read_text(encoding='utf-8').splitlines():
-        f = parse_tuple_line(line)
-        if not f or len(f) < 8:
-            continue
-        kind = f[0]
-        m = POINT_RE.search(f[7])
-        if not m:
-            continue
-        lon, lat = float(m.group(1)), float(m.group(2))
-        cap = None
-        if f[6] not in ('null', ''):
-            try:
-                cap = int(float(f[6]))
-            except ValueError:
-                cap = None
-        feats.append(feat(lon, lat, {
-            'kind': kind,
-            'nome': title_pt(f[2]),
-            'municipio': f[3],
-            'tipo': f[5],
-            'cap_t': cap,
-        }))
-    out = OUT / 'armazens-conab-pr.geojson'
-    out.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats},
-                              ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
-    print(f'armazens: {len(feats)} pontos, {out.stat().st_size / 1024:.0f} KB')
-
-
-def build_agroindustrias():
-    feats = []
-    for line in CADEIAS_SQL.read_text(encoding='utf-8').splitlines():
+    for line in cadeias_sql.read_text(encoding='utf-8').splitlines():
         f = parse_tuple_line(line)
         if not f or len(f) < 6:
             continue
@@ -185,7 +161,13 @@ def build_ceasas():
 
 
 if __name__ == '__main__':
-    build_armazens()
-    build_agroindustrias()
-    time.sleep(2)
-    build_ceasas()
+    ap = argparse.ArgumentParser()
+    ap.add_argument('camadas', nargs='*', choices=['agroindustrias', 'ceasas'])
+    ap.add_argument('--seeds', default=os.environ.get('DATAGEO_SEEDS', SEEDS_PADRAO))
+    a = ap.parse_args()
+    camadas = a.camadas or ['agroindustrias', 'ceasas']
+    if 'agroindustrias' in camadas:
+        build_agroindustrias(a.seeds)
+    if 'ceasas' in camadas:
+        time.sleep(2)
+        build_ceasas()
