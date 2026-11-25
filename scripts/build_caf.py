@@ -48,6 +48,9 @@ import pandas as pd
 import shapely
 from pyproj import Transformer
 
+# Constantes e `produto` moram no script que refaz o resumo só com o bucket (sem pandas).
+from build_caf_resumo import HA_FAIXAS, IDADE_FAIXAS, N_PRODUTOS, SEM_INFO, produto
+
 MDA = Path(r'H:\IDR-PARANA\INTEL\MDA')
 E25 = MDA / '2025' / 'OneDrive_2025-10-08' / 'IDRPR - 55000.0099172024-47' / 'CAFS - PF' / 'ARQUIVOS'
 E24 = MDA / 'CAF_DAP_2024' / 'IDR-PR'
@@ -75,13 +78,6 @@ GRUPOS = ['Soja', 'Milho', 'Leite', 'Bovinos de corte', 'Fumo', 'Hortaliças e f
           'Aves e suínos', 'Outras atividades', 'Só renda de fora']
 HORTI_FRUTA = {'Horticultura', 'Lavouras Permanentes', 'Floricultura'}
 
-# Faixas da ficha: área total da família (ha) e idade do declarante (anos).
-HA_FAIXAS = [('Sem área', None, 0), ('Até 5 ha', 0, 5), ('5 a 10 ha', 5, 10), ('10 a 20 ha', 10, 20),
-             ('20 a 50 ha', 20, 50), ('Mais de 50 ha', 50, None)]
-IDADE_FAIXAS = [('Até 29', None, 29), ('30 a 44', 29, 44), ('45 a 59', 44, 59), ('60 ou mais', 59, None)]
-N_PRODUTOS = 15      # produtos listados na ficha (por nº de famílias)
-SEM_INFO = 'Não informado'
-
 LAT = (22.4, 26.8)   # |lat| do PR
 LON = (48.0, 54.7)   # |lon| do PR
 
@@ -94,20 +90,6 @@ def norm(s):
 def cpf(s):
     d = re.sub(r'\D', '', str(s or '')).lstrip('0')
     return d.zfill(11) if d else ''
-
-
-ALIAS = {'Feijão Preto': 'Feijão', 'Feijão de Cor': 'Feijão', 'Café Arábica': 'Café',
-         'Café Canephora, Robusta ou Conilon': 'Café', 'Suinocultura Não Integrada': 'Suínos',
-         'Suínos - Integração': 'Suínos', 'Suinocultura Integrada Carne': 'Suínos'}
-
-
-def produto(nome):
-    """Catálogos antigo e novo do CAF juntos: 'Soja em Grão - Kg' == 'Soja'."""
-    s = str(nome or '').strip()
-    s = re.sub(r'\s*-\s*(Kg|M³|M3|Pés|Litro|Unidade|Fruto|Carne|Safrinha)$', '', s)
-    s = re.sub(r'\s*\([^)]*\)', '', s)
-    s = re.sub(r'\s+em (Grão|Casca|Folha Seca)\b.*$', '', s).strip()
-    return ALIAS.get(s, s)
 
 
 # ------------------------------------------------------------ coordenadas

@@ -19,6 +19,7 @@ terra, média das áreas e o que mais faltar do cadastro.
   - `mo` (pessoas da família, contratadas, famílias que contratam), `escolaridade` e `idade_faixas` do declarante.
 - **Ficha (`src/datageoCaf.js`, `secaoCaf`).** Barras de contagem com % das CAF ativas para produtos (8 à vista, o resto em "mais N produtos"), produto principal (`grupos`, que já vinha no arquivo e não aparecia), posse, faixas de área, idade e escolaridade. Linha de vencidas e inativas.
 - **Pegadinha.** Os CSVs do MDA não estão no repositório nem na nuvem: o build NÃO foi rodado nesta sessão. Conferido só com famílias sintéticas e com o `_demo`. Falta rodar `py -3 scripts/build_caf.py` e `upload_privado.py caf-municipios.json` na máquina do IDR. Com o arquivo antigo a ficha já mostra top 5 por contagem, produto principal e vencidas/inativas, e mantém o "% não proprietários".
+- **Resumo sem o H: (`scripts/build_caf_resumo.py`).** Os cadastros `caf/<ibge>.json` do bucket já têm áreas, posse, produção, membros e mão de obra. O script lê o bucket, calcula os campos novos por município, regional e estado e regrava só o `caf-municipios.json`. Só biblioteca padrão; precisa da `SUPABASE_SERVICE_ROLE_KEY`. Constantes e `produto` saíram do `build_caf.py` para lá. Conferido contra o `agrega` (pandas) em 400 famílias sintéticas: os 9 campos iguais. `confere` avisa se o nº de ativas do cadastro difere do publicado.
 - A média de área é sensível a declaração errada (área em unidade diferente de ha conta zero no build); por isso a mediana vai ao lado.
 
 ---

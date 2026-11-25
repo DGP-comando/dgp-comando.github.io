@@ -15,8 +15,9 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
   das famílias (média, mediana, total e faixas), mão de obra familiar e
   contratada, idade e escolaridade do declarante, CAFs vencidas e inativas.
   Posse, área, mão de obra, idade, escolaridade e a lista longa de produtos
-  dependem de regerar `caf-municipios.json` (`scripts/build_caf.py`) e subir
-  ao bucket privado; até lá a ficha mostra o que o arquivo atual tem.
+  dependem de regerar `caf-municipios.json`: `scripts/build_caf_resumo.py` faz
+  isso só com os cadastros que já estão no bucket privado, sem as extrações
+  do MDA. Até lá a ficha mostra o que o arquivo atual tem.
 
 ## [Unreleased] — 2026-10-23 — URs do GETEC
 
