@@ -6,6 +6,31 @@
 
 ---
 
+## Sessão 2026-11-27: logo com o Paraná no lugar do globo
+
+Pedido: trocar o globo da logo (God's Eye) pelo contorno do Paraná com
+detalhes dentro, mantendo movimento e resolução.
+
+- **Desenho** (`public/logo.svg`): a pupila virou a silhueta do PR (malha
+  intermediária do IBGE, SIRGAS 2000, largura corrigida por cos(-24,6°)) em
+  preto com contorno ciano, as 10 mesorregiões IBGE em linha ciana e Curitiba
+  como ponto branco. A grade lat/long (`#globe_cage`) foi para trás do estado.
+- **Estudo**: quatro variantes renderizadas em 600/128/52/32 px. Grade por
+  cima poluía o mapa; sem grade perdia o "geo"; as 23 regionais IDR viravam
+  ruído abaixo de 128 px. Rios ficaram de fora porque o Natural Earth 10m só
+  traz o Ivaí dentro do PR.
+- **Movimento**: ids `#globe` (agora um `<g>`) e `#globe_cage` mantidos, então
+  `src/logoGaze.js` não mudou. A parte móvel ganhou `clipPath` na íris
+  (r=195): antes, com o olhar no máximo (34 un.), a grade vazava sobre o anel
+  escuro do olho.
+- **Ícones PWA** (`public/icons/*.png`) regenerados via puppeteer na mesma
+  escala e posição dos antigos (1 a 3 px de diferença por antialias).
+- O SW serve a logo com stale-while-revalidate: quem já tem o app vê a nova a
+  partir do segundo carregamento. Sem bump de `VERSION`.
+- Commit `a2acb23`, merge `212bbef` na main.
+
+---
+
 ## Sessão 2026-11-27: conta de serviço do Ater Digital e o log de acesso
 
 Pedido: o Ater Digital (idr-digital) passou a espelhar o cadastro da CAF lendo
