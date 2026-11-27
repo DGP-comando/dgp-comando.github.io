@@ -10114,7 +10114,8 @@ body:has(#datageo-ticker) .maplibregl-ctrl-bottom-left {
   .login-aceite { min-height: 40px; }
   .login-aceite input { width: 20px; height: 20px; }
   /* 16px: abaixo disso o Safari do iPhone dá zoom ao focar o campo. */
-  .login-field input { font-size: 16px; }
+  .login-field input,
+  .login-field textarea { font-size: 16px; }
 }
 
 /* Cadastro de usuários (admin): a largura do formulário não contava o
@@ -10376,18 +10377,10 @@ body #dg-radio { overflow-y: auto; }
   }
   .data-toggle-legend-item { min-height: 28px; }
   .data-toggle-group-header { min-height: 36px; }
-  #proc-panel > summary { padding-block: 10px; }
-  /* PROCESSAMENTO aberto rola sozinho em vez de empurrar a lista para fora. */
-  #proc-panel[open] {
-    max-height: 45%;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-  }
   /* 16px: abaixo disso o Safari do iPhone dá zoom ao focar o campo. */
   #data-panel-search,
-  .proc-panel input,
-  .proc-panel select,
-  .login-field input { font-size: 16px; }
+  .login-field input,
+  .login-field textarea { font-size: 16px; }
 
   /* ── Dock: barra de largura total acima da faixa ──
      O prefixo :root + id duplo empata com as regras de bandeja aberta acima
