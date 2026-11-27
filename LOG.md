@@ -59,6 +59,23 @@ terra, média das áreas e o que mais faltar do cadastro.
 
 ---
 
+## Sessão 2026-11-11: tipos de solo (Embrapa via GeoPR) em Aspectos físicos
+
+Pedido: incluir os tipos de solo do GeoPR do IAT no grupo Aspectos físicos.
+
+- **Camada `datageo-solos`** ("Solos · tipos (Embrapa)", token `Fn`), em `geologia.js`, logo abaixo da litologia e no mesmo padrão dela (`geoprSpec` + `camadaComTooltip`).
+  - Fonte: `solos_parana_embrapa` (mapa de solos do PR da Embrapa, SiBCS, 1:250.000, 5.413 polígonos, estado inteiro). Sem cache de tiles: vai por MapServer/export, com as cores do próprio serviço, opacidade 0,6.
+  - Tooltip a partir do zoom 9: classe (ordem, subordem, grande grupo), sigla, subgrupo, textura, horizonte A, relevo, vegetação e solos associados (componentes 2 e 3 da unidade).
+  - Sem legenda de cores: o renderizador do serviço é por unidade de mapeamento (`legenda`), valores demais. Dá para agrupar por ordem se fizer falta.
+  - Descartados: `pbl_pedologia_itcg` e `zee_solos` (só litoral). Não avaliados: `zee_aptidao_solo`, `zee_vulnerab_solos_emater`, `pbl_aptidao_solo_2008_itcg_a`.
+- Registro: `index.js` (ordem do painel), `layerState.js`, `layerState.test.mjs` (88 camadas DataGeo, 104 no total), `DATA_SOURCES.md`.
+- Verificação: suíte unitária e `vite build` passam; export do serviço respondeu 200. **Não foi conferido no navegador.**
+- Commit `14a52ef` em `main` (rebase sobre dois commits automáticos do SMAP).
+- **Pendente: deploy.** O run 43096210951 do Deploy Pages ficou em `queued` por causa de incidente do GitHub (Actions em falha grave, Pages parcial) em 2026-11-11 à tarde. O site seguia no bundle antigo. Se não disparar sozinho: `gh workflow run deploy-pages.yml`. Depois, conferir a camada e o tooltip em produção e rodar `scripts/qa-geologia.mjs` (ainda sem caso para solos).
+- Pegadinha: o git recusa o repo por "dubious ownership" no F:. Contornado por comando com `git -c safe.directory=<caminho>`; para o `gh`, `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=<caminho>`.
+
+---
+
 ## Sessão 2026-10-28: disk IO do Supabase, aviação ao vivo, fim do GeoLibre, logout geral e recuperação de senha
 
 Pedido: o Supabase do c2 (fialxjcsgywvvuxjxcly, plano gratuito) acusou o

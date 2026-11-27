@@ -31,3 +31,6 @@ data/cache/
 
 supabase/.temp/
 .omm/
+
+# Relatórios e análises pontuais (ex.: GETEC bandeiras por mesorregião): ficam só locais
+scripts/relatorio_*/
