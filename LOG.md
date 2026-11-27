@@ -6,6 +6,39 @@
 
 ---
 
+## Sessão 2026-11-27: conta de serviço do Ater Digital e o log de acesso
+
+Pedido: o Ater Digital (idr-digital) passou a espelhar o cadastro da CAF lendo
+`caf/<IBGE>.json` e `caf-pj.json` direto do bucket `datageo-privado`, sem
+passar pela página. Sem ajuste, esse acesso não deixaria linha nenhuma em
+`datageo_acesso_log`, porque quem grava o log é o front.
+
+- **Conta de serviço** `9900000001` ("Serviço Ater Digital (sincronização da
+  CAF)"), criada pela ação `criar` da `datageo-usuarios`. É interna (lê o
+  bucket privado inteiro, não só `caf/`), não é `datageo_admin`. A senha
+  inicial (matrícula invertida) foi trocada na criação por uma aleatória de 40
+  caracteres, e `must_change_password` desligado. Não assinou termo LGPD: não
+  é pessoa, e o termo só é cobrado pelo front.
+- **O log é gravado pelo Ater Digital**, com a própria conta: uma linha
+  `dado_privado` por arquivo baixado, `alvo` = caminho no bucket e
+  `detalhe = {origem: 'ater-digital', rotina: 'sincronizacao-caf'}`. Uma
+  rodada é uma `sessao_id`. A rodada que só lista o bucket e não acha mudança
+  (o caso de quase toda hora) não baixa nada e não grava nada. Envio em lotes
+  de 200 com mais de 1 min entre eles, por causa do limite de 300/min da 049.
+  Conferido em produção em 2026-11-27 pela RPC `datageo_acesso_eventos`.
+- **Painel** (`src/datageoAnalytics.js`): `ehContaDeServico` (matrícula de 10
+  dígitos começando por 99) e lotação "Conta de serviço (sistema)" em
+  `comLotacao`, em vez de "Sem lotação no SisPont". Com teste.
+- **Fica em aberto**: a conta entra como 1 usuário em DAU/WAU/MAU e em
+  "liberados", porque os KPIs saem da `datageo_acesso_resumo` (c2-parana).
+  Tirar exige migration lá, e um marcador melhor que a faixa de matrícula
+  (`app_metadata.datageo_servico`), que a `criar` hoje não grava.
+- Não rodado nesta sessão: `npm run build` e `npm run test:track` (o `npm ci`
+  não passou pelo proxy da rede do IDR). Rodados: os testes de
+  `datageoAnalytics`, `acessoLog` e `acessoExterno`.
+
+---
+
 ## Sessão 2026-11-25: mais resumo da CAF nas fichas municipal e regional
 
 Pedido: mais resumos nos cards dos municípios e das regionais, começando pela

@@ -3,6 +3,22 @@
 This changelog records public product changes. For the authoritative description
 of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md).
 
+## [Unreleased] — 2026-11-27 — Conta de serviço no painel de acessos
+
+### Changed
+
+- **Acessos ao DataGeo** (painel do administrador): login de sistema passa a
+  aparecer com a lotação "Conta de serviço (sistema)", em vez de "Sem lotação
+  no SisPont". É conta de serviço a matrícula de 10 dígitos começando por 99
+  (`ehContaDeServico` em `src/datageoAnalytics.js`). A primeira é a
+  `9900000001`, usada pelo Ater Digital para espelhar o cadastro da CAF: ela
+  lê `caf/<IBGE>.json` e `caf-pj.json` direto do bucket privado e grava uma
+  linha `dado_privado` ("Arquivo restrito") por arquivo baixado, com
+  `detalhe.origem = ater-digital`. No "Log completo", buscar por
+  `ater-digital` lista esses acessos. A conta ainda conta como 1 usuário nos
+  KPIs (DAU/WAU/MAU), que são calculados no banco (`datageo_acesso_resumo`,
+  repo `c2-parana`).
+
 ## [Unreleased] — 2026-11-25 — Resumo da CAF nas fichas
 
 ### Changed

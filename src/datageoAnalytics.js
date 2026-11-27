@@ -48,17 +48,30 @@ const fmtMin = (m) => (m >= 60 ? `${Math.floor(m / 60)} h ${String(Math.round(m 
 // ---------------------------------------------------------------- dados puros
 
 /**
+ * Conta de serviço: login de SISTEMA, não de pessoa (ex.: a sincronização da
+ * CAF do Ater Digital, que lê o bucket privado e grava `dado_privado` com
+ * detalhe.origem). Convenção: matrícula de 10 dígitos começando por 99, faixa
+ * que o SISATER não usa. Criada pela ação `criar` da datageo-usuarios.
+ */
+export const ehContaDeServico = (matricula) => /^99\d{8}$/.test(String(matricula ?? ''));
+
+const LOTACAO_SERVICO = 'Conta de serviço (sistema)';
+
+/**
  * Usuários do resumo + nome, lotação e diretoria do servidor de mesma
  * matrícula (SisPont). A matrícula vem do e-mail do login (migration 049); o
  * nome do cadastro (user_metadata, editável pelo usuário) é só reserva.
+ * Conta de serviço ganha lotação própria, em vez de aparecer como servidor
+ * "sem lotação no SisPont", e não é procurada no SisPont.
  */
 export function comLotacao(usuarios, servidores) {
   const porId = new Map((servidores ?? []).map((s) => [String(s.id), s]));
   return (usuarios ?? []).map((u) => {
-    const s = porId.get(String(u.matricula ?? ''));
+    const servico = ehContaDeServico(u.matricula);
+    const s = servico ? null : porId.get(String(u.matricula ?? ''));
     return {
-      ...u, nome: s?.nome || u.nome || u.email || '—',
-      lotacao: s?.setor || 'Sem lotação no SisPont', diretoria: s?.diretoria || '',
+      ...u, servico, nome: s?.nome || u.nome || u.email || '—',
+      lotacao: servico ? LOTACAO_SERVICO : s?.setor || 'Sem lotação no SisPont', diretoria: s?.diretoria || '',
     };
   });
 }
